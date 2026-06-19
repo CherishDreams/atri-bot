@@ -1,0 +1,20 @@
+{
+  "name": "@atri/dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "atri-bot 控制台 —— 管理会话、provider 与插件的 Web UI",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@atri/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^6.0.5"
+  }
+}

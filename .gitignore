@@ -1,0 +1,38 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+build/
+*.tsbuildinfo
+
+# 日志
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+
+# 环境变量 / 密钥
+.env
+.env.*
+!.env.example
+
+# 运行时数据与本地状态
+data/
+*.sqlite
+*.sqlite-journal
+*.db
+
+# 编辑器 / 操作系统
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ZCode 工作区工具文件（不入库）
+.zcodeignore
+.zcode/
+
+# 测试 / 覆盖率
+coverage/

@@ -1,0 +1,102 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --fg: #e6e8ec;
+  --muted: #8b93a1;
+  --accent: #4f8cff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 14px/1.5 system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: 100vh;
+}
+
+aside {
+  background: var(--panel);
+  border-right: 1px solid #232733;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+}
+
+#log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.msg {
+  margin-bottom: 8px;
+}
+
+.msg.user b {
+  color: var(--accent);
+}
+
+.msg.assistant b {
+  color: #5ed6a4;
+}
+
+#sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+#sessions li {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+#sessions li.active,
+#sessions li:hover {
+  background: #222836;
+  color: var(--fg);
+}
+
+#composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid #232733;
+}
+
+#input {
+  flex: 1;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #2b3040;
+  background: var(--panel);
+  color: var(--fg);
+}
+
+button {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #2b3040;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}

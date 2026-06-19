@@ -1,0 +1,8 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# esbuild（由 Vite 引入）在安装时构建其原生二进制文件；
+# 放行它的 postinstall，使 `vite` 可用。
+onlyBuiltDependencies:
+  - esbuild

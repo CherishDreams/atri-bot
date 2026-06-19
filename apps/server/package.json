@@ -1,0 +1,19 @@
+{
+  "name": "@atri/server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "atri-bot 服务端 —— agent 引擎、适配器、插件与 HTTP/WS API",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@atri/shared": "workspace:*",
+    "ws": "^8.18.0"
+  }
+}
