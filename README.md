@@ -71,12 +71,31 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 ## 扩展方式
 
 - **插件** —— 一个目录，内含 `index.js`，默认导出
-  `{ id, name, version, setup(ctx), teardown() }`。参见 `apps/server/plugins/hello`。
-  目录来自配置中的 `pluginDirs`。
+  `{ id, name, version, description?, config?, setup(ctx), teardown?() }`
+  （也支持默认导出工厂函数 `(shared) => 上述对象`）。目录来自配置中的 `pluginDirs`。
+  参见 `apps/server/plugins/hello`。
 - **适配器** —— 实现 `start()`/`stop()` 并注册到 `AdapterManager`；
   在 `config.adapters.<id>.enabled` 中按需启用。纯 agent 部署可以不启用任何一个。
 - **Provider** —— 向 `ProviderRegistry` 注册 `{ id, name, models, chat() }` 对象。
   引擎从不 import 具体的模型 SDK。
+
+### 插件的动态加载
+
+把「模块加载」和「实例创建」分开设计：
+
+- 模块只 import 一次；ESM 没有移除模块的 API，因此重载时用 cache-busting
+  （带 `?v=` 查询参数）重新 import，拿到重新求值过的代码。
+- 每次加载都由框架创建插件实例，其副作用通过 `ctx.effect()` 登记；卸载时框架
+  **逆序**自动释放，无需手写清理。
+
+`PluginManager` 提供 `load(dir)` / `reload(id)` / `unload(id)` / `setEnabled(id, bool)`，
+并在 `stop()` 时 `unloadAll()`。控制台右侧面板可执行重载 / 启用 / 禁用 / 卸载。
+
+插件上下文 `ctx` 暴露：
+
+- `logger`、`config`：日志器与配置（只读）
+- `ctx.effect(fn | { dispose() }, label?)`：登记副作用，卸载时逆序自动释放，返回提前释放函数
+- `ctx.subscribe(emitter, event, handler)`：订阅 emitter，并在卸载时自动退订
 
 ## API
 
@@ -89,5 +108,8 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 | GET / DELETE | `/sessions/:id` | 读取 / 删除会话 |
 | POST | `/sessions/:id/messages` | 发送用户消息并获取回复 |
 | GET | `/providers`、`/plugins`、`/adapters` | 供控制台使用的状态 |
+| POST | `/plugins/:id/reload` | 重载插件（销毁旧实例并重新求值代码） |
+| POST | `/plugins/:id/unload` | 卸载插件（释放副作用并移除） |
+| POST | `/plugins/:id/enable` | 启用 / 禁用插件，body `{ "enabled": true }` |
 
 WebSocket 位于 `/ws`，向客户端推送 `message` / `stream` / `error` 帧。

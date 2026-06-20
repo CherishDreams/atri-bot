@@ -1,6 +1,6 @@
 import "./styles.css";
 import { ApiClient } from "./api.js";
-import type { Message, Session } from "@atri/shared";
+import type { Message, PluginInfo, Session } from "@atri/shared";
 
 const api = new ApiClient();
 
@@ -8,15 +8,22 @@ interface State {
   sessions: Session[];
   active: Session | null;
   log: Message[];
+  plugins: PluginInfo[];
 }
 
-const state: State = { sessions: [], active: null, log: [] };
+const state: State = { sessions: [], active: null, log: [], plugins: [] };
 
 const el = <T extends HTMLElement>(sel: string): T => {
   const node = document.querySelector<T>(sel);
   if (!node) throw new Error(`缺少元素: ${sel}`);
   return node;
 };
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+  );
+}
 
 function render(): void {
   el("#sessions").innerHTML = state.sessions
@@ -29,17 +36,37 @@ function render(): void {
   el("#log").innerHTML = state.log
     .map((m) => `<div class="msg ${m.role}"><b>${m.role}</b>: ${escapeHtml(m.content)}</div>`)
     .join("");
+
+  el("#plugins").innerHTML = state.plugins
+    .map((p) => {
+      const active = p.status === "active";
+      return `<li class="plugin ${p.status}">
+        <div class="plugin-info">
+          <b>${escapeHtml(p.name)}</b> <span class="ver">v${escapeHtml(p.version)}</span>
+          <div class="desc">${escapeHtml(p.description ?? "")}</div>
+          <div class="status">${active ? "运行中" : "已禁用"}</div>
+        </div>
+        <div class="plugin-actions">
+          <button data-act="reload" data-id="${p.id}">重载</button>
+          <button data-act="${active ? "disable" : "enable"}" data-id="${p.id}">
+            ${active ? "禁用" : "启用"}
+          </button>
+          <button data-act="unload" data-id="${p.id}" class="danger">卸载</button>
+        </div>
+      </li>`;
+    })
+    .join("");
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
-  );
-}
-
-async function refresh(): Promise<void> {
+async function refreshSessions(): Promise<void> {
   const { sessions } = await api.listSessions();
   state.sessions = sessions;
+  render();
+}
+
+async function refreshPlugins(): Promise<void> {
+  const { plugins } = await api.listPlugins();
+  state.plugins = plugins;
   render();
 }
 
@@ -47,7 +74,7 @@ async function ensureSession(): Promise<void> {
   if (state.active) return;
   const { session } = await api.createSession("首个会话");
   state.active = session;
-  await refresh();
+  await refreshSessions();
 }
 
 async function send(text: string): Promise<void> {
@@ -67,12 +94,26 @@ async function send(text: string): Promise<void> {
   render();
 }
 
+/** 插件面板操作：重载 / 启用 / 禁用 / 卸载。 */
+async function onPluginAction(act: string, id: string): Promise<void> {
+  try {
+    if (act === "reload") await api.reloadPlugin(id);
+    else if (act === "unload") await api.unloadPlugin(id);
+    else if (act === "enable") await api.setPluginEnabled(id, true);
+    else if (act === "disable") await api.setPluginEnabled(id, false);
+  } catch (err) {
+    alert(`操作失败: ${(err as Error).message}`);
+  } finally {
+    await refreshPlugins();
+  }
+}
+
 function wire(): void {
   el<HTMLButtonElement>("#new-session").onclick = async () => {
     const { session } = await api.createSession();
     state.active = session;
     state.log = [];
-    await refresh();
+    await refreshSessions();
   };
 
   el<HTMLUListElement>("#sessions").onclick = (ev) => {
@@ -94,6 +135,13 @@ function wire(): void {
     await send(text);
   };
 
+  el<HTMLUListElement>("#plugins").onclick = (ev) => {
+    const target = ev.target as HTMLElement;
+    const act = target.dataset.act;
+    const id = target.dataset.id;
+    if (act && id) void onPluginAction(act, id);
+  };
+
   api.connect((frame) => {
     if (frame.type === "message" && frame.message.sessionId === state.active?.id) {
       // 服务端会回显双方消息；上面的本地乐观插入已覆盖用户轮次，
@@ -108,7 +156,7 @@ function wire(): void {
 
 async function main(): Promise<void> {
   wire();
-  await refresh();
+  await Promise.all([refreshSessions(), refreshPlugins()]);
 }
 
 void main();

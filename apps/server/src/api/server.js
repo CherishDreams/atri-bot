@@ -62,6 +62,34 @@ export function createHttpServer(deps) {
     sendJson(res, 200, { plugins: plugins.list() });
   });
 
+  router.post(`${API_PREFIX}/plugins/:id/reload`, async (_req, res, params) => {
+    try {
+      const plugin = await plugins.reload(params.id);
+      sendJson(res, 200, { plugin });
+    } catch (err) {
+      sendError(res, 400, err.message);
+    }
+  });
+
+  router.post(`${API_PREFIX}/plugins/:id/unload`, async (_req, res, params) => {
+    try {
+      const result = await plugins.unload(params.id);
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendError(res, 400, err.message);
+    }
+  });
+
+  router.post(`${API_PREFIX}/plugins/:id/enable`, async (req, res, params) => {
+    const body = await readJson(req);
+    try {
+      const result = await plugins.setEnabled(params.id, body.enabled !== false);
+      sendJson(res, 200, { plugin: result });
+    } catch (err) {
+      sendError(res, 400, err.message);
+    }
+  });
+
   router.get(`${API_PREFIX}/adapters`, async (_req, res) => {
     sendJson(res, 200, { adapters: adapters.list() });
   });

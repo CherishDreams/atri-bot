@@ -4,6 +4,7 @@
   --fg: #e6e8ec;
   --muted: #8b93a1;
   --accent: #4f8cff;
+  --danger: #ff5f56;
 }
 
 * {
@@ -19,11 +20,12 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 240px 1fr 300px;
   height: 100vh;
 }
 
-aside {
+/* --- 侧边栏：会话列表 --- */
+#sidebar {
   background: var(--panel);
   border-right: 1px solid #232733;
   padding: 12px;
@@ -32,27 +34,10 @@ aside {
   gap: 8px;
 }
 
-main {
+.sidebar-head {
   display: flex;
-  flex-direction: column;
-}
-
-#log {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.msg {
-  margin-bottom: 8px;
-}
-
-.msg.user b {
-  color: var(--accent);
-}
-
-.msg.assistant b {
-  color: #5ed6a4;
+  align-items: center;
+  justify-content: space-between;
 }
 
 #sessions {
@@ -76,6 +61,33 @@ main {
   color: var(--fg);
 }
 
+/* --- 主区域：对话 --- */
+#conversation {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+#log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.msg {
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg.user b {
+  color: var(--accent);
+}
+
+.msg.assistant b {
+  color: #5ed6a4;
+}
+
 #composer {
   display: flex;
   gap: 8px;
@@ -92,6 +104,66 @@ main {
   color: var(--fg);
 }
 
+/* --- 右侧：插件面板 --- */
+#plugins-panel {
+  background: var(--panel);
+  border-left: 1px solid #232733;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+#plugins-panel h2 {
+  font-size: 14px;
+  margin: 0 0 12px;
+}
+
+#plugins {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plugin {
+  border: 1px solid #2b3040;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plugin.disabled {
+  opacity: 0.55;
+}
+
+.plugin .ver {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plugin .desc {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.plugin .status {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.plugin.active .status {
+  color: #5ed6a4;
+}
+
+.plugin-actions {
+  display: flex;
+  gap: 6px;
+}
+
 button {
   padding: 8px 14px;
   border-radius: 8px;
@@ -99,4 +171,15 @@ button {
   background: var(--accent);
   color: white;
   cursor: pointer;
+}
+
+.plugin-actions button {
+  padding: 4px 8px;
+  font-size: 12px;
+  flex: 1;
+  background: #222836;
+}
+
+.plugin-actions button.danger {
+  color: var(--danger);
 }

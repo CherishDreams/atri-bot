@@ -1,5 +1,5 @@
 import { API_PREFIX, WS_PATH } from "@atri/shared";
-import type { ServerFrame, Session } from "@atri/shared";
+import type { PluginInfo, ServerFrame, Session } from "@atri/shared";
 
 /** 基于服务端 HTTP + WebSocket API 的轻薄类型化客户端。 */
 export class ApiClient {
@@ -30,6 +30,31 @@ export class ApiClient {
     return this.#json<{ message: unknown }>(
       `/sessions/${sessionId}/messages`,
       { method: "POST", body: JSON.stringify({ content }) },
+    );
+  }
+
+  listPlugins() {
+    return this.#json<{ plugins: PluginInfo[] }>("/plugins");
+  }
+
+  reloadPlugin(id: string) {
+    return this.#json<{ plugin: PluginInfo }>(
+      `/plugins/${encodeURIComponent(id)}/reload`,
+      { method: "POST" },
+    );
+  }
+
+  unloadPlugin(id: string) {
+    return this.#json<{ id: string; unloaded: boolean }>(
+      `/plugins/${encodeURIComponent(id)}/unload`,
+      { method: "POST" },
+    );
+  }
+
+  setPluginEnabled(id: string, enabled: boolean) {
+    return this.#json<{ plugin: PluginInfo }>(
+      `/plugins/${encodeURIComponent(id)}/enable`,
+      { method: "POST", body: JSON.stringify({ enabled }) },
     );
   }
 

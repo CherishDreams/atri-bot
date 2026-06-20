@@ -58,10 +58,17 @@ export interface AdapterInfo {
   enabled: boolean;
 }
 
+/** 插件运行时状态。active=运行中，disabled=已禁用（保留元数据可再启用）。 */
+export type PluginStatus = "active" | "disabled";
+
 export interface PluginInfo {
   id: string;
   name: string;
   version: string;
   description?: string;
   enabled: boolean;
+  /** 运行时状态。 */
+  status?: PluginStatus;
+  /** 插件所在目录名，便于在控制台辨认。 */
+  dir?: string;
 }
