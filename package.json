@@ -3,22 +3,29 @@
   "version": "1.0.0",
   "private": true,
   "description": "atri-bot —— 可扩展的 agent 平台（服务端 + 控制台）",
-  "type": "module",
   "license": "ISC",
-  "engines": {
-    "node": ">=20.19.0"
-  },
-  "packageManager": "pnpm@11.28.5",
+  "type": "module",
   "scripts": {
     "dev": "pnpm --filter @atri/server dev",
     "dev:dashboard": "pnpm --filter @atri/dashboard dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "lint": "oxlint --deny-warnings .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
     "clean": "node scripts/clean.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
     "typescript": "^5.7.2"
-  }
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "packageManager": "pnpm@11.28.5"
 }

@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["unicorn", "oxc", "typescript", "vue"],
+  "categories": {
+    "correctness": "warn",
+    "suspicious": "warn",
+    "perf": "off",
+    "pedantic": "off",
+    "style": "off"
+  },
+  "rules": {
+    "no-unused-vars": "off",
+    "typescript/no-unused-vars": "warn",
+    "eqeqeq": "warn",
+    "no-var": "error",
+    "prefer-const": "warn",
+    "no-console": "off"
+  },
+  "ignorePatterns": ["node_modules", "dist", "build", "coverage", "*.min.js"],
+  "overrides": [
+    {
+      "files": ["apps/server/test/**", "**/*.test.js"],
+      "rules": {
+        "no-underscore-dangle": "off"
+      }
+    }
+  ]
+}
