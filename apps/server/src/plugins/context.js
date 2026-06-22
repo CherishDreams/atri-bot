@@ -62,7 +62,7 @@ export class PluginContext {
   async dispose() {
     if (this.#disposed) return;
     this.#disposed = true;
-    for (const { release, label } of [...this.#disposables].reverse()) {
+    for (const { release, label } of this.#disposables.toReversed()) {
       try {
         await release();
       } catch (err) {

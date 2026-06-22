@@ -133,8 +133,7 @@ export function createHttpServer(deps) {
   engine.subscribe(broadcast);
 
   return {
-    listen: (port, host) =>
-      new Promise((resolve) => server.listen(port, host, resolve)),
+    listen: (port, host) => new Promise((resolve) => server.listen(port, host, resolve)),
     close: () =>
       new Promise((resolve) => {
         for (const ws of clients) ws.close();

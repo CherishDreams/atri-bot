@@ -5,11 +5,7 @@ import { dirname, join } from "node:path";
 
 // 仓库根目录（本脚本位于 scripts/ 下）
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const targets = [
-  "apps/server/dist",
-  "apps/dashboard/dist",
-  "packages/shared/dist",
-];
+const targets = ["apps/server/dist", "apps/dashboard/dist", "packages/shared/dist"];
 
 for (const t of targets) {
   await rm(join(root, t), { recursive: true, force: true });

@@ -38,9 +38,7 @@ export class PluginManager {
     for (const dir of this.config.pluginDirs ?? []) {
       await this.#scanDir(dir);
     }
-    const active = [...this.#records.values()].filter(
-      (r) => r.status === "active",
-    );
+    const active = [...this.#records.values()].filter((r) => r.status === "active");
     this.logger.info(`已加载 ${active.length} 个插件`);
   }
 
@@ -83,14 +81,14 @@ export class PluginManager {
     const ctx = new PluginContext({
       id,
       logger: this.logger,
-      config: { ...this.config, ...(plugin.config ?? {}) },
+      config: { ...this.config, ...plugin.config },
     });
 
     try {
       await plugin.setup?.(ctx);
     } catch (err) {
       await ctx.dispose();
-      throw new Error(`插件 ${id} 初始化失败: ${err.message}`);
+      throw new Error(`插件 ${id} 初始化失败: ${err.message}`, { cause: err });
     }
 
     this.#records.set(id, {

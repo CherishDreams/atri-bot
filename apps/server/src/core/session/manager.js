@@ -7,8 +7,6 @@ import { randomUUID } from "node:crypto";
 export class SessionManager {
   #sessions = new Map();
 
-  constructor(_config) {}
-
   create({ title = "新会话" } = {}) {
     const now = new Date().toISOString();
     const session = {

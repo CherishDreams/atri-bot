@@ -27,10 +27,10 @@ export class ApiClient {
   }
 
   sendMessage(sessionId: string, content: string) {
-    return this.#json<{ message: unknown }>(
-      `/sessions/${sessionId}/messages`,
-      { method: "POST", body: JSON.stringify({ content }) },
-    );
+    return this.#json<{ message: unknown }>(`/sessions/${sessionId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
   }
 
   listPlugins() {
@@ -38,10 +38,9 @@ export class ApiClient {
   }
 
   reloadPlugin(id: string) {
-    return this.#json<{ plugin: PluginInfo }>(
-      `/plugins/${encodeURIComponent(id)}/reload`,
-      { method: "POST" },
-    );
+    return this.#json<{ plugin: PluginInfo }>(`/plugins/${encodeURIComponent(id)}/reload`, {
+      method: "POST",
+    });
   }
 
   unloadPlugin(id: string) {
@@ -52,10 +51,10 @@ export class ApiClient {
   }
 
   setPluginEnabled(id: string, enabled: boolean) {
-    return this.#json<{ plugin: PluginInfo }>(
-      `/plugins/${encodeURIComponent(id)}/enable`,
-      { method: "POST", body: JSON.stringify({ enabled }) },
-    );
+    return this.#json<{ plugin: PluginInfo }>(`/plugins/${encodeURIComponent(id)}/enable`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   /** 订阅出站事件。返回取消订阅函数。 */

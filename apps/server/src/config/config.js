@@ -17,7 +17,7 @@ export function loadConfig() {
     try {
       fileConfig = JSON.parse(readFileSync(filePath, "utf8"));
     } catch (err) {
-      throw new Error(`解析 ${filePath} 失败: ${err.message}`);
+      throw new Error(`解析 ${filePath} 失败: ${err.message}`, { cause: err });
     }
   }
 
@@ -29,9 +29,7 @@ export function loadConfig() {
     port: Number(env.ATRI_PORT ?? fileConfig.port ?? DEFAULT_SERVER_PORT),
     logLevel: env.ATRI_LOG_LEVEL ?? fileConfig.logLevel ?? "info",
     dataDir: resolve(root, env.ATRI_DATA_DIR ?? fileConfig.dataDir ?? "data"),
-    pluginDirs: (fileConfig.pluginDirs ?? ["./plugins"]).map((p) =>
-      resolve(root, p),
-    ),
+    pluginDirs: (fileConfig.pluginDirs ?? ["./plugins"]).map((p) => resolve(root, p)),
     // 适配器是可选启用的；纯 agent 部署一个都不开。
     adapters: fileConfig.adapters ?? {},
     providers: fileConfig.providers ?? {},

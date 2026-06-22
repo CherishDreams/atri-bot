@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "atri-bot 前后端共享的类型、常量与工具（服务端 + 控制台）",
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,7 +15,6 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",

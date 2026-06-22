@@ -53,14 +53,14 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 
 ## 常用命令
 
-| 命令 | 说明 |
-| --- | --- |
-| `pnpm dev` | 以文件监听方式运行服务端 |
-| `pnpm dev:dashboard` | 运行控制台的开发服务器 |
-| `pnpm build` | 构建全部包 |
-| `pnpm typecheck` | 对全部包做类型检查 |
-| `pnpm test` | 运行全部测试 |
-| `pnpm clean` | 清理构建产物 |
+| 命令                 | 说明                     |
+| -------------------- | ------------------------ |
+| `pnpm dev`           | 以文件监听方式运行服务端 |
+| `pnpm dev:dashboard` | 运行控制台的开发服务器   |
+| `pnpm build`         | 构建全部包               |
+| `pnpm typecheck`     | 对全部包做类型检查       |
+| `pnpm test`          | 运行全部测试             |
+| `pnpm clean`         | 清理构建产物             |
 
 ## 配置
 
@@ -101,15 +101,15 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 
 基础路径 `/api/v1`：
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/health` | 存活检查 |
-| GET / POST | `/sessions` | 列出 / 创建会话 |
-| GET / DELETE | `/sessions/:id` | 读取 / 删除会话 |
-| POST | `/sessions/:id/messages` | 发送用户消息并获取回复 |
-| GET | `/providers`、`/plugins`、`/adapters` | 供控制台使用的状态 |
-| POST | `/plugins/:id/reload` | 重载插件（销毁旧实例并重新求值代码） |
-| POST | `/plugins/:id/unload` | 卸载插件（释放副作用并移除） |
-| POST | `/plugins/:id/enable` | 启用 / 禁用插件，body `{ "enabled": true }` |
+| 方法         | 路径                                  | 说明                                        |
+| ------------ | ------------------------------------- | ------------------------------------------- |
+| GET          | `/health`                             | 存活检查                                    |
+| GET / POST   | `/sessions`                           | 列出 / 创建会话                             |
+| GET / DELETE | `/sessions/:id`                       | 读取 / 删除会话                             |
+| POST         | `/sessions/:id/messages`              | 发送用户消息并获取回复                      |
+| GET          | `/providers`、`/plugins`、`/adapters` | 供控制台使用的状态                          |
+| POST         | `/plugins/:id/reload`                 | 重载插件（销毁旧实例并重新求值代码）        |
+| POST         | `/plugins/:id/unload`                 | 卸载插件（释放副作用并移除）                |
+| POST         | `/plugins/:id/enable`                 | 启用 / 禁用插件，body `{ "enabled": true }` |
 
 WebSocket 位于 `/ws`，向客户端推送 `message` / `stream` / `error` 帧。
