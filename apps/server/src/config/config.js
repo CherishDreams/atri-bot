@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DEFAULT_SERVER_PORT, DEFAULT_SERVER_HOST } from "@atri/shared";
+import { DEFAULT_SERVER_PORT, DEFAULT_SERVER_HOST, DEFAULT_AUTH_COOKIE_NAME } from "@atri/shared";
 
 /**
  * 配置解析顺序（后者覆盖前者）：
@@ -33,5 +33,18 @@ export function loadConfig() {
     // 适配器是可选启用的；纯 agent 部署一个都不开。
     adapters: fileConfig.adapters ?? {},
     providers: fileConfig.providers ?? {},
+    auth: {
+      adminUser: env.ATRI_ADMIN_USER ?? fileConfig.auth?.adminUser ?? "admin",
+      // 留空表示「启动时自动生成随机口令」，由 AuthManager.init() 负责落盘。
+      adminPassword: env.ATRI_ADMIN_PASSWORD ?? fileConfig.auth?.adminPassword ?? null,
+      cookieName: env.ATRI_COOKIE_NAME ?? fileConfig.auth?.cookieName ?? DEFAULT_AUTH_COOKIE_NAME,
+      // 默认关闭：本仓默认走明文 HTTP。前置 HTTPS 代理时用 ATRI_COOKIE_SECURE=1 打开。
+      cookieSecure: env.ATRI_COOKIE_SECURE === "1" || fileConfig.auth?.cookieSecure === true,
+      // 生产环境下由服务端托管控制台构建产物，并做 SPA 回退。
+      staticDir: resolve(
+        root,
+        env.ATRI_STATIC_DIR ?? fileConfig.staticDir ?? "apps/dashboard/dist",
+      ),
+    },
   };
 }
