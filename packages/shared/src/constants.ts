@@ -11,3 +11,9 @@ export const API_PREFIX = "/api/v1";
 export const WS_PATH = "/ws";
 
 export const APP_NAME = "atri-bot";
+
+/** 承载登录会话令牌的 Cookie 名。令牌只走 Cookie，不进协议体。 */
+export const DEFAULT_AUTH_COOKIE_NAME = "atri_session";
+
+/** 未登录时前端被重定向到的路由。 */
+export const AUTH_LOGIN_PATH = "/login";

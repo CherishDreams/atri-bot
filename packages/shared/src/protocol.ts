@@ -16,4 +16,6 @@ export type ServerFrame =
   | { type: "session"; session: Session }
   | { type: "message"; message: Message }
   | { type: "error"; message: string }
-  | { type: "stream"; sessionId: string; delta: string; done: boolean };
+  | { type: "stream"; sessionId: string; delta: string; done: boolean }
+  /** 握手后会话失效（过期或被登出）；客户端应清空登录态并跳回登录页。 */
+  | { type: "unauthorized"; reason: string };

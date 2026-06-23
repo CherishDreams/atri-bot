@@ -72,3 +72,27 @@ export interface PluginInfo {
   /** 插件所在目录名，便于在控制台辨认。 */
   dir?: string;
 }
+
+/**
+ * 已通过鉴权的账号。目前只有单一管理员，因此只有用户名；
+ * 凭证本身从不进入响应体，一律走 HttpOnly Cookie。
+ */
+export interface AuthUser {
+  username: string;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  user: AuthUser;
+  /** 会话的绝对过期时间，ISO 8601。 */
+  expiresAt: string;
+}
+
+/** 登录页据此决定是否需要展示登录表单。 */
+export interface AuthStatus {
+  required: boolean;
+}
