@@ -1,0 +1,14 @@
+@import "@unocss/reset/tailwind-v4.css";
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font:
+    14px/1.5 system-ui,
+    sans-serif;
+}
