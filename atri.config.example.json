@@ -9,5 +9,11 @@
   },
   "providers": {
     "echo": { "type": "builtin" }
+  },
+  "staticDir": "apps/dashboard/dist",
+  "auth": {
+    "adminUser": "admin",
+    "cookieName": "atri_session",
+    "cookieSecure": false
   }
 }
