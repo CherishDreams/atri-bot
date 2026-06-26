@@ -2,7 +2,13 @@ packages:
   - "apps/*"
   - "packages/*"
 
-# esbuild（由 Vite 引入）在安装时构建其原生二进制文件；
-# 放行它的 postinstall，使 `vite` 可用。
-onlyBuiltDependencies:
-  - esbuild
+# esbuild（由 Vite 引入）在安装时构建其原生二进制文件，放行它的 postinstall 使 `vite` 可用。
+# pnpm 11 起用 allowBuilds 取代了 onlyBuiltDependencies（旧写法已被移除，写了也不生效）。
+allowBuilds:
+  esbuild: true
+
+# 供应链门禁：pnpm 11 起 minimumReleaseAge 默认开启（1 天），发布不足 24 小时的版本会被拒绝。
+# `pnpm add` 遇到这种版本时会自动往本文件塞一个 minimumReleaseAgeExclude 白名单来绕过它。
+# 本仓刻意只使用已过窗口的版本，所以下面不该出现该键；一旦出现，说明有人装了刚发布的版本，
+# 请改用窗口外的范围（例如把 ^x.y.z 改成 ^x.y.(z-1)）后把这个白名单删掉，
+# 不要让一次 `pnpm add` 顺手把门禁对本仓永久关掉。
