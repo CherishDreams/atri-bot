@@ -5,6 +5,7 @@ packages:
 # esbuild（由 Vite 引入）在安装时构建其原生二进制文件，放行它的 postinstall 使 `vite` 可用。
 # pnpm 11 起用 allowBuilds 取代了 onlyBuiltDependencies（旧写法已被移除，写了也不生效）。
 allowBuilds:
+  "@parcel/watcher": false
   esbuild: true
 
 # 供应链门禁：pnpm 11 起 minimumReleaseAge 默认开启（1 天），发布不足 24 小时的版本会被拒绝。

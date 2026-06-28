@@ -7,6 +7,12 @@ dist/
 build/
 *.tsbuildinfo
 
+# unplugin-auto-import / unplugin-vue-components 的产物：
+# 每次 dev 和 build 都会重写，且内容里自带 /* oxfmt-ignore */（oxfmt 并不认这条注释），
+# 入库只会制造无意义的格式噪声。
+apps/dashboard/auto-imports.d.ts
+apps/dashboard/components.d.ts
+
 # 日志
 *.log
 logs/
