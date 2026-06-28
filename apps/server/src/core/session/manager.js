@@ -25,6 +25,17 @@ export class SessionManager {
     return s ? this.#publicView(s) : null;
   }
 
+  /**
+   * 会话详情：公开字段 + 完整消息历史。
+   * 前端刷新或直接打开 /chat/:id 时靠它把对话恢复出来；
+   * `get()` 保持不含消息（列表接口只需要元数据，也不该把全部内容搬过来）。
+   */
+  getDetail(id) {
+    const s = this.#sessions.get(id);
+    if (!s) return null;
+    return { ...this.#publicView(s), messages: [...s.messages] };
+  }
+
   /** 内部访问器，包含消息内容；仅供引擎使用。 */
   getWithMessages(id) {
     return this.#sessions.get(id) ?? null;

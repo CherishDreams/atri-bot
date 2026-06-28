@@ -34,6 +34,17 @@ export interface Session {
   title: string;
   createdAt: string;
   updatedAt: string;
+  /** 消息条数。服务端在会话摘要里附带，用于列表预览而不必搬运内容。 */
+  messageCount?: number;
+}
+
+/**
+ * 会话详情：摘要字段 + 完整消息历史。
+ * 直接打开 /chat/:id 或刷新页面时靠它恢复对话，
+ * 因此会话列表接口刻意只回摘要，不把全部内容搬过来。
+ */
+export interface SessionDetail extends Session {
+  messages: Message[];
 }
 
 /**

@@ -159,6 +159,43 @@ test("登录成功下发 HttpOnly Cookie，并可用它访问受保护接口", a
   assert.ok(Array.isArray(sessions.body.sessions));
 });
 
+test("会话详情回带消息历史，未知 id 返回 404", async (t) => {
+  const { base } = await startServer(t);
+  const login = await call(base, "/auth/login", { method: "POST", body: CREDS });
+  const cookie = cookiePair(login.setCookie);
+
+  const created = await call(base, "/sessions", {
+    method: "POST",
+    body: { title: "恢复用" },
+    cookie,
+  });
+  assert.equal(created.status, 201);
+  const id = created.body.session.id;
+
+  // 发一条消息，制造历史。
+  const sent = await call(base, `/sessions/${id}/messages`, {
+    method: "POST",
+    body: { content: "你好" },
+    cookie,
+  });
+  assert.equal(sent.status, 200);
+
+  const detail = await call(base, `/sessions/${id}`, { cookie });
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.session.title, "恢复用");
+  assert.equal(detail.body.session.messages.length, 2, "应当同时有用户与助手两条");
+  assert.deepEqual(
+    detail.body.session.messages.map((m) => m.role),
+    ["user", "assistant"],
+  );
+
+  // 列表接口仍然只回摘要，不把消息内容搬过来。
+  const list = await call(base, "/sessions", { cookie });
+  assert.equal(list.body.sessions[0].messages, undefined);
+
+  assert.equal((await call(base, "/sessions/does-not-exist", { cookie })).status, 404);
+});
+
 test("带上伪造的令牌仍然 401", async (t) => {
   const { base } = await startServer(t);
   const res = await call(base, "/sessions", {

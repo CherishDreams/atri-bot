@@ -104,7 +104,7 @@ export function createHttpServer(deps) {
   });
 
   router.get(`${API_PREFIX}/sessions/:id`, async (req, res, params) => {
-    const session = sessions.get(params.id);
+    const session = sessions.getDetail(params.id);
     if (!session) return sendError(res, 404, "会话不存在");
     sendJson(res, 200, { session });
   });
