@@ -40,7 +40,8 @@ onMounted(async () => {
       void router.replace({ name: "login" });
       return;
     }
-    if (frame.type === "message") sessions.appendAssistant(frame.message);
+    // HTTP 响应与 WS 帧都会投递同一条助手消息，store.ingest 按 id 去重。
+    if (frame.type === "message") sessions.ingest(frame.message);
   });
 
   await Promise.all([sessions.refresh(), plugins.refresh()]);

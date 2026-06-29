@@ -9,6 +9,22 @@ export const router = createRouter({
   routes: [
     { path: AUTH_LOGIN_PATH, name: "login", component: LoginView },
     { path: "/", name: "console", component: ConsoleView, meta: { requiresAuth: true } },
+    {
+      path: "/chat",
+      name: "chat",
+      component: () => import("@/layouts/chat/ChatLayout.vue"),
+      meta: { requiresAuth: true },
+      // /chat 自身没有可渲染的子路由，落到创建页而不是空白。
+      redirect: { name: "chat-new" },
+      children: [
+        { path: "new", name: "chat-new", component: () => import("@/views/chat/NewSession.vue") },
+        {
+          path: ":sessionId",
+          name: "chat-session",
+          component: () => import("@/views/chat/ChatSessionView.vue"),
+        },
+      ],
+    },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });

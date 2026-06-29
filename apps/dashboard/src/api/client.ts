@@ -3,9 +3,11 @@ import type {
   AuthStatus,
   AuthUser,
   LoginResponse,
+  Message,
   PluginInfo,
   ServerFrame,
   Session,
+  SessionDetail,
 } from "@atri/shared";
 
 /** 会话失效（HTTP 401）时抛出，调用方据此清空登录态。 */
@@ -64,10 +66,15 @@ export class ApiClient {
     });
   }
 
-  sendMessage(sessionId: string, content: string) {
-    return this.#json<{ message: unknown }>(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+  /** 会话详情（含消息历史）。直接打开 /chat/:id 或刷新页面时靠它恢复对话。 */
+  getSession(id: string) {
+    return this.#json<{ session: SessionDetail }>(`/sessions/${encodeURIComponent(id)}`);
+  }
+
+  sendMessage(sessionId: string, content: string, model?: string) {
+    return this.#json<{ message: Message }>(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, model }),
     });
   }
 
