@@ -1,5 +1,11 @@
 @import "@unocss/reset/tailwind-v4.css";
 
+:root {
+  /* 聊天页顶栏高度。ChatHeader 用它定高，ChatLayout 用它给内容区留出偏移，
+     两边引用同一个值，避免各写一份 60px 后改一处就错位。 */
+  --atri-header-h: 60px;
+}
+
 html,
 body,
 #app {

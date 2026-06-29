@@ -12,7 +12,8 @@ import Navigation from "@/components/chat/Navigation.vue";
       <n-layout-header position="absolute">
         <chat-header />
       </n-layout-header>
-      <n-layout position="absolute" class="top-[60px]!">
+      <!-- 偏移量取自 --atri-header-h，与 ChatHeader 的高度是同一个来源。 -->
+      <n-layout position="absolute" class="top-[var(--atri-header-h)]!">
         <n-layout-content class="h-full">
           <router-view />
         </n-layout-content>
