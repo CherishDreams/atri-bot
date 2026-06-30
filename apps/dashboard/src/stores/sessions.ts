@@ -1,8 +1,6 @@
 import { defineStore } from "pinia";
-import type { Message, Session } from "@atri/shared";
-import { ApiClient } from "../api/client.js";
-
-const api = new ApiClient();
+import * as api from "../api/client.js";
+import type { Message, Session } from "../api/generated/index.js";
 
 /** 乐观插入的本地消息：服务端回显到达前先占位，用 pending 标记以便对上号。 */
 interface PendingMessage extends Message {
@@ -51,10 +49,16 @@ export const useSessionsStore = defineStore("sessions", {
     active: null as Session | null,
     log: [] as Message[],
     sending: false,
+    /** 正在流式接收的助手消息 id；为 null 表示当前没有活跃的流。 */
+    streamingId: null as string | null,
     /** 打开会话详情时的加载状态，供页面渲染骨架与空态。 */
     loading: false,
     error: null as string | null,
   }),
+
+  getters: {
+    streaming: (state): boolean => state.streamingId !== null,
+  },
 
   actions: {
     async refresh(): Promise<void> {
@@ -111,6 +115,13 @@ export const useSessionsStore = defineStore("sessions", {
       await this.refresh();
     },
 
+    /**
+     * 发送一条消息，并把回复以流式方式接到日志里。
+     *
+     * 这里刻意不看 `onDelta` 拼出来的文本，而是等末帧的 `message`：
+     * 服务端已经把增量拼好并落库，用它的版本能保证前端显示与数据库一致
+     * （也顺带拿到规范的消息 id 与时间戳）。
+     */
     async send(text: string): Promise<void> {
       await this.ensureActive();
       const active = this.active;
@@ -126,23 +137,65 @@ export const useSessionsStore = defineStore("sessions", {
       };
       this.log.push(userMsg);
 
+      // 助手气泡先以空内容占位，增量往它身上追加，用户才能立刻看到「正在输入」。
+      const draftId = crypto.randomUUID();
+      const draft: PendingMessage = {
+        id: draftId,
+        sessionId: active.id,
+        role: "assistant",
+        content: "",
+        createdAt: new Date().toISOString(),
+        pending: true,
+      };
+      this.log.push(draft);
+
       this.sending = true;
+      this.streamingId = draftId;
       this.error = null;
+
       try {
-        const { message } = await api.sendMessage(active.id, text);
-        this.ingest(message);
+        let sawFinal = false;
+        for await (const chunk of api.sendMessageStream(active.id, text)) {
+          if (chunk.error) throw new Error(chunk.error);
+          if (chunk.delta) this.appendDelta(draftId, chunk.delta);
+          if (chunk.done) {
+            sawFinal = true;
+            // 末帧带回服务端落库的那条消息，用它替换掉草稿。
+            if (chunk.message) this.ingest(chunk.message);
+          }
+        }
+        // 流正常结束却没有末帧，说明连接被中途切断；留着草稿会让用户
+        // 以为回复完整了，所以明确报错而不是静默保留半截内容。
+        if (!sawFinal) throw new Error("回复流意外中断");
         dropPending(this.log, userMsg.id);
       } catch (err) {
         dropPending(this.log, userMsg.id);
+        // 已经收到的部分内容保留下来，只把错误挂在旁边——把半截回复删掉
+        // 会让用户连自己看到了什么都不知道。
         this.error = err instanceof Error ? err.message : "发送失败";
+        if (this.error === "回复流意外中断") this.dropDraft(draftId);
       } finally {
         this.sending = false;
+        this.streamingId = null;
       }
     },
 
-    /** 并入一条服务端消息（WebSocket 帧与 HTTP 响应共用）。 */
+    /** 追加一段增量到指定草稿消息上。 */
+    appendDelta(id: string, delta: string): void {
+      const target = this.log.find((m) => m.id === id);
+      if (target) target.content += delta;
+    },
+
+    /** 丢弃某条草稿（流中断时用），避免留下一个永远在「输入中」的气泡。 */
+    dropDraft(id: string): void {
+      const i = this.log.findIndex((m) => m.id === id);
+      if (i !== -1) this.log.splice(i, 1);
+    },
+
+    /** 并入一条服务端消息（WebSocket 帧与流式末帧共用）。 */
     ingest(message: Message): void {
       if (message.sessionId !== this.active?.id) return;
+      // 草稿替换：流式末帧的 id 与草稿不同，靠「同角色 + 同内容 + pending」对上号。
       ingestInto(this.log, message);
     },
   },

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { ApiClient } from "../api/client.js";
+import { connect } from "../api/client.js";
 import { useAuthStore } from "../stores/auth.js";
 import { useSessionsStore } from "../stores/sessions.js";
 import { usePluginsStore } from "../stores/plugins.js";
@@ -9,7 +9,6 @@ import SessionList from "../components/SessionList.vue";
 import Conversation from "../components/Conversation.vue";
 import PluginPanel from "../components/PluginPanel.vue";
 
-const api = new ApiClient();
 const auth = useAuthStore();
 const sessions = useSessionsStore();
 const plugins = usePluginsStore();
@@ -34,7 +33,7 @@ onMounted(async () => {
     return;
   }
 
-  unsubscribe = api.connect((frame) => {
+  unsubscribe = connect((frame) => {
     if (frame.type === "unauthorized") {
       auth.clear();
       void router.replace({ name: "login" });

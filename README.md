@@ -57,18 +57,19 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 
 ## 常用命令
 
-| 命令                 | 说明                                  |
-| -------------------- | ------------------------------------- |
-| `pnpm dev`           | 以文件监听方式运行服务端              |
-| `pnpm dev:dashboard` | 运行控制台的开发服务器                |
-| `pnpm build`         | 构建全部包                            |
-| `pnpm typecheck`     | 对全部包做类型检查                    |
-| `pnpm lint`          | oxlint 检查（告警即失败）             |
-| `pnpm format`        | oxfmt 统一格式                        |
-| `pnpm format:check`  | 只校验格式，不改文件                  |
-| `pnpm test`          | 运行全部测试                          |
-| `pnpm check`         | 依次跑 typecheck / lint / 格式 / 测试 |
-| `pnpm clean`         | 清理构建产物                          |
+| 命令                 | 说明                                               |
+| -------------------- | -------------------------------------------------- |
+| `pnpm dev`           | 以文件监听方式运行服务端                           |
+| `pnpm dev:dashboard` | 运行控制台的开发服务器                             |
+| `pnpm build`         | 构建全部包                                         |
+| `pnpm typecheck`     | 对全部包做类型检查                                 |
+| `pnpm lint`          | oxlint 检查（告警即失败）                          |
+| `pnpm format`        | oxfmt 统一格式                                     |
+| `pnpm format:check`  | 只校验格式，不改文件                               |
+| `pnpm test`          | 运行全部测试                                       |
+| `pnpm check`         | 依次跑 typecheck / lint / 格式 / 生成物漂移 / 测试 |
+| `pnpm codegen`       | 按 `apps/server/openapi.json` 重新生成前端客户端   |
+| `pnpm clean`         | 清理构建产物                                       |
 
 仓库没有配置 CI，`pnpm check` 需要手动运行（提交前跑一次）。
 
@@ -124,6 +125,51 @@ pnpm dev
 - WebSocket 复用同一个 Cookie 完成握手（浏览器无法为 WS 握手自定义请求头），
   未登录的连接在握手阶段即被以 401 拒绝。
 
+## 模型 provider
+
+在 `atri.config.json` 的 `providers` 段声明。`type` 决定用哪个实现，目前支持
+`openai`（含所有 OpenAI 兼容网关）与 `anthropic`：
+
+```json
+{
+  "providers": {
+    "default": "deepseek",
+    "deepseek": {
+      "type": "openai",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKey": "",
+      "models": ["deepseek-chat"]
+    },
+    "claude": { "type": "anthropic", "apiKey": "", "models": ["claude-sonnet-4-5"] }
+  }
+}
+```
+
+| 字段        | openai                           | anthropic                                              |
+| ----------- | -------------------------------- | ------------------------------------------------------ |
+| `baseUrl`   | 默认 `https://api.openai.com/v1` | 默认 `https://api.anthropic.com/v1`                    |
+| 鉴权        | `Authorization: Bearer`          | `x-api-key` + `anthropic-version`（默认 `2023-06-01`） |
+| `models`    | 供控制台与选路使用               | 同左                                                   |
+| `maxTokens` | 不发送（由上游决定）             | **必填**，默认 `8192`                                  |
+| `headers`   | 额外请求头                       | 同左                                                   |
+| `timeoutMs` | 默认 `120000`                    | 同左                                                   |
+
+`default` 是保留键（字符串），指向默认 provider 的 id；也可以改成在某个 provider
+上写 `"default": true`。没配默认值时的选路顺序是：**显式模型名命中 → 默认 provider → 第一个注册的**。
+模型名对不上任何 provider 的 `models` 时**仍会退回默认 provider**——
+上游的模型列表通常比本地配置新，本地列表不该当成硬闸门。
+
+单个 provider 配错（类型拼错、构造抛错）只会记一条日志，不影响其它 provider 启动；
+但如果配了 `default` 而它恰好加载失败，**不会静默换个 provider**——
+否则请求会悄悄打到另一个模型上，只留一条 warn 日志说明会回退。
+
+一个 provider 都没配时，回复退化为**回声**（`[回声:模型名] 原文`）以便先把链路跑通。
+一旦有 provider 注册，调用失败就会如实抛错，不会伪装成正常回复。
+
+密钥解析顺序：provider 自己的 `apiKey` → 环境变量 `ATRI_<ID>_API_KEY`。
+因为密钥留在磁盘文件里终究不如注入环境变量安全，容器部署建议只用后者
+（见 `.env.example`）。
+
 ## 生产部署
 
 `pnpm build` 后，服务端会托管 `apps/dashboard/dist` 并做 **SPA 回退**，
@@ -146,8 +192,13 @@ pnpm start            # 或 node apps/server/src/index.js
   参见 `apps/server/plugins/hello`。
 - **适配器** —— 实现 `start()`/`stop()` 并注册到 `AdapterManager`；
   在 `config.adapters.<id>.enabled` 中按需启用。纯 agent 部署可以不启用任何一个。
-- **Provider** —— 向 `ProviderRegistry` 注册 `{ id, name, models, chat() }` 对象。
-  引擎从不 import 具体的模型 SDK。
+- **Provider** —— 模型的出站适配。内置 `openai` 与 `anthropic` 两种实现，
+  在 `atri.config.json` 的 `providers` 段按类型声明即可，引擎从不 import 具体的模型 SDK。
+  详见[模型 provider](#模型-provider)。
+
+> 命名上注意区分两端：**adapter** 指入站接入（QQ、Discord、webhook…），
+> 契约是长驻的 `start()`/`stop()`；**provider** 指出站模型调用，
+> 契约是每次请求的 `chat()`。两者是不同形状的接口，故意不用同一个词。
 
 ### 插件的动态加载
 
@@ -177,8 +228,9 @@ pnpm start            # 或 node apps/server/src/index.js
 | POST         | `/auth/login`、`/auth/logout`         | 登录 / 登出（公开，见上）                   |
 | GET          | `/auth/me`、`/auth/status`            | 当前用户 / 是否需要登录                     |
 | GET / POST   | `/sessions`                           | 列出 / 创建会话                             |
-| GET / DELETE | `/sessions/:id`                       | 读取 / 删除会话                             |
-| POST         | `/sessions/:id/messages`              | 发送用户消息并获取回复                      |
+| GET / DELETE | `/sessions/:id`                       | 读取（含完整消息历史）/ 删除会话            |
+| POST         | `/sessions/:id/messages`              | 发送用户消息，等完整回复后返回              |
+| POST         | `/sessions/:id/messages/stream`       | 同上，但以 SSE 逐段推送回复增量             |
 | GET          | `/providers`、`/plugins`、`/adapters` | 供控制台使用的状态                          |
 | POST         | `/plugins/:id/reload`                 | 重载插件（销毁旧实例并重新求值代码）        |
 | POST         | `/plugins/:id/unload`                 | 卸载插件（释放副作用并移除）                |
@@ -188,3 +240,46 @@ pnpm start            # 或 node apps/server/src/index.js
 
 WebSocket 位于 `/ws`，向客户端推送 `message` / `stream` / `error` / `unauthorized` 帧。
 收到 `unauthorized` 表示会话在连接期间失效，客户端应清空登录态并回到登录页。
+
+### 流式回复
+
+`POST /sessions/:id/messages/stream` 与等完整回复的接口**并存**，而不是取代它：
+批量调用方（适配器、脚本）不需要流式的复杂度，而 UI 要首字尽快可见。
+两者走同一个引擎，落库内容一致。
+
+响应是 `text/event-stream`，每个事件的 data 是一个 JSON 对象：
+
+```
+data: {"delta":"你","done":false}
+data: {"delta":"好","done":false}
+data: {"delta":"","done":true,"message":{...}}
+```
+
+两条容易踩的约定：
+
+- **错误走事件，不走状态码**。响应头一旦发出就无法再改状态码，因此参数校验
+  （空 `content`）与「会话不存在」都在**开流之前**判定并回 400/404，
+  而开流之后上游才出错（密钥无效、限流）则以 `{"error":"...","done":true}` 事件下发。
+- 客户端断开连接时服务端会**中断上游请求**，避免为已经没人接收的响应继续消耗 token。
+  关停服务时也会先掐断进行中的流——否则 `server.close()` 会一直等这些长连接自然结束而挂住。
+
+### OpenAPI 与前端客户端
+
+`apps/server/openapi.json` 是接口规范的**唯一源头**，前端调用的类型化 SDK
+由它生成到 `apps/dashboard/src/api/generated/`（生成物入库，不做手改）：
+
+```bash
+pnpm codegen        # openapi-ts -f openapi-ts.config.ts
+```
+
+`pnpm check` 里的 `codegen:check` 会重新生成一次并校验工作区没有变化，
+所以**改了接口就必须同步提交生成物**。校验用的是 `git status --porcelain`
+而不是 `git diff`：后者看不见未跟踪文件，新增端点时会漏报，而那正是最需要报警的情况。
+
+生成物不参与 oxlint/oxfmt（见两者配置的 `ignorePatterns`），以保证
+「重新生成后无差异」这条检查是可信的。
+
+手写的 `apps/dashboard/src/api/client.ts` 是唯一的调用入口，负责三件生成物不管的事：
+统一把失败转成异常（生成客户端默认把 AxiosError 当返回值）、把 401 归一成
+`UnauthorizedError`、以及给 axios 配上 `withCredentials` 与 `bodySerializer`。
+WebSocket 不属于 OpenAPI 能描述的范围，那一段也是手写的。

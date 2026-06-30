@@ -1,8 +1,7 @@
 import { defineStore } from "pinia";
 import type { AuthUser } from "@atri/shared";
-import { ApiClient, UnauthorizedError } from "../api/client.js";
-
-const api = new ApiClient();
+import * as api from "../api/client.js";
+import { UnauthorizedError } from "../api/client.js";
 
 /**
  * 登录态。令牌本身只存在于 HttpOnly Cookie 中，

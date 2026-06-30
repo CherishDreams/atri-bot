@@ -14,7 +14,7 @@ apps/server/src/
 │   ├── agent/      AgentEngine：一轮对话的编排
 │   ├── auth/       AuthManager：管理员口令与会话令牌
 │   ├── session/    SessionManager：会话与消息（当前为内存实现）
-│   ├── provider/   ProviderRegistry：模型提供方
+│   ├── provider/   ProviderRegistry + 厂商实现（openai / anthropic）
 │   └── logger.js
 ├── api/            传输层：HTTP 路由、静态托管、WebSocket（无业务逻辑）
 ├── adapters/       可选启用的对外接入
@@ -107,6 +107,53 @@ HTTP 请求
 WebSocket 复用同一个 Cookie 完成握手（浏览器无法为握手自定义请求头），
 未登录的连接在握手阶段即以 401 拒绝。
 
+## 模型 provider
+
+`core/provider/` 是**出站**边界：把 `{model, messages}` 变成某个厂商的 HTTP 调用。
+与入站的 `adapters/` 是两个不同形状的接口，因此刻意不共用「适配器」这个词——
+adapter 是长驻的 `start()`/`stop()`，provider 是每请求的 `chat()`。
+
+分层是「注册表只管存与取，装配单独一层」：
+
+```
+factory.js  配置 -> 实例（唯一入口，认得 type 与密钥解析）
+registry.js ProviderRegistry：选路与转发，不知道任何厂商细节
+openai.js   / anthropic.js：厂商实现
+sse.js      SSE 解析（两个实现共用）
+errors.js   ProviderError 与上游错误归一
+```
+
+把装配从注册表里拆出来，是为了让 `registry.js` 不 import 任何具体实现。
+新增一个厂商只需在 `factory.js` 的 `TYPES` 表里加一行。
+
+### 选路与回声兜底
+
+`#resolveFor(model)` 三级回落：**显式模型名命中某个 provider 的 `models`** →
+默认 provider → 第一个注册的。模型名对不上任何一段 `models` 时仍退回默认 provider，
+因为上游的模型列表通常比本地配置新，本地列表不该当硬闸门。
+
+回复退化为**回声**只在「一个 provider 都没注册」时发生。只要注册了 provider，
+调用失败就必须如实抛错——把故障伪装成正常回复会让问题永远暴露不出来。
+
+配了 `default` 但它加载失败时**不静默换一个**，只留一条 warn。否则请求会悄悄打到
+另一个模型上，那比启动失败更难查。
+
+### 错误归一
+
+三个厂商的错误形状不同，`errors.js` 把它们统一成 `ProviderError`，
+并给已知状态码配中文解释（401「密钥无效」、429「触发限流」…）。
+`toNetworkError` 单独处理 `AbortError`——取消是预期路径，不该报成上游故障。
+
+### 流式
+
+`chatStream` 与 `chat` 是**两个方法而非一个带 `onDelta` 的方法**：
+调用方要么要流式、要么要整段，混在一起会让「没传 onDelta」成为一个隐藏分支。
+两者走同一份消息构造与错误处理。
+
+`registry.chatStream` 在 provider 没有 `chatStream` 时退化为「一次 `chat` 再整段
+`onDelta`」，这样引擎不必判断 provider 是否支持流式，前端拿到的形状始终一致。
+流式以**拼接结果**为落库依据，不依赖前端攒增量——前端丢一帧不该影响历史记录。
+
 ## 静态托管
 
 `pnpm build` 之后，服务端托管 `apps/dashboard/dist` 并做 SPA 回退：
@@ -138,16 +185,18 @@ WebSocket 复用同一个 Cookie 完成握手（浏览器无法为握手自定�
 
 ## 前端
 
-`apps/dashboard` 是 Vue 3 + vue-router + Pinia + UnoCSS 的单页应用：
+`apps/dashboard` 是 Vue 3 + vue-router + Pinia + UnoCSS + naive-ui 的单页应用：
 
 ```
 src/
 ├── main.ts          挂载应用，按顺序引入 ./uno.css 与 virtual:uno.css
-├── api/client.ts    唯一的 HTTP/WS 出口，credentials: "include"
+├── api/
+│   ├── client.ts    唯一的 HTTP/WS 出口（手写）
+│   └── generated/   由 openapi.json 生成的类型化 SDK（入库，不手改）
 ├── stores/          auth / sessions / plugins（Pinia）
 ├── router/index.ts  路由与登录守卫
-├── views/           LoginView / ConsoleView
-└── components/      SessionList / Conversation / PluginPanel
+├── views/           LoginView / ConsoleView / chat 下的创建与会话页
+└── components/      SessionList / Conversation / PluginPanel / chat/*
 ```
 
 几条约束：
@@ -162,6 +211,35 @@ src/
   不含任何原子类。少了 `import "virtual:uno.css"`，构建产物里一个工具类都不会生成，
   样式层会**静默失效**（CSS 从 ~12 kB 掉到 ~3 kB 就是这个症状）。
 
+### OpenAPI 生成的客户端
+
+`apps/server/openapi.json` 是接口规范的唯一源头，`apps/dashboard/src/api/generated/`
+由 `pnpm codegen` 生成并入库。`pnpm check` 会重新生成一次并比对工作区，
+所以改了接口必须同步提交生成物。
+
+生成物**不参与 oxlint/oxfmt**（两者的 `ignorePatterns`）。这不只是为了省事：
+若格式化会改动生成物，「重新生成后无差异」这条检查就永远不成立。
+
+`api/client.ts` 是手写的唯一出口，原因是生成客户端默认**不抛异常**——
+它把 `AxiosError` 当返回值交出（`if (opts.throwOnError) throw e; ...; return e`），
+把「失败」编码进返回类型。手写一层把它转成异常，调用方才能用普通 `try/catch`。
+
+两个必须手写而不能只靠生成物的点：
+
+- **`bodySerializer`**。生成物在没配它时把请求体对象原样交给 fetch，
+  对象会被序列化成 `[object Object]`。axios 路径自己会序列化所以看不出来，
+  但 **SSE 走全局 `fetch`**，于是只有流式接口坏掉。
+- **WebSocket**。OpenAPI 描述不了 WS，那一段永远是手写的。
+
+### 流式渲染
+
+`sessions` store 在发送时先插入一个 `pending` 的助手草稿，再按 `chunk.delta` 追加，
+收到末帧才用服务端消息替换整条。这样做的原因有两条：
+
+- 首字立刻可见，而不是等整段回复。
+- **落库以服务端为准**。流式与刷新后读到的历史由此必然一致，
+  不会出现「界面上一段、数据库里另一段」。
+
 ## 工具链
 
 - **oxlint**：`.oxlintrc.json`，`correctness` + `suspicious` 两级。
@@ -170,7 +248,29 @@ src/
 - **oxfmt**：`.oxfmtrc.json`，`singleQuote: false`（与本仓既有风格一致）。
 - 二者都以 warning 计数，`pnpm lint` 带 `--deny-warnings`，
   所以**告警即失败**——oxlint 单独运行时仅有 warning 会退出 0，这一点容易误判。
+- `pnpm check` 还会跑 `codegen:check`，校验生成物与 `openapi.json` 同步。
+  它用 `git status --porcelain` 而不是 `git diff`——后者看不见未跟踪文件，
+  而「新增了一个端点」正是最需要报警的情况。
 - 仓库**没有 CI**，`pnpm check` 需要手动在提交前运行。
+
+## 关停
+
+`close()` 必须先掐断进行中的 SSE 流，再关 WebSocket 与 HTTP server：
+
+```js
+for (const controller of openStreams) controller.abort(); // 长连接，不掐就干等
+wss.close(() => server.close(done));
+server.closeAllConnections?.(); // 兜住空闲 keep-alive 连接
+```
+
+`server.close()` 只是「停止接受新连接」，它会**等所有既有连接自然结束**。
+流式响应是长连接、可以持续几十秒，所以不主动收尾的关停会一直挂着
+（实测有客户端开着流时要等 120s+，掐断后 4ms）。
+`closeAllConnections()` 则处理另一头：空闲的 keep-alive 连接同样会让关闭悬住。
+
+与之配套的是「客户端断开要中断上游」：`res.on("close")` 里 `controller.abort()`，
+否则用户关掉标签页之后，服务端仍会为一份没人接收的响应继续消耗 token。
+这种取消是预期路径，所以只记 `debug`，不按服务端故障刷 error 堆栈。
 
 ### pnpm 11 的两个坑
 

@@ -1,0 +1,912 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "atri-bot API",
+    "version": "1.0.0",
+    "description": "atri-bot 服务端 HTTP 接口。这是接口契约的唯一来源：\n控制台前端由它生成类型化客户端（@hey-api/openapi-ts），\n服务端的实现必须与它保持一致。\n\n除标注「公开」的接口外，其余都需要登录（HttpOnly Cookie 会话）。"
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "与控制台同源"
+    }
+  ],
+  "tags": [
+    {
+      "name": "health",
+      "description": "存活检查"
+    },
+    {
+      "name": "auth",
+      "description": "登录鉴权"
+    },
+    {
+      "name": "sessions",
+      "description": "会话与消息"
+    },
+    {
+      "name": "plugins",
+      "description": "插件管理"
+    },
+    {
+      "name": "status",
+      "description": "运行时状态"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "存活检查（公开）",
+        "tags": ["health"],
+        "responses": {
+          "200": {
+            "description": "服务存活",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "login",
+        "summary": "登录（公开）",
+        "description": "成功后通过 `Set-Cookie` 下发 HttpOnly 会话 Cookie。\n账号不存在与口令错误返回同一句提示，避免枚举账号。",
+        "tags": ["auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "登出（公开，幂等）",
+        "description": "未登录时同样返回 200，避免前端卡在登录态。",
+        "tags": ["auth"],
+        "responses": {
+          "200": {
+            "description": "已登出",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "operationId": "me",
+        "summary": "当前登录用户",
+        "tags": ["auth"],
+        "responses": {
+          "200": {
+            "description": "当前会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/auth/status": {
+      "get": {
+        "operationId": "authStatus",
+        "summary": "是否需要登录（公开）",
+        "description": "必须在渲染登录页之前可访问，否则前端无从得知要不要登录。",
+        "tags": ["auth"],
+        "responses": {
+          "200": {
+            "description": "鉴权是否启用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["required"],
+                  "properties": {
+                    "required": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "列出会话（仅摘要，不含消息）",
+        "tags": ["sessions"],
+        "responses": {
+          "200": {
+            "description": "会话列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["sessions"],
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Session"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSession",
+        "summary": "创建会话",
+        "tags": ["sessions"],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已创建",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["session"],
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/Session"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/sessions/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "get": {
+        "operationId": "getSession",
+        "summary": "读取会话详情（含完整消息历史）",
+        "tags": ["sessions"],
+        "responses": {
+          "200": {
+            "description": "会话详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["session"],
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/SessionDetail"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSession",
+        "summary": "删除会话",
+        "tags": ["sessions"],
+        "responses": {
+          "200": {
+            "description": "已删除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["deleted"],
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/sessions/{id}/messages": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "post": {
+        "operationId": "sendMessage",
+        "summary": "发送用户消息并等待完整回复",
+        "tags": ["sessions"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "助手回复",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["message"],
+                  "properties": {
+                    "message": {
+                      "$ref": "#/components/schemas/Message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/sessions/{id}/messages/stream": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "post": {
+        "operationId": "streamMessage",
+        "summary": "发送用户消息并以 SSE 流式接收回复",
+        "description": "响应为 `text/event-stream`。每个事件的 data 是一个 JSON 对象：\n`{\"delta\": \"...\", \"done\": false}` 表示增量文本，\n末帧为 `{\"delta\": \"\", \"done\": true}`。\n\n注意：provider 出错时 HTTP 状态码已经是 200（响应头早已发出），\n错误通过 `{\"error\": \"...\"}` 事件传递，而不是靠状态码。",
+        "tags": ["sessions"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "增量事件流",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamChunk"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/providers": {
+      "get": {
+        "operationId": "listProviders",
+        "summary": "列出模型 provider",
+        "tags": ["status"],
+        "responses": {
+          "200": {
+            "description": "provider 列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["providers"],
+                  "properties": {
+                    "providers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProviderInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/plugins": {
+      "get": {
+        "operationId": "listPlugins",
+        "summary": "列出插件",
+        "tags": ["plugins"],
+        "responses": {
+          "200": {
+            "description": "插件列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plugins"],
+                  "properties": {
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PluginInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/plugins/{id}/reload": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/PluginId"
+        }
+      ],
+      "post": {
+        "operationId": "reloadPlugin",
+        "summary": "重载插件（销毁旧实例并重新求值代码）",
+        "tags": ["plugins"],
+        "responses": {
+          "200": {
+            "description": "重载后的插件状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plugin"],
+                  "properties": {
+                    "plugin": {
+                      "$ref": "#/components/schemas/PluginInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/plugins/{id}/unload": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/PluginId"
+        }
+      ],
+      "post": {
+        "operationId": "unloadPlugin",
+        "summary": "卸载插件（释放副作用并移除）",
+        "tags": ["plugins"],
+        "responses": {
+          "200": {
+            "description": "卸载结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "unloaded"],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "unloaded": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/plugins/{id}/enable": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/PluginId"
+        }
+      ],
+      "post": {
+        "operationId": "setPluginEnabled",
+        "summary": "启用 / 禁用插件",
+        "tags": ["plugins"],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的插件状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plugin"],
+                  "properties": {
+                    "plugin": {
+                      "$ref": "#/components/schemas/PluginInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/adapters": {
+      "get": {
+        "operationId": "listAdapters",
+        "summary": "列出平台适配器",
+        "tags": ["status"],
+        "responses": {
+          "200": {
+            "description": "适配器列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["adapters"],
+                  "properties": {
+                    "adapters": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdapterInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "SessionId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "会话 id"
+      },
+      "PluginId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "插件 id"
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "请求无效",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "未登录或会话已失效",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "资源不存在",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Ok": {
+        "type": "object",
+        "required": ["ok"],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": ["ok", "app", "version"],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthUser": {
+        "type": "object",
+        "required": ["username"],
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthSession": {
+        "type": "object",
+        "required": ["user", "expiresAt"],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/AuthUser"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Role": {
+        "type": "string",
+        "enum": ["system", "user", "assistant", "tool"]
+      },
+      "Message": {
+        "type": "object",
+        "required": ["id", "sessionId", "role", "content", "createdAt"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "content": {
+            "type": "string"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "required": ["id", "title", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "messageCount": {
+            "type": "integer"
+          }
+        }
+      },
+      "SessionDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Session"
+          },
+          {
+            "type": "object",
+            "required": ["messages"],
+            "properties": {
+              "messages": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SendMessageRequest": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "用户消息正文"
+          },
+          "model": {
+            "type": "string",
+            "description": "指定模型；留空则用 provider 配置里的默认值，没有默认值时取第一个 provider"
+          }
+        }
+      },
+      "StreamChunk": {
+        "type": "object",
+        "properties": {
+          "delta": {
+            "type": "string",
+            "description": "本次增量文本"
+          },
+          "done": {
+            "type": "boolean",
+            "description": "是否为末帧"
+          },
+          "message": {
+            "$ref": "#/components/schemas/Message",
+            "description": "末帧带回已落库的助手消息"
+          },
+          "error": {
+            "type": "string",
+            "description": "流中途出错时的可读提示"
+          }
+        }
+      },
+      "ProviderInfo": {
+        "type": "object",
+        "required": ["id", "name", "models"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string",
+            "description": "provider 实现类型，如 openai / anthropic"
+          },
+          "default": {
+            "type": "boolean",
+            "description": "是否为配置里的默认 provider"
+          }
+        }
+      },
+      "AdapterInfo": {
+        "type": "object",
+        "required": ["id", "name", "enabled"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PluginStatus": {
+        "type": "string",
+        "enum": ["active", "disabled"],
+        "description": "插件运行时状态。active=运行中，disabled=已禁用（保留元数据可再启用）。"
+      },
+      "PluginInfo": {
+        "type": "object",
+        "required": ["id", "name", "enabled"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "当前是否在接收事件（等价于 status === \"active\"）"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PluginStatus"
+          },
+          "dir": {
+            "type": "string",
+            "description": "插件所在目录名，便于在控制台辨认"
+          },
+          "error": {
+            "type": "string",
+            "description": "加载失败时的可读原因"
+          }
+        }
+      }
+    }
+  }
+}

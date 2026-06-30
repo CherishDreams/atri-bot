@@ -1,8 +1,6 @@
 import { defineStore } from "pinia";
-import type { PluginInfo } from "@atri/shared";
-import { ApiClient } from "../api/client.js";
-
-const api = new ApiClient();
+import type { PluginInfo } from "../api/generated/index.js";
+import * as api from "../api/client.js";
 
 type PluginActions = { error: string | null; refresh: () => Promise<void> };
 

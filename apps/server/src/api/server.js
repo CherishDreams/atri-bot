@@ -4,7 +4,7 @@ import { extname, resolve, sep } from "node:path";
 import { WebSocketServer } from "ws";
 import { API_PREFIX, WS_PATH, APP_NAME } from "@atri/shared";
 import { Router } from "./router.js";
-import { sendJson, sendError, readJson } from "./http.js";
+import { sendJson, sendError, readJson, startSse, sendSse } from "./http.js";
 import { parseCookies, setSessionCookie, clearSessionCookie, requireAuth } from "./auth.js";
 
 /**
@@ -47,6 +47,12 @@ export function createHttpServer(deps) {
 
   const cookieName = auth.cookieName;
   const router = new Router();
+
+  /**
+   * 进行中的 SSE 流。`server.close()` 会等所有连接自然结束，而流式响应是长连接：
+   * 不主动收尾，关闭就会一直挂到上游超时（实测有客户端开着流时 `stop()` 要等 120s+）。
+   */
+  const openStreams = new Set();
 
   router.get(`${API_PREFIX}/health`, async (_req, res) => {
     sendJson(res, 200, { ok: true, app: APP_NAME, version: "1.0.0" });
@@ -128,6 +134,65 @@ export function createHttpServer(deps) {
       sendJson(res, 200, { message: reply });
     } catch (err) {
       sendError(res, 400, err.message);
+    }
+  });
+
+  /**
+   * 流式版本：以 SSE 逐段推送助手回复。
+   *
+   * 与上面「等完整回复」的接口并存，而不是取代它——批量调用方（适配器、
+   * 脚本）不需要流式的复杂度，而 UI 需要首字尽快可见。两者共用同一个引擎，
+   * 落库内容一致。
+   */
+  router.post(`${API_PREFIX}/sessions/:id/messages/stream`, async (req, res, params) => {
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      return sendError(res, 400, err.message);
+    }
+    if (typeof body.content !== "string" || body.content.length === 0) {
+      return sendError(res, 400, "必须提供 `content`（字符串）");
+    }
+
+    // 会话不存在要在开流之前判断：一旦发出 200 响应头，就只能靠事件报错，
+    // 客户端拿不到「404」这种明确语义了。
+    if (!sessions.get(params.id)) return sendError(res, 404, "会话不存在");
+
+    startSse(res);
+
+    // 客户端断开（关标签页、切路由）时中断上游请求，避免为已无人接收的
+    // 响应继续消耗 token。abort 也会让 provider 侧抛出取消错误。
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.on("close", onClose);
+    openStreams.add(controller);
+
+    try {
+      const reply = await engine.handleMessage({
+        sessionId: params.id,
+        content: body.content,
+        model: body.model,
+        signal: controller.signal,
+        onDelta: (delta) => {
+          if (!res.writableEnded) sendSse(res, { delta, done: false });
+        },
+      });
+      if (!res.writableEnded) sendSse(res, { delta: "", done: true, message: reply });
+    } catch (err) {
+      // 客户端主动断开（关标签页、切走）会让上面的 controller.abort() 打断上游，
+      // 抛出的取消错误属于预期路径，不该按服务端故障记一条 error 堆栈。
+      if (controller.signal.aborted) {
+        logger.debug(`客户端断开，已中断流式回复: ${params.id}`);
+      } else {
+        logger.error(`流式回复出错: ${err.stack ?? err.message}`);
+        // 状态码已经是 200 了，错误只能走事件。前端据此提示，而不是静默变成空回复。
+        if (!res.writableEnded) sendSse(res, { error: err.message, done: true });
+      }
+    } finally {
+      res.off("close", onClose);
+      openStreams.delete(controller);
+      if (!res.writableEnded) res.end();
     }
   });
 
@@ -258,8 +323,16 @@ export function createHttpServer(deps) {
     address: () => server.address(),
     close: () =>
       new Promise((done) => {
+        // 先掐断进行中的流式响应：它们是长连接，`server.close()` 只会干等它们自然结束。
+        // 中断上游同时也会让对应响应收尾，连接随之释放。
+        for (const controller of openStreams) controller.abort();
+        openStreams.clear();
+
         for (const ws of clients) ws.close();
         wss.close(() => server.close(done));
+        // WebSocket 升级过的连接不算在 http server 的普通请求里，closeAllConnections
+        // 兜住剩余的空闲 keep-alive 连接，否则关停仍可能拖到超时。
+        server.closeAllConnections?.();
       }),
   };
 }

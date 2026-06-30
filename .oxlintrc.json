@@ -16,7 +16,14 @@
     "prefer-const": "warn",
     "no-console": "off"
   },
-  "ignorePatterns": ["node_modules", "dist", "build", "coverage", "*.min.js"],
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "*.min.js",
+    "apps/dashboard/src/api/generated"
+  ],
   "overrides": [
     {
       "files": ["apps/server/test/**", "**/*.test.js"],

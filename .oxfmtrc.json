@@ -12,5 +12,13 @@
   "endOfLine": "lf",
   "sortPackageJson": true,
   "sortImports": false,
-  "ignorePatterns": ["node_modules", "dist", "build", "coverage", "pnpm-lock.yaml", "*.min.js"]
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "pnpm-lock.yaml",
+    "*.min.js",
+    "apps/dashboard/src/api/generated"
+  ]
 }

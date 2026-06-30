@@ -15,10 +15,13 @@
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "codegen": "openapi-ts -f openapi-ts.config.ts",
+    "codegen:check": "pnpm codegen && node scripts/check-codegen.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm codegen:check && pnpm test",
     "clean": "node scripts/clean.mjs"
   },
   "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
     "@types/node": "^22.10.2",
     "oxfmt": "^0.72.0",
     "oxlint": "^1.87.0",

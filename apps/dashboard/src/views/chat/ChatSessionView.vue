@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ApiClient } from "@/api/client";
+import { connect } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
 import { useSessionsStore } from "@/stores/sessions";
 
-const api = new ApiClient();
 const auth = useAuthStore();
 const sessions = useSessionsStore();
 const route = useRoute();
@@ -66,7 +65,7 @@ onMounted(async () => {
     return;
   }
 
-  unsubscribe = api.connect((frame) => {
+  unsubscribe = connect((frame) => {
     if (frame.type === "unauthorized") {
       auth.clear();
       void router.replace({ name: "login", query: { redirect: route.fullPath } });
