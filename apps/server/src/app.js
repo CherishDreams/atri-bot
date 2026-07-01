@@ -72,6 +72,8 @@ export async function createApp(config) {
     },
     // 暴露监听地址，让 port: 0（随机端口）的调用方能拿到真实端口。
     address: () => http.address(),
+    // 真实注册的 API 路由，供测试比对 openapi.json。
+    routes: () => http.routes(),
     async stop() {
       await adapters.stopAll();
       await http.close();

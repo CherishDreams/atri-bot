@@ -321,6 +321,11 @@ export function createHttpServer(deps) {
     listen: (port, host) => new Promise((done) => server.listen(port, host, done)),
     // 暴露实际绑定端口，使 `port: 0`（随机端口）可用于测试与并行启动。
     address: () => server.address(),
+    /**
+     * 真实注册的 API 路由。测试拿它比对 `apps/server/openapi.json`——
+     * 那份规格是手写的，需要一道「代码与规格没走散」的检查。
+     */
+    routes: () => router.routes,
     close: () =>
       new Promise((done) => {
         // 先掐断进行中的流式响应：它们是长连接，`server.close()` 只会干等它们自然结束。
