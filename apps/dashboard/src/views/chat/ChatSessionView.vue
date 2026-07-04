@@ -3,10 +3,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router";
 import { connect } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
+import { useProvidersStore } from "@/stores/providers";
 import { useSessionsStore } from "@/stores/sessions";
 
 const auth = useAuthStore();
 const sessions = useSessionsStore();
+const providers = useProvidersStore();
 const route = useRoute();
 const router = useRouter();
 
@@ -46,7 +48,8 @@ async function onSend(): Promise<void> {
   if (!text || !sessions.active) return;
 
   draft.value = "";
-  await sessions.send(text);
+  // 带上顶栏模型选择器选中的实例；没选就交给服务端按自己的默认选路。
+  await sessions.send(text, providers.selection?.model);
 
   // 发送失败时把内容还回输入框，否则用户白打一遍字。
   if (sessions.error && !draft.value) draft.value = text;

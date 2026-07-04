@@ -121,8 +121,10 @@ export const useSessionsStore = defineStore("sessions", {
      * 这里刻意不看 `onDelta` 拼出来的文本，而是等末帧的 `message`：
      * 服务端已经把增量拼好并落库，用它的版本能保证前端显示与数据库一致
      * （也顺带拿到规范的消息 id 与时间戳）。
+     *
+     * `model` 为 provider 实例 id；留空则让服务端按自己的三级选路挑一个。
      */
-    async send(text: string): Promise<void> {
+    async send(text: string, model?: string): Promise<void> {
       await this.ensureActive();
       const active = this.active;
       if (!active) return;
@@ -155,7 +157,7 @@ export const useSessionsStore = defineStore("sessions", {
 
       try {
         let sawFinal = false;
-        for await (const chunk of api.sendMessageStream(active.id, text)) {
+        for await (const chunk of api.sendMessageStream(active.id, text, model)) {
           if (chunk.error) throw new Error(chunk.error);
           if (chunk.delta) this.appendDelta(draftId, chunk.delta);
           if (chunk.done) {

@@ -448,3 +448,138 @@ test("注册：没有 id 的 provider 被拒绝", () => {
   const registry = new ProviderRegistry();
   assert.throws(() => registry.register({}), /必须带有 id/);
 });
+
+// --- 两层配置：provider source + provider 实例 ------------------------------
+
+/** 收集日志，用来断言「有意跳过」与「真的失败」走的是不同通道。 */
+function logSink() {
+  const lines = [];
+  return {
+    lines,
+    logger: { info: (m) => lines.push(["info", m]), warn: () => {}, error: () => {} },
+  };
+}
+
+test("两层：实例从 source 继承连接配置，自己只带 model", () => {
+  const { providers, errors } = createProviders(
+    { "deepseek-chat": { source: "deepseek", model: "deepseek-chat" } },
+    {
+      sources: {
+        deepseek: {
+          type: "openai",
+          baseUrl: "https://api.deepseek.com/v1",
+          apiKey: "sk-src",
+          timeoutMs: 30_000,
+        },
+      },
+      logger: { info() {}, warn() {}, error() {} },
+    },
+  );
+
+  assert.equal(errors.length, 0);
+  assert.equal(providers.length, 1);
+  assert.equal(providers[0].baseUrl, "https://api.deepseek.com/v1");
+  assert.equal(providers[0].apiKey, "sk-src");
+  assert.equal(providers[0].timeoutMs, 30_000);
+  // 一个 provider 就是一个模型实例，所以 model 要变成单元素 models 数组，
+  // 注册表原来的按模型名选路才能继续工作。
+  assert.deepEqual(providers[0].models, ["deepseek-chat"]);
+});
+
+test("两层：实例上的字段覆盖 source 上的同名字段", () => {
+  const { providers } = createProviders(
+    {
+      "my-claude": {
+        source: "claude",
+        model: "claude-sonnet-4-5",
+        baseUrl: "https://gateway.example.com/v1",
+        name: "生产用 Claude",
+        timeoutMs: 5_000,
+      },
+    },
+    {
+      sources: {
+        claude: { type: "anthropic", baseUrl: "https://api.anthropic.com/v1", timeoutMs: 120_000 },
+      },
+      logger: { info() {}, warn() {}, error() {} },
+    },
+  );
+
+  assert.equal(providers[0].baseUrl, "https://gateway.example.com/v1");
+  assert.equal(providers[0].timeoutMs, 5_000);
+  assert.equal(providers[0].name, "生产用 Claude");
+  assert.equal(providers[0].type, "anthropic");
+});
+
+test("两层：apiKey 缺省时按 source 的 id 回落环境变量", () => {
+  // 凭证属于 source（多个实例共享一份），所以变量名要跟 source 走，
+  // 否则同一个源下的每个模型都得各配一遍密钥。
+  process.env.ATRI_MY_GATEWAY_API_KEY = "from-env";
+  try {
+    const { providers } = createProviders(
+      { "a-m": { source: "my-gateway", model: "m" } },
+      {
+        sources: { "my-gateway": { type: "openai", baseUrl: "https://x/v1" } },
+        logger: { info() {}, warn() {}, error() {} },
+      },
+    );
+    assert.equal(providers[0].apiKey, "from-env");
+  } finally {
+    delete process.env.ATRI_MY_GATEWAY_API_KEY;
+  }
+});
+
+test("两层：引用了不存在的 source 时进 errors，不阻断别的加载", () => {
+  const { providers, errors } = createProviders(
+    {
+      ghost: { source: "不存在", model: "m" },
+      inline: { type: "openai", models: ["m2"] },
+    },
+    { sources: {}, logger: { info() {}, warn() {}, error() {} } },
+  );
+
+  assert.equal(providers.length, 1);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].id, "ghost");
+  assert.match(errors[0].message, /未找到 id 为「不存在」的 provider source/);
+});
+
+test("两层：enabled:false 被跳过，且不算失败", () => {
+  // 有意关掉不是故障：报成 error 会让人以为配置坏了，于是去改本来对的东西。
+  const sink = logSink();
+  const { providers, errors } = createProviders(
+    {
+      off: { source: "s", model: "m", enabled: false },
+      on: { source: "s", model: "m2" },
+    },
+    { sources: { s: { type: "openai" } }, logger: sink.logger },
+  );
+
+  assert.equal(providers.length, 1);
+  assert.equal(providers[0].models[0], "m2");
+  assert.equal(errors.length, 0);
+  assert.ok(sink.lines.some(([, m]) => /已禁用/.test(m)));
+});
+
+test("两层：内联老写法（自己带 type/baseUrl）继续可用，不需要数据迁移", () => {
+  const { providers, errors } = createProviders(
+    { legacy: { type: "openai", baseUrl: "https://old/v1", apiKey: "k", models: ["m"] } },
+    { sources: {}, logger: { info() {}, warn() {}, error() {} } },
+  );
+
+  assert.equal(errors.length, 0);
+  assert.equal(providers[0].baseUrl, "https://old/v1");
+  assert.deepEqual(providers[0].models, ["m"]);
+});
+
+test("注册表：clear() 清空全部 provider 与默认项", () => {
+  const registry = new ProviderRegistry();
+  registry.register({ id: "a", models: ["m"], chat: async () => ({ content: "A" }) });
+  registry.setDefault("a");
+  assert.equal(registry.size, 1);
+
+  registry.clear();
+
+  assert.equal(registry.size, 0);
+  assert.equal(registry.defaultId, null);
+});

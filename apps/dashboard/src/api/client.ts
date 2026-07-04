@@ -2,10 +2,17 @@ import { WS_PATH } from "@atri/shared";
 import type { ServerFrame } from "@atri/shared";
 import {
   authStatus as authStatusOp,
+  createProvider as createProviderOp,
+  createProviderSource as createProviderSourceOp,
   createSession as createSessionOp,
+  deleteProvider as deleteProviderOp,
+  deleteProviderSource as deleteProviderSourceOp,
   deleteSession as deleteSessionOp,
+  fetchProviderModels as fetchProviderModelsOp,
   getSession as getSessionOp,
   listPlugins as listPluginsOp,
+  listProviderSources as listProviderSourcesOp,
+  listProviders as listProvidersOp,
   listSessions as listSessionsOp,
   login as loginOp,
   logout as logoutOp,
@@ -14,8 +21,16 @@ import {
   setPluginEnabled as setPluginEnabledOp,
   streamMessage,
   unloadPlugin as unloadPluginOp,
+  updateProvider as updateProviderOp,
+  updateProviderSource as updateProviderSourceOp,
 } from "./generated/index.js";
-import type { Message, StreamChunk } from "./generated/index.js";
+import type {
+  ProviderInput,
+  ProviderSourceInput,
+  ProviderSourceUpdate,
+  ProviderUpdate,
+  StreamChunk,
+} from "./generated/index.js";
 // `client` 这个单例只从 client.gen.ts 导出，没有经 index.ts 再导出；
 // jsonBodySerializer 则只从 client/index.ts 导出。
 import { client } from "./generated/client.gen.js";
@@ -147,6 +162,56 @@ export async function setPluginEnabled(id: string, enabled: boolean) {
   return body(await setPluginEnabledOp({ path: { id }, body: { enabled } }));
 }
 
+// --- 模型 provider -----------------------------------------------------------
+
+export async function listProviders() {
+  return body(await listProvidersOp());
+}
+
+export async function createProvider(input: ProviderInput) {
+  return body(await createProviderOp({ body: input }));
+}
+
+export async function updateProvider(id: string, patch: ProviderUpdate) {
+  return body(await updateProviderOp({ path: { id }, body: patch }));
+}
+
+export async function deleteProvider(id: string) {
+  return body(await deleteProviderOp({ path: { id } }));
+}
+
+export async function listProviderSources() {
+  return body(await listProviderSourcesOp());
+}
+
+export async function createProviderSource(input: ProviderSourceInput) {
+  return body(await createProviderSourceOp({ body: input }));
+}
+
+export async function updateProviderSource(id: string, patch: ProviderSourceUpdate) {
+  return body(await updateProviderSourceOp({ path: { id }, body: patch }));
+}
+
+/**
+ * 删除一个源。`cascade` 为真时连同引用它的 provider 一起删。
+ *
+ * 不传 cascade 时，若还有 provider 引用该源，服务端回 400 并列出引用者——
+ * 这里不替调用方做决定，让它把服务端的解释原样展示给用户。
+ */
+export async function deleteProviderSource(id: string, cascade = false) {
+  return body(await deleteProviderSourceOp({ path: { id }, query: { cascade } }));
+}
+
+/**
+ * 用**已保存的**源去拉上游的模型列表。
+ *
+ * 没有 baseUrl/apiKey 参数：凭据来自服务端已落盘的配置，否则这个端点会变成
+ * 「带任意凭证访问任意地址」的转发器。因此调用方必须先保存改动再调用。
+ */
+export async function fetchProviderModels(id: string) {
+  return body(await fetchProviderModelsOp({ path: { id } }));
+}
+
 // --- WebSocket（codegen 不覆盖，手写保留）-----------------------------------
 
 /**
@@ -168,4 +233,12 @@ export function connect(onFrame: (frame: ServerFrame) => void): () => void {
   return () => ws.close();
 }
 
-export type { Message };
+export type {
+  Message,
+  ProviderInfo,
+  ProviderSource,
+  ProviderSourceInput,
+  ProviderSourceUpdate,
+  ProviderUpdate,
+  ProviderInput,
+} from "./generated/index.js";

@@ -94,6 +94,48 @@ test("未登录访问受保护接口一律 401", async (t) => {
   }
 });
 
+test("未登录访问 provider 配置接口一律 401", async (t) => {
+  const { base } = await startServer(t);
+
+  // 这些接口会返回**明文 API Key**，也会改写 atri.config.json。
+  // 少漏一条就是未认证的读写通道，所以逐条按方法覆盖，而不是只测列表接口。
+  const cases = [
+    ["GET", "/provider-sources"],
+    ["POST", "/provider-sources"],
+    ["POST", "/provider-sources/s"],
+    ["DELETE", "/provider-sources/s"],
+    ["POST", "/provider-sources/s/models"],
+    ["POST", "/providers"],
+    ["POST", "/providers/p"],
+    ["DELETE", "/providers/p"],
+  ];
+
+  for (const [method, path] of cases) {
+    // `base` 里已经带了 API_PREFIX，这里只拼路由部分——拼两遍会打到一条
+    // 不存在的路径上，那样测的就成了「未知路径也 401」，而不是这些路由本身。
+    const res = await call(base, path, {
+      method,
+      ...(method === "GET" || method === "DELETE" || path.endsWith("/models")
+        ? {}
+        : { body: { id: "x" } }),
+    });
+    assert.equal(res.status, 401, `${method} ${path} 应当要求登录`);
+    assert.equal(res.body.error, "未认证");
+  }
+});
+
+test("登录后 provider 配置接口可达（证明上一条测的是这些路由本身）", async (t) => {
+  const { base } = await startServer(t);
+  const login = await call(base, "/auth/login", { method: "POST", body: CREDS });
+  const cookie = cookiePair(login.setCookie);
+
+  // 没有这条正向断言，上面的用例即使把路径拼错（打到不存在的路径上，
+  // fail-closed 也会回 401）看起来照样是绿的。
+  const listed = await call(base, "/provider-sources", { cookie });
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body, { sources: [] });
+});
+
 test("公开接口无需登录即可访问", async (t) => {
   const { base } = await startServer(t);
 

@@ -8,7 +8,19 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: AUTH_LOGIN_PATH, name: "login", component: LoginView },
-    { path: "/", name: "console", component: ConsoleView, meta: { requiresAuth: true } },
+    {
+      path: "/",
+      component: () => import("@/layouts/bot/BotLayout.vue"),
+      meta: { requiresAuth: true },
+      children: [
+        { path: "", name: "console", component: ConsoleView },
+        {
+          path: "provider",
+          name: "providerConfig",
+          component: () => import("@/views/ProviderConfig.vue"),
+        },
+      ],
+    },
     {
       path: "/chat",
       name: "chat",
