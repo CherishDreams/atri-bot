@@ -6,6 +6,24 @@ import { API_PREFIX, WS_PATH, APP_NAME } from "@atri/shared";
 import { Router } from "./router.js";
 import { sendJson, sendError, readJson, startSse, sendSse } from "./http.js";
 import { parseCookies, setSessionCookie, clearSessionCookie, requireAuth } from "./auth.js";
+import { createProviders } from "../core/provider/factory.js";
+import { httpStatusForError } from "../core/provider/store.js";
+
+/**
+ * 写操作的响应形状。
+ *
+ * 补一个 `default` 字段：前端拿到响应后能直接更新高亮，不必为了「刚才设的
+ * 默认项生效了吗」再拉一次列表。默认项来自保留键，所以由调用方传入。
+ */
+function viewProvider(entry, defaultId) {
+  return { ...entry, default: entry.id === defaultId };
+}
+
+/**
+ * 探针实例的占位模型名。`listModels()` 不看模型，但工厂要求 model 非空，
+ * 且这个值永远不会被发到上游——用个显眼的名字，万一出现在日志里也能一眼认出。
+ */
+const MODEL_LIST_PROBE = "__model_list_probe__";
 
 /**
  * 无需登录即可访问的路径。`/auth/status` 必须公开——否则前端在渲染登录页之前
@@ -44,6 +62,7 @@ const CONTENT_TYPES = {
  */
 export function createHttpServer(deps) {
   const { config, logger, sessions, providers, plugins, adapters, engine, auth } = deps;
+  const { providerConfig, reloadProviders } = deps;
 
   const cookieName = auth.cookieName;
   const router = new Router();
@@ -196,8 +215,153 @@ export function createHttpServer(deps) {
     }
   });
 
+  // --- provider 与 provider source ----------------------------------------
+  //
+  // 这一组是「配置层」而不是「运行时层」：读的是 atri.config.json 里的
+  // providerSources / providers，每次成功的写操作末尾都会重建注册表，
+  // 因此改完不需要重启。
+
+  /**
+   * 配置层的 provider 列表，并标注它有没有真正加载成功。
+   *
+   * 与旧版的差别：这里返回配置里的**全部**条目（含被禁用、以及因缺源/类型
+   * 拼错而加载失败的），而不是只返回注册表里活着的那些。配置页需要看见
+   * 「我配了但它没生效」，旧语义下那种条目会凭空消失。
+   */
   router.get(`${API_PREFIX}/providers`, async (_req, res) => {
-    sendJson(res, 200, { providers: providers.list() });
+    // 单独跑一遍工厂，只为拿到「谁没加载成功、为什么」——注册表里没有这个信息，
+    // 而配置页恰恰最需要它。注意取的是 `errors` 不是 `providers`：后者是**成功
+    // 构造出来的实例**，键名写反了会得到一个恒空的错误表，于是失败原因永远不显示。
+    const { errors } = createProviders(providerConfig.providerEntries(), {
+      sources: providerConfig.sourceEntries(),
+    });
+    const failedById = new Map(errors.map((e) => [e.id, e.message]));
+    const defaultId = providerConfig.defaultId;
+
+    const list = providerConfig.providers.map((entry) => {
+      const loaded = providers.get(entry.id) !== null;
+      const reason = failedById.get(entry.id);
+      return {
+        ...entry,
+        default: entry.id === defaultId,
+        loaded,
+        // 兜住「没在注册表里、也没有工厂错误」这一种（例如源存在但实例
+        // 因别的原因没注册上）。有 `loaded: false` 就必须给个原因，
+        // 否则用户看到的是一个说不通的「没加载」。
+        ...(loaded
+          ? {}
+          : { error: reason ?? "该 provider 未加载成功，请检查它引用的 provider source 是否存在" }),
+      };
+    });
+    sendJson(res, 200, { providers: list });
+  });
+
+  router.post(`${API_PREFIX}/providers`, async (req, res) => {
+    const body = await readJson(req);
+    try {
+      const provider = providerConfig.createProvider(body);
+      reloadProviders();
+      sendJson(res, 201, { provider: viewProvider(provider, providerConfig.defaultId) });
+    } catch (err) {
+      sendError(res, httpStatusForError(err), err.message);
+    }
+  });
+
+  router.post(`${API_PREFIX}/providers/:id`, async (req, res, params) => {
+    const body = await readJson(req);
+    try {
+      const provider = providerConfig.updateProvider(params.id, body);
+      reloadProviders();
+      sendJson(res, 200, { provider: viewProvider(provider, providerConfig.defaultId) });
+    } catch (err) {
+      sendError(res, httpStatusForError(err), err.message);
+    }
+  });
+
+  router.delete(`${API_PREFIX}/providers/:id`, async (_req, res, params) => {
+    try {
+      const result = providerConfig.deleteProvider(params.id);
+      reloadProviders();
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendError(res, httpStatusForError(err), err.message);
+    }
+  });
+
+  /**
+   * 源列表。**apiKey 明文返回**——这是有意的取舍：配置页要能把原值填回输入框，
+   * 与 AstrBot 的行为一致。该接口在鉴权闸门之内，仅管理员可取。
+   * 若日后要收紧，改成 `hasApiKey` + 掩码即可，不影响其它设计。
+   */
+  router.get(`${API_PREFIX}/provider-sources`, async (_req, res) => {
+    sendJson(res, 200, { sources: providerConfig.sources });
+  });
+
+  router.post(`${API_PREFIX}/provider-sources`, async (req, res) => {
+    const body = await readJson(req);
+    try {
+      const source = providerConfig.createSource(body);
+      reloadProviders();
+      sendJson(res, 201, { source });
+    } catch (err) {
+      sendError(res, httpStatusForError(err), err.message);
+    }
+  });
+
+  router.post(`${API_PREFIX}/provider-sources/:id`, async (req, res, params) => {
+    const body = await readJson(req);
+    try {
+      const source = providerConfig.updateSource(params.id, body);
+      reloadProviders();
+      sendJson(res, 200, { source });
+    } catch (err) {
+      sendError(res, httpStatusForError(err), err.message);
+    }
+  });
+
+  /** 删除源。默认拒绝删除仍被引用的源，`?cascade=1` 才连带删掉引用者。 */
+  router.delete(`${API_PREFIX}/provider-sources/:id`, async (req, res, params) => {
+    const cascade = new URL(req.url, `http://${req.headers.host}`).searchParams.get("cascade");
+    const isCascade = cascade === "1" || cascade === "true";
+    try {
+      const result = providerConfig.deleteSource(params.id, { cascade: isCascade });
+      reloadProviders();
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendError(res, httpStatusForError(err), err.message);
+    }
+  });
+
+  /**
+   * 用**已保存的**源去打上游的 `GET /models`。
+   *
+   * 刻意不接受请求体里的 baseUrl/apiKey：否则这个端点会变成「带任意凭证
+   * 访问任意地址」的转发器。用户要先保存，再获取——与 AstrBot 的
+   * 「保存并获取模型」按钮同一语义。
+   */
+  router.post(`${API_PREFIX}/provider-sources/:id/models`, async (_req, res, params) => {
+    const source = providerConfig.getSource(params.id);
+    if (!source) return sendError(res, 404, `未找到 id 为「${params.id}」的 provider source`);
+
+    // 借工厂造一个只用来拉列表的实例：`listModels()` 只需 baseUrl / apiKey /
+    // timeoutMs / type，这四样全部来自源，所以 model 填什么都无所谓。
+    const { providers: built } = createProviders(
+      { [params.id]: { source: params.id, model: MODEL_LIST_PROBE } },
+      { sources: providerConfig.sourceEntries() },
+    );
+    const probe = built[0];
+    if (!probe) return sendError(res, 400, `provider source「${params.id}」的配置不合法`);
+
+    try {
+      const models = await probe.listModels();
+      // 拿到列表后顺手把它记下来：配置页在源还没绑定任何模型时也能显示
+      // 「上次拿到过什么」，省一次往返。
+      sendJson(res, 200, { models });
+    } catch (err) {
+      // 这里刻意回 400 而不是 502：绝大多数情况是 baseUrl 打错、密钥不对、
+      // 或该网关根本没有 /models，都是**用户可修**的配置问题。
+      sendError(res, 400, err.message);
+    }
   });
 
   router.get(`${API_PREFIX}/plugins`, async (_req, res) => {

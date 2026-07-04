@@ -85,18 +85,125 @@ export type StreamChunk = {
     error?: string;
 };
 
+/**
+ * 配置层的一个模型实例。`loaded` 说明它有没有真正注册进运行时。
+ */
 export type ProviderInfo = {
     id: string;
     name: string;
-    models: Array<string>;
+    /**
+     * 上游的模型 ID
+     */
+    model?: string;
+    /**
+     * 引用的 provider source id；内联老写法下没有这个字段
+     */
+    source?: string;
     /**
      * provider 实现类型，如 openai / anthropic
      */
     type?: string;
     /**
+     * 是否启用；禁用的实例不出现在模型选择器里
+     */
+    enabled?: boolean;
+    /**
      * 是否为配置里的默认 provider
      */
     default?: boolean;
+    /**
+     * 是否已成功注册进运行时
+     */
+    loaded?: boolean;
+    /**
+     * 加载失败的原因；只有 `loaded` 为 false 时才有
+     */
+    error?: string;
+};
+
+export type ProviderInput = {
+    /**
+     * 只允许字母、数字、点、下划线与连字符；不能是保留键 default
+     */
+    id: string;
+    model: string;
+    source?: string;
+    name?: string;
+    /**
+     * 缺省为 true
+     */
+    enabled?: boolean;
+    default?: boolean;
+};
+
+/**
+ * 只覆盖出现的字段
+ */
+export type ProviderUpdate = {
+    model?: string;
+    source?: string;
+    name?: string;
+    enabled?: boolean;
+    default?: boolean;
+};
+
+/**
+ * 一次连接的描述：同一源下的多个模型共享这里的凭证与超时。
+ */
+export type ProviderSource = {
+    id: string;
+    /**
+     * openai 或 anthropic
+     */
+    type: string;
+    name?: string;
+    /**
+     * 空则用实现类的默认值
+     */
+    baseUrl?: string;
+    /**
+     * 明文返回，见接口说明
+     */
+    apiKey?: string;
+    /**
+     * 毫秒，1000 至 600000
+     */
+    timeoutMs?: number;
+};
+
+export type ProviderSourceInput = {
+    id: string;
+    /**
+     * 缺省为 openai
+     */
+    type?: string;
+    name?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    timeoutMs?: number;
+};
+
+/**
+ * 只覆盖出现的字段；不支持改 id
+ */
+export type ProviderSourceUpdate = {
+    type?: string;
+    name?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    timeoutMs?: number;
+};
+
+export type ProviderModelList = {
+    models: Array<string>;
+};
+
+export type Deleted = {
+    deleted: string;
+};
+
+export type DeletedMany = {
+    deleted: Array<string>;
 };
 
 export type AdapterInfo = {
@@ -139,6 +246,16 @@ export type SessionId = string;
  * 插件 id
  */
 export type PluginId = string;
+
+/**
+ * provider 实例 id
+ */
+export type ProviderId = string;
+
+/**
+ * provider source id
+ */
+export type ProviderSourceId = string;
 
 export type HealthData = {
     body?: never;
@@ -468,6 +585,290 @@ export type ListProvidersResponses = {
 };
 
 export type ListProvidersResponse = ListProvidersResponses[keyof ListProvidersResponses];
+
+export type CreateProviderData = {
+    body: ProviderInput;
+    path?: never;
+    query?: never;
+    url: '/providers';
+};
+
+export type CreateProviderErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type CreateProviderError = CreateProviderErrors[keyof CreateProviderErrors];
+
+export type CreateProviderResponses = {
+    /**
+     * 已创建
+     */
+    201: {
+        provider: ProviderInfo;
+    };
+};
+
+export type CreateProviderResponse = CreateProviderResponses[keyof CreateProviderResponses];
+
+export type DeleteProviderData = {
+    body?: never;
+    path: {
+        /**
+         * provider 实例 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/providers/{id}';
+};
+
+export type DeleteProviderErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type DeleteProviderError = DeleteProviderErrors[keyof DeleteProviderErrors];
+
+export type DeleteProviderResponses = {
+    /**
+     * 已删除
+     */
+    200: Deleted;
+};
+
+export type DeleteProviderResponse = DeleteProviderResponses[keyof DeleteProviderResponses];
+
+export type UpdateProviderData = {
+    body: ProviderUpdate;
+    path: {
+        /**
+         * provider 实例 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/providers/{id}';
+};
+
+export type UpdateProviderErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type UpdateProviderError = UpdateProviderErrors[keyof UpdateProviderErrors];
+
+export type UpdateProviderResponses = {
+    /**
+     * 已更新
+     */
+    200: {
+        provider: ProviderInfo;
+    };
+};
+
+export type UpdateProviderResponse = UpdateProviderResponses[keyof UpdateProviderResponses];
+
+export type ListProviderSourcesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/provider-sources';
+};
+
+export type ListProviderSourcesErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type ListProviderSourcesError = ListProviderSourcesErrors[keyof ListProviderSourcesErrors];
+
+export type ListProviderSourcesResponses = {
+    /**
+     * 源列表
+     */
+    200: {
+        sources: Array<ProviderSource>;
+    };
+};
+
+export type ListProviderSourcesResponse = ListProviderSourcesResponses[keyof ListProviderSourcesResponses];
+
+export type CreateProviderSourceData = {
+    body: ProviderSourceInput;
+    path?: never;
+    query?: never;
+    url: '/provider-sources';
+};
+
+export type CreateProviderSourceErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type CreateProviderSourceError = CreateProviderSourceErrors[keyof CreateProviderSourceErrors];
+
+export type CreateProviderSourceResponses = {
+    /**
+     * 已创建
+     */
+    201: {
+        source: ProviderSource;
+    };
+};
+
+export type CreateProviderSourceResponse = CreateProviderSourceResponses[keyof CreateProviderSourceResponses];
+
+export type DeleteProviderSourceData = {
+    body?: never;
+    path: {
+        /**
+         * provider source id
+         */
+        id: string;
+    };
+    query?: {
+        /**
+         * 为真时连带删除引用该源的 provider
+         */
+        cascade?: boolean;
+    };
+    url: '/provider-sources/{id}';
+};
+
+export type DeleteProviderSourceErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type DeleteProviderSourceError = DeleteProviderSourceErrors[keyof DeleteProviderSourceErrors];
+
+export type DeleteProviderSourceResponses = {
+    /**
+     * 已删除，`deleted` 是源 id 与连带删除的 provider id
+     */
+    200: DeletedMany;
+};
+
+export type DeleteProviderSourceResponse = DeleteProviderSourceResponses[keyof DeleteProviderSourceResponses];
+
+export type UpdateProviderSourceData = {
+    body: ProviderSourceUpdate;
+    path: {
+        /**
+         * provider source id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/provider-sources/{id}';
+};
+
+export type UpdateProviderSourceErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type UpdateProviderSourceError = UpdateProviderSourceErrors[keyof UpdateProviderSourceErrors];
+
+export type UpdateProviderSourceResponses = {
+    /**
+     * 已更新
+     */
+    200: {
+        source: ProviderSource;
+    };
+};
+
+export type UpdateProviderSourceResponse = UpdateProviderSourceResponses[keyof UpdateProviderSourceResponses];
+
+export type FetchProviderModelsData = {
+    body?: never;
+    path: {
+        /**
+         * provider source id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/provider-sources/{id}/models';
+};
+
+export type FetchProviderModelsErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type FetchProviderModelsError = FetchProviderModelsErrors[keyof FetchProviderModelsErrors];
+
+export type FetchProviderModelsResponses = {
+    /**
+     * 模型列表，已去重并按字典序排序
+     */
+    200: ProviderModelList;
+};
+
+export type FetchProviderModelsResponse = FetchProviderModelsResponses[keyof FetchProviderModelsResponses];
 
 export type ListPluginsData = {
     body?: never;

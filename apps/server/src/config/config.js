@@ -32,7 +32,10 @@ export function loadConfig() {
     pluginDirs: (fileConfig.pluginDirs ?? ["./plugins"]).map((p) => resolve(root, p)),
     // 适配器是可选启用的；纯 agent 部署一个都不开。
     adapters: fileConfig.adapters ?? {},
+    // 两层 provider 配置：源（连接）与实例（模型）。测试常直接传这两个字段，
+    // 因此缺省为空对象而不是 null。
     providers: fileConfig.providers ?? {},
+    providerSources: fileConfig.providerSources ?? {},
     auth: {
       adminUser: env.ATRI_ADMIN_USER ?? fileConfig.auth?.adminUser ?? "admin",
       // 留空表示「启动时自动生成随机口令」，由 AuthManager.init() 负责落盘。

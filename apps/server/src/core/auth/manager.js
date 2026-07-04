@@ -1,6 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { configFilePath, updateConfigFile } from "../../config/file.js";
 
 /** 绝对有效期：无论是否活跃，登录满 15 天后一律失效。 */
 export const ABSOLUTE_TTL_MS = 15 * 24 * 60 * 60 * 1000;
@@ -75,7 +74,7 @@ export class AuthManager {
       password = randomBytes(GENERATED_PASSWORD_BYTES).toString("base64url");
       this.#persistPassword(password);
       this.#logger.warn(
-        `未配置管理员密码，已生成随机密码并写入 ${join(this.#config.root, "atri.config.json")}：${password}`,
+        `未配置管理员密码，已生成随机密码并写入 ${configFilePath(this.#config.root)}：${password}`,
       );
     }
 
@@ -160,25 +159,14 @@ export class AuthManager {
   }
 
   #persistPassword(password) {
-    const filePath = join(this.#config.root, "atri.config.json");
-
-    let fileConfig = {};
-    if (existsSync(filePath)) {
-      try {
-        fileConfig = JSON.parse(readFileSync(filePath, "utf8"));
-      } catch {
-        // 配置文件损坏时不能覆盖它——那会丢配置。改为仅存于内存并告警。
-        this.#logger.warn(`配置文件 ${filePath} 无法解析，生成的密码不会落盘（重启后会重新生成）`);
-        return;
-      }
-    }
-
-    fileConfig.auth = { ...fileConfig.auth, adminPassword: password };
-    writeFileSync(filePath, `${JSON.stringify(fileConfig, null, 2)}\n`, "utf8");
     try {
-      chmodSync(filePath, 0o600);
-    } catch {
-      // Windows 等不支持 POSIX 权限的环境：忽略即可。
+      updateConfigFile(this.#config.root, (fileConfig) => {
+        fileConfig.auth = { ...fileConfig.auth, adminPassword: password };
+      });
+    } catch (err) {
+      // 配置文件损坏或不可写时不能覆盖它——那会丢配置。
+      // 改为仅存于内存并告警：口令重启后会重新生成。
+      this.#logger.warn(`${err.message}，生成的密码不会落盘（重启后会重新生成）`);
     }
   }
 }

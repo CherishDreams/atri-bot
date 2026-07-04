@@ -29,6 +29,14 @@
       "description": "插件管理"
     },
     {
+      "name": "providers",
+      "description": "模型实例配置"
+    },
+    {
+      "name": "provider-sources",
+      "description": "模型供应商连接配置"
+    },
+    {
       "name": "status",
       "description": "运行时状态"
     }
@@ -384,8 +392,9 @@
     "/providers": {
       "get": {
         "operationId": "listProviders",
-        "summary": "列出模型 provider",
-        "tags": ["status"],
+        "summary": "列出模型实例（配置层）",
+        "description": "返回配置里的**全部** provider 条目，并标注它有没有真正加载成功。\n与旧版「只返回运行时已注册的」不同：配置页需要看得见「我配了但它没生效」。",
+        "tags": ["providers"],
         "responses": {
           "200": {
             "description": "provider 列表",
@@ -408,6 +417,321 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createProvider",
+        "summary": "新建模型实例",
+        "description": "保存后立即重建注册表，不需要重启。",
+        "tags": ["providers"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已创建",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["provider"],
+                  "properties": {
+                    "provider": {
+                      "$ref": "#/components/schemas/ProviderInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/providers/{id}": {
+      "post": {
+        "operationId": "updateProvider",
+        "summary": "局部更新模型实例",
+        "description": "只覆盖请求体里出现的字段。`{\"default\": true}` 即把它设为默认；\n`{\"default\": false}` 只在它本来就是默认项时才清掉。",
+        "tags": ["providers"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已更新",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["provider"],
+                  "properties": {
+                    "provider": {
+                      "$ref": "#/components/schemas/ProviderInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteProvider",
+        "summary": "删除模型实例",
+        "description": "删掉的若是默认项，`providers.default` 会被一并清空，选路退回第一个可用项。",
+        "tags": ["providers"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已删除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/provider-sources": {
+      "get": {
+        "operationId": "listProviderSources",
+        "summary": "列出供应商源",
+        "description": "**明文返回 `apiKey`**：配置页要能把原值填回输入框，这是有意的取舍。\n该接口在鉴权闸门之内，仅管理员可取。",
+        "tags": ["provider-sources"],
+        "responses": {
+          "200": {
+            "description": "源列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["sources"],
+                  "properties": {
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProviderSource"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createProviderSource",
+        "summary": "新建供应商源",
+        "tags": ["provider-sources"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSourceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已创建",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["source"],
+                  "properties": {
+                    "source": {
+                      "$ref": "#/components/schemas/ProviderSource"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/provider-sources/{id}": {
+      "post": {
+        "operationId": "updateProviderSource",
+        "summary": "局部更新供应商源",
+        "description": "不支持改 id：源创建后 id 只读，避免 AstrBot 那种「改名要重写全部引用者」的复杂度。",
+        "tags": ["provider-sources"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderSourceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderSourceUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已更新",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["source"],
+                  "properties": {
+                    "source": {
+                      "$ref": "#/components/schemas/ProviderSource"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteProviderSource",
+        "summary": "删除供应商源",
+        "description": "仍被 provider 引用时默认拒绝（400，消息里列出引用者），避免静默级联把\n用户配好的模型悄悄删掉；`?cascade=1` 才连带删除引用者。",
+        "tags": ["provider-sources"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderSourceId"
+          },
+          {
+            "name": "cascade",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "为真时连带删除引用该源的 provider"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已删除，`deleted` 是源 id 与连带删除的 provider id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedMany"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/provider-sources/{id}/models": {
+      "post": {
+        "operationId": "fetchProviderModels",
+        "summary": "获取该源可用的模型列表",
+        "description": "用**已保存的**源去打上游的 `GET /models`。刻意不接受请求体里的\n`baseUrl`/`apiKey`：否则这个端点会变成「带任意凭证访问任意地址」的转发器。\n用户要先保存，再获取——与界面上的「保存并获取模型列表」同一语义。\n上游没有 `/models` 时返回 400 与可读提示，可由「自定义模型」手填绕过。",
+        "tags": ["provider-sources"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderSourceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "模型列表，已去重并按字典序排序",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderModelList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -620,6 +944,24 @@
           "type": "string"
         },
         "description": "插件 id"
+      },
+      "ProviderId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "provider 实例 id"
+      },
+      "ProviderSourceId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "provider source id"
       }
     },
     "responses": {
@@ -830,7 +1172,8 @@
       },
       "ProviderInfo": {
         "type": "object",
-        "required": ["id", "name", "models"],
+        "required": ["id", "name"],
+        "description": "配置层的一个模型实例。`loaded` 说明它有没有真正注册进运行时。",
         "properties": {
           "id": {
             "type": "string"
@@ -838,19 +1181,188 @@
           "name": {
             "type": "string"
           },
-          "models": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
+          "model": {
+            "type": "string",
+            "description": "上游的模型 ID"
+          },
+          "source": {
+            "type": "string",
+            "description": "引用的 provider source id；内联老写法下没有这个字段"
           },
           "type": {
             "type": "string",
             "description": "provider 实现类型，如 openai / anthropic"
           },
+          "enabled": {
+            "type": "boolean",
+            "description": "是否启用；禁用的实例不出现在模型选择器里"
+          },
           "default": {
             "type": "boolean",
             "description": "是否为配置里的默认 provider"
+          },
+          "loaded": {
+            "type": "boolean",
+            "description": "是否已成功注册进运行时"
+          },
+          "error": {
+            "type": "string",
+            "description": "加载失败的原因；只有 `loaded` 为 false 时才有"
+          }
+        }
+      },
+      "ProviderInput": {
+        "type": "object",
+        "required": ["id", "model"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "只允许字母、数字、点、下划线与连字符；不能是保留键 default"
+          },
+          "model": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "缺省为 true"
+          },
+          "default": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProviderUpdate": {
+        "type": "object",
+        "description": "只覆盖出现的字段",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "default": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProviderSource": {
+        "type": "object",
+        "required": ["id", "type"],
+        "description": "一次连接的描述：同一源下的多个模型共享这里的凭证与超时。",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "openai 或 anthropic"
+          },
+          "name": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string",
+            "description": "空则用实现类的默认值"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "明文返回，见接口说明"
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "description": "毫秒，1000 至 600000"
+          }
+        }
+      },
+      "ProviderSourceInput": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "缺省为 openai"
+          },
+          "name": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
+        }
+      },
+      "ProviderSourceUpdate": {
+        "type": "object",
+        "description": "只覆盖出现的字段；不支持改 id",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
+        }
+      },
+      "ProviderModelList": {
+        "type": "object",
+        "required": ["models"],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Deleted": {
+        "type": "object",
+        "required": ["deleted"],
+        "properties": {
+          "deleted": {
+            "type": "string"
+          }
+        }
+      },
+      "DeletedMany": {
+        "type": "object",
+        "required": ["deleted"],
+        "properties": {
+          "deleted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

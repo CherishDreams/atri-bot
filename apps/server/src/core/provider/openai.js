@@ -114,6 +114,49 @@ export class OpenAIProvider {
       throw toNetworkError(err, { provider: this.id, model: options.model });
     }
   }
+
+  /**
+   * 拉取上游的模型列表（`GET /models`）。
+   *
+   * 用于配置页的「获取模型列表」：用户填完 baseUrl 与密钥后不必手抄模型名。
+   * 自建网关不一定实现这个端点，此时上游会回 404，错误经 `toProviderError`
+   * 归一成一句可读提示，前端据此引导用户手填模型 ID。
+   *
+   * 这里**不做内置回退列表**：悄悄给一份「大概能用」的模型名，会让配置错误
+   * 被推迟到发消息时才暴露，而那时更难定位。
+   *
+   * @returns {Promise<string[]>} 去重并按字典序排好的模型 id
+   */
+  async listModels({ signal } = {}) {
+    const payload = await this.#requestJson("/models", { signal });
+    return normalizeModels(payload?.data);
+  }
+
+  /** 发一个 GET、把响应解析成 JSON，错误按 provider 层统一归一。 */
+  async #requestJson(path, { signal } = {}) {
+    const headers = { accept: "application/json", ...this.headers };
+    if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
+
+    let response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method: "GET",
+        headers,
+        signal: withTimeout(signal, this.timeoutMs),
+      });
+    } catch (err) {
+      throw toNetworkError(err, { provider: this.id });
+    }
+    if (!response.ok) throw await toProviderError(response, { provider: this.id });
+    return response.json();
+  }
+}
+
+/** `{data: [{id}, ...]}` → 去重排序的字符串数组，非字符串项直接丢弃。 */
+export function normalizeModels(data) {
+  if (!Array.isArray(data)) return [];
+  const ids = data.map((item) => item?.id).filter((id) => typeof id === "string" && id.length > 0);
+  return [...new Set(ids)].toSorted();
 }
 
 function normalizeBaseUrl(url) {

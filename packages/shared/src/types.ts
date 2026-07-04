@@ -48,13 +48,52 @@ export interface SessionDetail extends Session {
 }
 
 /**
- * 一个 model provider 对应一个具体的 LLM 后端（OpenAI 兼容、Anthropic、
- * 本地运行时…）。provider 在运行时注册，绝不硬编码。
+ * 一个 provider source 是一次连接的描述：`baseUrl` / `apiKey` / `timeoutMs`。
+ * 同一源下的多个模型共享这一份凭证与超时，因此改密钥只需改一处。
+ *
+ * 两层结构（源 + 模型实例）照搬 AstrBot，可以少发明一套语义。
+ */
+export interface ProviderSource {
+  id: string;
+  /** 实现类型：`openai`（OpenAI 兼容）或 `anthropic`。 */
+  type: string;
+  name: string;
+  /** 空字符串表示用实现类的默认地址。 */
+  baseUrl: string;
+  /** 明文密钥。配置接口在鉴权闸门内，会把它原样回给管理员。 */
+  apiKey: string;
+  /** 超时（毫秒）。与实现类的 `timeoutMs` 同名同单位，不做秒/毫秒换算。 */
+  timeoutMs: number;
+}
+
+/**
+ * 配置层的一个模型实例（不是运行时对象）。
+ *
+ * `loaded` 是这里最容易被忽略、却最有用的字段：配置里写着不等于它真的能跑。
+ * 缺源、类型拼错、引用了不存在的 source 都会让一条配置留在文件里但注册不上，
+ * 界面必须能把这种状态显式画出来，否则用户会以为「保存成功了就没事」。
  */
 export interface ProviderInfo {
   id: string;
   name: string;
-  /** 该 provider 暴露的模型标识列表。 */
+  /** 上游的模型 ID。 */
+  model?: string;
+  /** 引用的 provider source id；内联老写法下没有这个字段。 */
+  source?: string;
+  /** 实现类型，如 openai / anthropic。 */
+  type?: string;
+  /** 是否启用。禁用的实例不出现在模型选择器里。 */
+  enabled?: boolean;
+  /** 是否为配置里的默认 provider。 */
+  default?: boolean;
+  /** 是否已成功注册进运行时。 */
+  loaded?: boolean;
+  /** 加载失败的原因；只有 `loaded` 为 false 时才有。 */
+  error?: string;
+}
+
+/** 「获取模型列表」的响应。 */
+export interface ProviderModelList {
   models: string[];
 }
 

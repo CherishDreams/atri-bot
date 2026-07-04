@@ -1,4 +1,5 @@
 import { toNetworkError, toProviderError } from "./errors.js";
+import { normalizeModels } from "./openai.js";
 import { parseSseJson } from "./sse.js";
 
 /**
@@ -138,6 +139,39 @@ export class AnthropicProvider {
     } catch (err) {
       throw toNetworkError(err, { provider: this.id, model: options.model });
     }
+  }
+
+  /**
+   * 拉取上游的模型列表（`GET /models`）。
+   *
+   * Anthropic 的响应体形状与 OpenAI 一致（`{data:[{id,display_name,...}]}`），
+   * 所以复用同一个 `normalizeModels`。差异只在鉴权头：这里用 `x-api-key`
+   * 与 `anthropic-version`，而不是 `Authorization: Bearer`。
+   *
+   * @returns {Promise<string[]>} 去重并按字典序排好的模型 id
+   */
+  async listModels({ signal } = {}) {
+    const headers = {
+      accept: "application/json",
+      "anthropic-version": this.version,
+      ...this.headers,
+    };
+    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+
+    let response;
+    try {
+      response = await fetch(`${this.baseUrl}/models`, {
+        method: "GET",
+        headers,
+        signal: withTimeout(signal, this.timeoutMs),
+      });
+    } catch (err) {
+      throw toNetworkError(err, { provider: this.id });
+    }
+    if (!response.ok) throw await toProviderError(response, { provider: this.id });
+
+    const payload = await response.json();
+    return normalizeModels(payload?.data);
   }
 }
 

@@ -3,6 +3,7 @@ import { AgentEngine } from "./core/agent/engine.js";
 import { SessionManager } from "./core/session/manager.js";
 import { ProviderRegistry } from "./core/provider/registry.js";
 import { createProviders, readDefaultProviderId } from "./core/provider/factory.js";
+import { ProviderConfigStore } from "./core/provider/store.js";
 import { AuthManager } from "./core/auth/manager.js";
 import { PluginManager } from "./plugins/manager.js";
 import { AdapterManager } from "./adapters/manager.js";
@@ -23,27 +24,49 @@ export async function createApp(config) {
   const sessions = new SessionManager(config);
   const providers = new ProviderRegistry(config);
 
-  // 按配置装配 provider。单个 provider 配错只记日志、不阻断启动：
-  // 「其中一个后端坏了」应该能局部降级，而不是让整个服务起不来。
-  const { providers: built, errors } = createProviders(config.providers, { logger });
-  for (const provider of built) providers.register(provider);
-  for (const { id, message } of errors) logger.error(`provider「${id}」加载失败: ${message}`);
+  // provider 配置的读写入口。启动时读一次，之后每次界面改动都经由它落盘。
+  const providerConfig = new ProviderConfigStore(config, logger);
 
-  const defaultId = readDefaultProviderId(config.providers);
-  if (defaultId) {
-    // 显式配了默认值但它没加载成功时，别静默回退到第一个——那会让请求
-    // 悄悄打到另一个模型上。宁可留空，由注册表的回退规则处理并留下日志。
-    if (providers.get(defaultId)) {
-      providers.setDefault(defaultId);
-    } else {
-      logger.warn(`配置的默认 provider「${defaultId}」未加载成功，将回退到第一个可用 provider`);
+  /**
+   * 按当前配置装配 provider。
+   *
+   * 启动与「配置页改完保存」走的是**同一个函数**，因此不会出现两条装配路径
+   * 慢慢走散的情况（例如忘记处理默认值回退）。
+   *
+   * 单个 provider 配错只记日志、不阻断启动：「其中一个后端坏了」应该能局部降级，
+   * 而不是让整个服务起不来。
+   */
+  function rebuildProviders() {
+    providers.clear();
+
+    const entries = providerConfig.providerEntries();
+    const { providers: built, errors } = createProviders(entries, {
+      sources: providerConfig.sourceEntries(),
+      logger,
+    });
+    for (const provider of built) providers.register(provider);
+    for (const { id, message } of errors) logger.error(`provider「${id}」加载失败: ${message}`);
+
+    const defaultId = readDefaultProviderId(entries);
+    if (defaultId) {
+      // 显式配了默认值但它没加载成功时，别静默回退到第一个——那会让请求
+      // 悄悄打到另一个模型上。宁可留空，由注册表的回退规则处理并留下日志。
+      if (providers.get(defaultId)) {
+        providers.setDefault(defaultId);
+      } else {
+        logger.warn(`配置的默认 provider「${defaultId}」未加载成功，将回退到第一个可用 provider`);
+      }
     }
+
+    if (providers.size === 0) {
+      logger.warn(
+        "没有可用的模型 provider，将使用回声兜底（请在 atri.config.json 里配置 providers）",
+      );
+    }
+    return providers;
   }
-  if (providers.size === 0) {
-    logger.warn(
-      "没有可用的模型 provider，将使用回声兜底（请在 atri.config.json 里配置 providers）",
-    );
-  }
+
+  rebuildProviders();
 
   const plugins = new PluginManager(config, logger);
   const engine = new AgentEngine({ config, sessions, providers, plugins, logger });
@@ -56,6 +79,8 @@ export async function createApp(config) {
     auth,
     sessions,
     providers,
+    providerConfig,
+    reloadProviders: rebuildProviders,
     plugins,
     adapters,
     engine,

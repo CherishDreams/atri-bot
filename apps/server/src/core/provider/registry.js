@@ -18,6 +18,17 @@ export class ProviderRegistry {
     return provider;
   }
 
+  /**
+   * 清空注册表。用于配置变更后整表重建：provider 实例没有长连接、没有需要
+   * 释放的资源，在途请求已经持有自己的实例引用，因此整体替换是安全的——
+   * 那个请求会用它开始时的那份配置跑完，下一个请求才用新配置。
+   */
+  clear() {
+    this.#providers.clear();
+    this.#defaultId = null;
+    return this;
+  }
+
   get(id) {
     return this.#providers.get(id) ?? null;
   }
@@ -81,18 +92,23 @@ export class ProviderRegistry {
   }
 
   /**
-   * 选路：显式 model > 默认 provider > 第一个注册的 provider。
+   * 选路：provider 实例 id > 本地列出的模型名 > 默认 provider > 第一个注册的。
    *
-   * 之所以要「默认 provider」这一层：前端目前不指定 model（模型选择器还是
-   * 占位），若严格要求显式 model，所有请求都会立刻失败。三级回退保证
-   * 零配置能跑、配置了默认值也更可控。
+   * 为什么第一级是「实例 id」：前端模型选择器挑中的那一行就是一个 provider
+   * 实例，它把实例 id 传上来。若只按模型名匹配，选了非默认实例时匹配不上，
+   * 请求会静默落到默认 provider —— 而那个实例的模型名完全不搭，表现为
+   * 「选了 A 却回了 B 的模型」，还查不出原因。
+   *
+   * 第二、三级保留原有回退：上游的模型名常常比配置里列的更全，
+   * 本地列表只是一个提示，不该成为硬闸门。
    */
   #resolveFor(model) {
     if (model) {
+      const byId = this.#providers.get(model);
+      if (byId) return byId;
+
       const byModel = [...this.#providers.values()].find((p) => p.models?.includes(model));
       if (byModel) return byModel;
-      // 模型名匹配不上时，退到默认 provider 并把 model 交给它——上游的模型名
-      // 常常比配置里列的更全，本地列表只是一个提示，不该成为硬闸门。
     }
 
     if (this.#defaultId) {
@@ -103,10 +119,17 @@ export class ProviderRegistry {
     return [...this.#providers.values()][0] ?? null;
   }
 
-  /** provider 没有配 models 时，把调用方给的 model 原样传下去。 */
+  /**
+   * 定出真正发给上游的模型名。
+   *
+   * 传进来的可能是**实例 id**（模型选择器）或**模型名**（直接调 API），
+   * 前者要换成该实例实际绑定的模型，否则会把 "deepseek/deepseek-chat"
+   * 这种东西当模型名发给上游，上游回一句「模型不存在」。
+   */
   #modelFor(provider, model) {
-    if (model) return model;
-    return provider.models?.[0];
+    if (!model) return provider.models?.[0];
+    if (model === provider.id) return provider.models?.[0] ?? model;
+    return model;
   }
 }
 

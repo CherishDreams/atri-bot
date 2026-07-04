@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client/index.js';
-import type { AuthStatusData, AuthStatusResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProvidersData, ListProvidersErrors, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses } from './types.gen.js';
+import type { AuthStatusData, AuthStatusResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -148,11 +148,122 @@ export const streamMessage = <ThrowOnError extends boolean = false>(options: Opt
 });
 
 /**
- * 列出模型 provider
+ * 列出模型实例（配置层）
+ *
+ * 返回配置里的**全部** provider 条目，并标注它有没有真正加载成功。
+ * 与旧版「只返回运行时已注册的」不同：配置页需要看得见「我配了但它没生效」。
  */
 export const listProviders = <ThrowOnError extends boolean = false>(options?: Options<ListProvidersData, ThrowOnError>): RequestResult<ListProvidersResponses, ListProvidersErrors, ThrowOnError> => (options?.client ?? client).get<ListProvidersResponses, ListProvidersErrors, ThrowOnError>({
     responseType: 'json',
     url: '/providers',
+    ...options
+});
+
+/**
+ * 新建模型实例
+ *
+ * 保存后立即重建注册表，不需要重启。
+ */
+export const createProvider = <ThrowOnError extends boolean = false>(options: Options<CreateProviderData, ThrowOnError>): RequestResult<CreateProviderResponses, CreateProviderErrors, ThrowOnError> => (options.client ?? client).post<CreateProviderResponses, CreateProviderErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/providers',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 删除模型实例
+ *
+ * 删掉的若是默认项，`providers.default` 会被一并清空，选路退回第一个可用项。
+ */
+export const deleteProvider = <ThrowOnError extends boolean = false>(options: Options<DeleteProviderData, ThrowOnError>): RequestResult<DeleteProviderResponses, DeleteProviderErrors, ThrowOnError> => (options.client ?? client).delete<DeleteProviderResponses, DeleteProviderErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/providers/{id}',
+    ...options
+});
+
+/**
+ * 局部更新模型实例
+ *
+ * 只覆盖请求体里出现的字段。`{"default": true}` 即把它设为默认；
+ * `{"default": false}` 只在它本来就是默认项时才清掉。
+ */
+export const updateProvider = <ThrowOnError extends boolean = false>(options: Options<UpdateProviderData, ThrowOnError>): RequestResult<UpdateProviderResponses, UpdateProviderErrors, ThrowOnError> => (options.client ?? client).post<UpdateProviderResponses, UpdateProviderErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/providers/{id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 列出供应商源
+ *
+ * **明文返回 `apiKey`**：配置页要能把原值填回输入框，这是有意的取舍。
+ * 该接口在鉴权闸门之内，仅管理员可取。
+ */
+export const listProviderSources = <ThrowOnError extends boolean = false>(options?: Options<ListProviderSourcesData, ThrowOnError>): RequestResult<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError> => (options?.client ?? client).get<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/provider-sources',
+    ...options
+});
+
+/**
+ * 新建供应商源
+ */
+export const createProviderSource = <ThrowOnError extends boolean = false>(options: Options<CreateProviderSourceData, ThrowOnError>): RequestResult<CreateProviderSourceResponses, CreateProviderSourceErrors, ThrowOnError> => (options.client ?? client).post<CreateProviderSourceResponses, CreateProviderSourceErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/provider-sources',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 删除供应商源
+ *
+ * 仍被 provider 引用时默认拒绝（400，消息里列出引用者），避免静默级联把
+ * 用户配好的模型悄悄删掉；`?cascade=1` 才连带删除引用者。
+ */
+export const deleteProviderSource = <ThrowOnError extends boolean = false>(options: Options<DeleteProviderSourceData, ThrowOnError>): RequestResult<DeleteProviderSourceResponses, DeleteProviderSourceErrors, ThrowOnError> => (options.client ?? client).delete<DeleteProviderSourceResponses, DeleteProviderSourceErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/provider-sources/{id}',
+    ...options
+});
+
+/**
+ * 局部更新供应商源
+ *
+ * 不支持改 id：源创建后 id 只读，避免 AstrBot 那种「改名要重写全部引用者」的复杂度。
+ */
+export const updateProviderSource = <ThrowOnError extends boolean = false>(options: Options<UpdateProviderSourceData, ThrowOnError>): RequestResult<UpdateProviderSourceResponses, UpdateProviderSourceErrors, ThrowOnError> => (options.client ?? client).post<UpdateProviderSourceResponses, UpdateProviderSourceErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/provider-sources/{id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 获取该源可用的模型列表
+ *
+ * 用**已保存的**源去打上游的 `GET /models`。刻意不接受请求体里的
+ * `baseUrl`/`apiKey`：否则这个端点会变成「带任意凭证访问任意地址」的转发器。
+ * 用户要先保存，再获取——与界面上的「保存并获取模型列表」同一语义。
+ * 上游没有 `/models` 时返回 400 与可读提示，可由「自定义模型」手填绕过。
+ */
+export const fetchProviderModels = <ThrowOnError extends boolean = false>(options: Options<FetchProviderModelsData, ThrowOnError>): RequestResult<FetchProviderModelsResponses, FetchProviderModelsErrors, ThrowOnError> => (options.client ?? client).post<FetchProviderModelsResponses, FetchProviderModelsErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/provider-sources/{id}/models',
     ...options
 });
 
