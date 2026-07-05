@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "pnpm --filter @atri/server dev",
     "dev:dashboard": "pnpm --filter @atri/dashboard dev",
+    "start": "pnpm --filter @atri/server start",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
