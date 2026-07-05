@@ -1,16 +1,17 @@
 <script setup lang="ts">
+import BotHeader from "@/components/bot/BotHeader.vue";
 import BotNavigation from "@/components/bot/BotNavigation.vue";
-import ChatHeader from "@/components/chat/ChatHeader.vue";
 </script>
 
 <template>
   <n-layout position="absolute">
     <!--
-      顶栏复用聊天页的 ChatHeader（模型选择 + 汉堡菜单/登出），两处只维护一套实现。
-      高度与下面内容区的 top 偏移共用 --atri-header-h，改一处即两处同步。
+      bot 平台的顶栏是自己的一份实现（BotHeader），不再复用聊天页的 ChatHeader。
+      两个平台的左侧本就不同——这里要 logo，聊天页要模型选择器——合成一个组件
+      只能靠 isChat 分支，等于把两边的改动绑在一起。右侧控件仍共用三个组件。
     -->
     <n-layout-header class="h-[var(--atri-header-h)]">
-      <chat-header />
+      <bot-header />
     </n-layout-header>
 
     <!--

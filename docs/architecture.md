@@ -245,14 +245,44 @@ errors.js   ProviderError 与上游错误归一
 ```
 src/
 ├── main.ts          挂载应用，按顺序引入 ./uno.css 与 virtual:uno.css
+├── assets/images/   logo.png（控制台顶栏用，整图不裁）
 ├── api/
 │   ├── client.ts    唯一的 HTTP/WS 出口（手写）
 │   └── generated/   由 openapi.json 生成的类型化 SDK（入库，不手改）
 ├── stores/          auth / sessions / plugins / providers（Pinia）
 ├── router/index.ts  路由与登录守卫
+├── layouts/         bot/BotLayout（顶栏 + 侧栏） / chat/ChatLayout（侧栏 + 顶栏）
 ├── views/           LoginView / ConsoleView / ProviderConfig / chat 下的创建与会话页
-└── components/      SessionList / Conversation / PluginPanel / provider/* / chat/*
+└── components/
+    ├── shared/      icons / TopBarMenu / PlatformSwitch / ModelSelectMenu
+    ├── bot/         BotHeader / BotNavigation
+    ├── chat/        ChatHeader / Navigation
+    └── provider/    ProviderCard
 ```
+
+### 两个平台的顶栏
+
+控制台（bot）与聊天（chat）是两套布局，各自有**自己的顶栏组件**，右侧控件则共用：
+
+- `components/bot/BotHeader.vue` —— 左侧 logo，右侧 `ModelSelectMenu` + `PlatformSwitch` + `TopBarMenu`。
+- `components/chat/ChatHeader.vue` —— 左侧模型选择器，右侧同样是那三个控件。
+
+刻意**不把两者合成一个组件**：左侧内容本就不同，合起来只会得到一堆 `isChat` 分支，
+让两个平台的顶栏改动互相牵制。曾经把 BotHeader 做成直接复用 ChatHeader，
+结果是 bot 侧顶栏也跟着显示模型选择器，既丢了 logo 又表达不出平台差别。
+右侧那三个控件则抽到 `components/shared/`，因为它们确实一模一样。
+
+几个不显眼但会踩的点：
+
+- **`PlatformSwitch` 的高亮从当前路由推出，不存本地状态。** 写成 `ref` 会立刻出现
+  「停在 chat 但按钮显示 bot」——刷新、前进后退、或直接粘贴 `/chat/:id` 时局部状态都不跟着走。
+- **logo 不裁剪**。原图 2172×724 里不透明像素只占 228–491 行（真实图形 2114×264、宽高比 8.0），
+  约 63% 是透明留白。图片撑满顶栏高度时可见图形约 21px 并上下自然留白，
+  留白本身就充当内边距；裁图只会多出一份要跟着原图更新的派生资源。
+- **logo 的父链接需要 `self-stretch`**。顶栏是 `items-center` 的 flex 容器，直接子项高度是内容撑出来的，
+  此时 `img` 的 `h-full`（`height:100%`）因父高不确定而解析成 `auto`，图片会退回原始尺寸。
+- **窄屏要收窄 logo**（`max-width: 96px`）。177px 的 logo 加上模型选择器与 107px 的切换按钮，
+  在 375px 视口下放不下，实测汉堡按钮被推到 `right=382` 而**整颗移出屏幕**——不是变窄，是点不到。
 
 几条约束：
 
