@@ -127,48 +127,76 @@ pnpm dev
 
 ## 模型 provider
 
-在 `atri.config.json` 的 `providers` 段声明。`type` 决定用哪个实现，目前支持
-`openai`（含所有 OpenAI 兼容网关）与 `anthropic`：
+分两层：**provider source**（一次连接：端点、密钥、超时）与 **provider**（一个模型实例）。
+这样「一个网关下的多个模型」只写一次密钥，增删模型也不必碰凭证。
 
 ```json
 {
-  "providers": {
-    "default": "deepseek",
+  "providerSources": {
     "deepseek": {
       "type": "openai",
       "baseUrl": "https://api.deepseek.com/v1",
       "apiKey": "",
-      "models": ["deepseek-chat"]
+      "timeoutMs": 120000
     },
-    "claude": { "type": "anthropic", "apiKey": "", "models": ["claude-sonnet-4-5"] }
+    "claude": { "type": "anthropic", "apiKey": "", "timeoutMs": 120000 }
+  },
+  "providers": {
+    "default": "deepseek-chat",
+    "deepseek-chat": { "source": "deepseek", "model": "deepseek-chat" },
+    "claude-sonnet": { "source": "claude", "model": "claude-sonnet-4-5", "enabled": false }
   }
 }
 ```
+
+`type` 决定用哪个实现，目前支持 `openai`（含所有 OpenAI 兼容网关）与 `anthropic`：
 
 | 字段        | openai                           | anthropic                                              |
 | ----------- | -------------------------------- | ------------------------------------------------------ |
 | `baseUrl`   | 默认 `https://api.openai.com/v1` | 默认 `https://api.anthropic.com/v1`                    |
 | 鉴权        | `Authorization: Bearer`          | `x-api-key` + `anthropic-version`（默认 `2023-06-01`） |
-| `models`    | 供控制台与选路使用               | 同左                                                   |
 | `maxTokens` | 不发送（由上游决定）             | **必填**，默认 `8192`                                  |
 | `headers`   | 额外请求头                       | 同左                                                   |
-| `timeoutMs` | 默认 `120000`                    | 同左                                                   |
+| `timeoutMs` | 默认 `120000`（毫秒）            | 同左                                                   |
+
+**provider source**：`{ type, name?, baseUrl?, apiKey?, timeoutMs? }`，id 由键名给出，
+创建后不可改名（改名要重写所有引用者，得不偿失）。
+**provider（模型实例）**：`{ source, model, name?, enabled? }`，`enabled` 默认 `true`；
+实例上的同名键（`baseUrl`/`timeoutMs`/`name`…）会**覆盖** source 上那一份。
 
 `default` 是保留键（字符串），指向默认 provider 的 id；也可以改成在某个 provider
 上写 `"default": true`。没配默认值时的选路顺序是：**显式模型名命中 → 默认 provider → 第一个注册的**。
-模型名对不上任何 provider 的 `models` 时**仍会退回默认 provider**——
+显式值既可以是**实例 id**，也可以是模型名——控制台的模型选择器发上来的就是实例 id。
+模型名对不上任何 provider 时**仍会退回默认 provider**——
 上游的模型列表通常比本地配置新，本地列表不该当成硬闸门。
 
-单个 provider 配错（类型拼错、构造抛错）只会记一条日志，不影响其它 provider 启动；
+单个 provider 配错（类型拼错、引用了不存在的 source）只会记一条日志，不影响其它
+provider 启动，并且在控制台的供应商配置页里以 `loaded: false` + 原因显示出来；
 但如果配了 `default` 而它恰好加载失败，**不会静默换个 provider**——
 否则请求会悄悄打到另一个模型上，只留一条 warn 日志说明会回退。
+`enabled: false` 是**有意关闭**，只记 info 日志、不算故障，也不出现在模型选择器里。
 
 一个 provider 都没配时，回复退化为**回声**（`[回声:模型名] 原文`）以便先把链路跑通。
 一旦有 provider 注册，调用失败就会如实抛错，不会伪装成正常回复。
 
-密钥解析顺序：provider 自己的 `apiKey` → 环境变量 `ATRI_<ID>_API_KEY`。
+密钥解析顺序：source 自己的 `apiKey` → 环境变量 `ATRI_<SOURCE_ID>_API_KEY`。
 因为密钥留在磁盘文件里终究不如注入环境变量安全，容器部署建议只用后者
-（见 `.env.example`）。
+（见 `.env.example`）。注意变量名跟**源**的 id 走，不是模型。
+
+### 在控制台里配置
+
+「供应商配置」页可以直接增删源与模型，改动**写回 `atri.config.json`** 并立即生效，
+不需要重启。「获取模型列表」会拿**已保存的**凭证去打上游的 `GET /models`，
+所以源有未保存改动时按钮会变成「保存并获取模型列表」。
+上游没有 `/models` 时可以用「自定义模型」手填模型 id 绕过。
+
+两点需要知情：
+
+- **`GET /provider-sources` 会明文返回 `apiKey`**，表单也是明文渲染（便于核对粘贴
+  是否出错）。该接口仅管理员可访问，但密钥确实会回到浏览器，请不要在共享机器上使用。
+- `baseUrl` 指向内网地址时，服务端会**代为请求**那个地址。这属于管理员的正常用法
+  （自建网关），因此不做地址白名单；但这也意味着该配置页等同于一台内网请求代理，
+  不要把管理员账号给不可信的人。
 
 ## 生产部署
 
@@ -193,7 +221,8 @@ pnpm start            # 或 node apps/server/src/index.js
 - **适配器** —— 实现 `start()`/`stop()` 并注册到 `AdapterManager`；
   在 `config.adapters.<id>.enabled` 中按需启用。纯 agent 部署可以不启用任何一个。
 - **Provider** —— 模型的出站适配。内置 `openai` 与 `anthropic` 两种实现，
-  在 `atri.config.json` 的 `providers` 段按类型声明即可，引擎从不 import 具体的模型 SDK。
+  在 `atri.config.json` 的 `providerSources`/`providers` 段按类型声明，
+  或者在控制台的「供应商配置」页里配。引擎从不 import 具体的模型 SDK。
   详见[模型 provider](#模型-provider)。
 
 > 命名上注意区分两端：**adapter** 指入站接入（QQ、Discord、webhook…），
@@ -222,21 +251,29 @@ pnpm start            # 或 node apps/server/src/index.js
 
 基础路径 `/api/v1`：
 
-| 方法         | 路径                                  | 说明                                        |
-| ------------ | ------------------------------------- | ------------------------------------------- |
-| GET          | `/health`                             | 存活检查（公开）                            |
-| POST         | `/auth/login`、`/auth/logout`         | 登录 / 登出（公开，见上）                   |
-| GET          | `/auth/me`、`/auth/status`            | 当前用户 / 是否需要登录                     |
-| GET / POST   | `/sessions`                           | 列出 / 创建会话                             |
-| GET / DELETE | `/sessions/:id`                       | 读取（含完整消息历史）/ 删除会话            |
-| POST         | `/sessions/:id/messages`              | 发送用户消息，等完整回复后返回              |
-| POST         | `/sessions/:id/messages/stream`       | 同上，但以 SSE 逐段推送回复增量             |
-| GET          | `/providers`、`/plugins`、`/adapters` | 供控制台使用的状态                          |
-| POST         | `/plugins/:id/reload`                 | 重载插件（销毁旧实例并重新求值代码）        |
-| POST         | `/plugins/:id/unload`                 | 卸载插件（释放副作用并移除）                |
-| POST         | `/plugins/:id/enable`                 | 启用 / 禁用插件，body `{ "enabled": true }` |
+| 方法         | 路径                                         | 说明                                        |
+| ------------ | -------------------------------------------- | ------------------------------------------- |
+| GET          | `/health`                                    | 存活检查（公开）                            |
+| POST         | `/auth/login`、`/auth/logout`                | 登录 / 登出（公开，见上）                   |
+| GET          | `/auth/me`、`/auth/status`                   | 当前用户 / 是否需要登录                     |
+| GET / POST   | `/sessions`                                  | 列出 / 创建会话                             |
+| GET / DELETE | `/sessions/:id`                              | 读取（含完整消息历史）/ 删除会话            |
+| POST         | `/sessions/:id/messages`                     | 发送用户消息，等完整回复后返回              |
+| POST         | `/sessions/:id/messages/stream`              | 同上，但以 SSE 逐段推送回复增量             |
+| GET          | `/providers`、`/plugins`、`/adapters`        | 供控制台使用的状态                          |
+| POST/DELETE  | `/providers`、`/providers/:id`               | 新增 / 修改 / 删除模型实例                  |
+| GET          | `/provider-sources`                          | 列出 provider source（**明文含 apiKey**）   |
+| POST/DELETE  | `/provider-sources`、`/provider-sources/:id` | 新增 / 修改 / 删除 provider source          |
+| POST         | `/provider-sources/:id/models`               | 按已保存的凭证拉取上游模型列表              |
+| POST         | `/plugins/:id/reload`                        | 重载插件（销毁旧实例并重新求值代码）        |
+| POST         | `/plugins/:id/unload`                        | 卸载插件（释放副作用并移除）                |
+| POST         | `/plugins/:id/enable`                        | 启用 / 禁用插件，body `{ "enabled": true }` |
 
 除标注「公开」的路径外，其余接口都需要登录（未登录返回 401）。
+
+写操作全部落在 `atri.config.json` 上（读-改-写，文件权限 `0600`），改完立刻重建
+provider 注册表，因此**不需要重启**。删除仍被引用的 provider source 会被拒绝并列出
+引用者，除非带上 `?cascade=1`。详细的字段语义见[模型 provider](#模型-provider)。
 
 WebSocket 位于 `/ws`，向客户端推送 `message` / `stream` / `error` / `unauthorized` 帧。
 收到 `unauthorized` 表示会话在连接期间失效，客户端应清空登录态并回到登录页。

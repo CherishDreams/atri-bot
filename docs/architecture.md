@@ -14,7 +14,7 @@ apps/server/src/
 │   ├── agent/      AgentEngine：一轮对话的编排
 │   ├── auth/       AuthManager：管理员口令与会话令牌
 │   ├── session/    SessionManager：会话与消息（当前为内存实现）
-│   ├── provider/   ProviderRegistry + 厂商实现（openai / anthropic）
+│   ├── provider/   配置存储 + 装配 + ProviderRegistry + 厂商实现（openai / anthropic）
 │   └── logger.js
 ├── api/            传输层：HTTP 路由、静态托管、WebSocket（无业务逻辑）
 ├── adapters/       可选启用的对外接入
@@ -113,10 +113,11 @@ WebSocket 复用同一个 Cookie 完成握手（浏览器无法为握手自定�
 与入站的 `adapters/` 是两个不同形状的接口，因此刻意不共用「适配器」这个词——
 adapter 是长驻的 `start()`/`stop()`，provider 是每请求的 `chat()`。
 
-分层是「注册表只管存与取，装配单独一层」：
+分层是「注册表只管存与取，存储与装配各自一层」：
 
 ```
-factory.js  配置 -> 实例（唯一入口，认得 type 与密钥解析）
+store.js    ProviderConfigStore：两层配置的校验与落盘（读写 atri.config.json）
+factory.js  配置 -> 实例（唯一入口，认得 type、两层合并与密钥解析）
 registry.js ProviderRegistry：选路与转发，不知道任何厂商细节
 openai.js   / anthropic.js：厂商实现
 sse.js      SSE 解析（两个实现共用）
@@ -126,11 +127,49 @@ errors.js   ProviderError 与上游错误归一
 把装配从注册表里拆出来，是为了让 `registry.js` 不 import 任何具体实现。
 新增一个厂商只需在 `factory.js` 的 `TYPES` 表里加一行。
 
+### 两层配置与落盘
+
+配置分两层：**provider source**（一次连接：`type`/`baseUrl`/`apiKey`/`timeoutMs`）
+与 **provider**（一个模型实例：`source`/`model`/`enabled`）。合并规则是
+`{ ...source, ...provider }`，实例上的同名字段覆盖源。
+
+这样切分是因为**凭证属于连接，不属于模型**：一个网关下的十个模型共享一份密钥，
+而超时也是连接级的性质。若压成一层，加一个模型就要重抄一遍密钥与端点。
+
+`factory.js` 对一个 provider 就是「一个模型实例」，所以构造时把 `model` 变成单元素
+`models: [model]`——注册表原来的按模型名选路因此完全不用改。
+
+`store.js` 承担全部校验（字段类型、`id` 字符集、`baseUrl` 协议、`timeoutMs` 区间），
+并保证**校验失败时文件一个字节都不动**：先在校验完的副本上改，通过才落盘，
+所以「用户点错一次把配置改坏」不会发生。写文件是「读-改-写」同一份 JSON，
+`host`/`auth` 等无关字段原样保留，权限设 `0600`（里面有明文密钥）。
+
+一个反直觉但必要的分支：`config.root` 可以缺省。直接用代码构造 config 的调用方
+（测试、嵌入式使用）没有配置文件可写，此时存储退化为**只读内存视图**，
+写操作显式报错——否则 `join(undefined, ...)` 会以一个难懂的 `ERR_INVALID_ARG_TYPE`
+冒出来。
+
+### 配置变更如何生效
+
+`app.js` 里 `rebuildProviders()` 是**唯一**的装配路径，启动与每次配置写入后都走它：
+清空注册表 → `createProviders` → 逐个注册 → 处理错误与默认项。
+两条装配路径容易在演进中走散（比如只有一个地方处理「默认项加载失败」），
+所以刻意只留一条。
+
+清空注册表是安全的：provider 没有长连接，在途请求已持有自己的实例引用，
+因此那个请求会用旧配置跑完，下一次请求拿到新配置。代价是**别的标签页不会自动
+看到变化**（本次不做 WS 通知）。
+
 ### 选路与回声兜底
 
-`#resolveFor(model)` 三级回落：**显式模型名命中某个 provider 的 `models`** →
-默认 provider → 第一个注册的。模型名对不上任何一段 `models` 时仍退回默认 provider，
-因为上游的模型列表通常比本地配置新，本地列表不该当硬闸门。
+`#resolveFor(model)` 的显式值既可以是**实例 id** 也可以是模型名：控制台的模型
+选择器发上来的是实例 id，而配置文件里写的通常是上游模型名，两种都得认。
+只按模型名匹配会让「选了个非默认实例」静默落到默认 provider 上，
+还把实例 id 当成上游模型名发出去——这类错误上游只会回一个含糊的 404。
+
+选路的其余部分是三级回落：显式值命中 → 默认 provider → 第一个注册的。
+模型名对不上任何 provider 时仍退回默认 provider，因为上游的模型列表通常比本地配置新，
+本地列表不该当硬闸门。
 
 回复退化为**回声**只在「一个 provider 都没注册」时发生。只要注册了 provider，
 调用失败就必须如实抛错——把故障伪装成正常回复会让问题永远暴露不出来。
@@ -153,6 +192,22 @@ errors.js   ProviderError 与上游错误归一
 `registry.chatStream` 在 provider 没有 `chatStream` 时退化为「一次 `chat` 再整段
 `onDelta`」，这样引擎不必判断 provider 是否支持流式，前端拿到的形状始终一致。
 流式以**拼接结果**为落库依据，不依赖前端攒增量——前端丢一帧不该影响历史记录。
+
+### 获取模型列表
+
+`POST /provider-sources/:id/models` 用**已保存的**源构造一个临时实例去打上游的
+`GET /models`。刻意**不接受请求体里的 `baseUrl`/`apiKey`**：那会让这个端点变成
+「带任意凭证访问任意地址」的转发器，而它只要登录就能调用。
+用户必须先保存再获取——这与 UI 上「保存并获取模型列表」的文案是同一件事。
+
+失败回 **400 而不是 502**：绝大多数是 `baseUrl` 打错、密钥不对、或该网关根本没有
+`/models`，全都是用户自己能修的问题，而 502 会把它们指向「服务器坏了」。
+两个实现都**不做内置回退模型列表**——悄悄给一份「大概能用」的模型名，
+会把配置错误推迟到真正发消息时才暴露。
+
+`GET /providers` 返回**配置里的全部条目**（含被禁用与加载失败的），
+每条带 `loaded` 与失败原因。旧语义只返回注册表里活着的那些，
+于是「我明明配了它却不在列表里」这种最难自查的状况在界面上表现为「凭空消失」。
 
 ## 静态托管
 
@@ -193,16 +248,17 @@ src/
 ├── api/
 │   ├── client.ts    唯一的 HTTP/WS 出口（手写）
 │   └── generated/   由 openapi.json 生成的类型化 SDK（入库，不手改）
-├── stores/          auth / sessions / plugins（Pinia）
+├── stores/          auth / sessions / plugins / providers（Pinia）
 ├── router/index.ts  路由与登录守卫
-├── views/           LoginView / ConsoleView / chat 下的创建与会话页
-└── components/      SessionList / Conversation / PluginPanel / chat/*
+├── views/           LoginView / ConsoleView / ProviderConfig / chat 下的创建与会话页
+└── components/      SessionList / Conversation / PluginPanel / provider/* / chat/*
 ```
 
 几条约束：
 
 - **令牌只存在于 Cookie 里**，前端不持有、也不存储任何令牌。
   `main.ts` 里没有 `localStorage`/`sessionStorage` 的用法，这是有意的。
+  （唯一的 `localStorage` 用法是记住模型选择——那不是凭证。）
 - 401 统一在 `api/client.ts` 转成 `UnauthorizedError`，由 store 与路由守卫决定后续动作，
   调用方不需要各自判断状态码。
 - 登录守卫先问 `/auth/status`、再问 `/auth/me`。前者是公开的，用来判断是否需要登录；
@@ -210,6 +266,19 @@ src/
 - **UnoCSS 必须引入虚拟入口**：`src/uno.css` 只是本地基础样式（reset + 全局），
   不含任何原子类。少了 `import "virtual:uno.css"`，构建产物里一个工具类都不会生成，
   样式层会**静默失效**（CSS 从 ~12 kB 掉到 ~3 kB 就是这个症状）。
+
+### 供应商配置页
+
+`views/ProviderConfig.vue` 是「源列表 + 源详情」的两栏工作台，状态全在
+`stores/providers.ts`。三个容易做错的地方：
+
+- **store 的私有辅助必须是模块级函数**。Pinia 把 actions 挂到另一个对象上执行，
+  action 里的 `this.#privateFn()` 会因为 `this` 上根本没有那个私有名字而抛 `TypeError`。
+  `stores/sessions.ts` 已经踩过一次（去重逻辑因此改成模块级 `ingestInto`）。
+- **草稿只在「选中的源」变化时重建**，不在每次 `refresh()` 后重建——
+  否则后台刷新会抹掉用户正在输入的内容。
+- 获取模型列表前若草稿有改动，**先保存再拉取**：既符合「拉的是已保存凭证」这一
+  服务端约束，也避免把一份还没落盘的凭证交给上游。
 
 ### OpenAPI 生成的客户端
 
