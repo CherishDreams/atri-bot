@@ -371,7 +371,7 @@ server.closeAllConnections?.(); // 兜住空闲 keep-alive 连接
 否则用户关掉标签页之后，服务端仍会为一份没人接收的响应继续消耗 token。
 这种取消是预期路径，所以只记 `debug`，不按服务端故障刷 error 堆栈。
 
-### pnpm 11 的两个坑
+### pnpm 11 起的两个坑（本仓用 12，规则照旧）
 
 1. **`onlyBuiltDependencies` 已被移除**，改用映射形式的 `allowBuilds`：
    ```yaml

@@ -38,7 +38,8 @@ atri-bot/
 ## 环境要求
 
 - Node >= 20.19
-- pnpm 11（`corepack enable`，或由 `packageManager` 字段自动安装）
+- pnpm 12（由 `packageManager` 字段固定为 `pnpm@12.11.2`；`.npmrc` 开了 `engine-strict`，
+  版本不符会直接报错，所以别用 11 及以下）
 
 ## 快速开始
 
@@ -62,8 +63,10 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 | `pnpm dev`           | 以文件监听方式运行服务端                           |
 | `pnpm dev:dashboard` | 运行控制台的开发服务器                             |
 | `pnpm build`         | 构建全部包                                         |
+| `pnpm start`         | 启动服务端（托管构建好的控制台，单进程即可用）     |
 | `pnpm typecheck`     | 对全部包做类型检查                                 |
 | `pnpm lint`          | oxlint 检查（告警即失败）                          |
+| `pnpm lint:fix`      | oxlint 自动修复                                    |
 | `pnpm format`        | oxfmt 统一格式                                     |
 | `pnpm format:check`  | 只校验格式，不改文件                               |
 | `pnpm test`          | 运行全部测试                                       |
