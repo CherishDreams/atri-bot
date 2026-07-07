@@ -83,9 +83,14 @@ plugins/  ─> 只依赖注入给它的 ctx
 
 - **双引号**、100 列、分号、尾逗号 `all`、2 空格。`sortPackageJson: true` 会重排 `package.json` 的键。
 - `import type` 必须显式（`verbatimModuleSyntax`），否则运行时 import 一个不存在的绑定。
-- 数组排序/反转用 **`toSorted()` / `toReversed()`**，不要 `sort()` / `reverse()`（`unicorn(no-array-sort)`，前者原地改）。
-- 包装捕获到的错误时**带上 cause**：`throw new Error(\`解析 ${filePath} 失败: ${err.message}\`, { cause: err })`。
-  堆栈里丢了原始错误会让排查变成猜。
+- 数组排序/反转用 `toSorted()` / `toReversed()`，不要 `sort()` / `reverse()`
+  （`unicorn(no-array-sort)`：后两者原地修改数组）。
+- 包装捕获到的错误时**带上 cause**，否则堆栈里丢了原始错误，排查变成猜：
+
+  ```js
+  throw new Error(`解析 ${filePath} 失败: ${err.message}`, { cause: err });
+  ```
+
 - `oxlint` 的 `plugins` 字段**会覆盖默认插件集**，想用的必须全部列出（当前 unicorn / oxc / typescript / vue）。
 - 仓内目前**零** `oxlint-disable` / `oxfmt-ignore` 注释。不要靠抑制让 `pnpm check` 变绿；
   真需要时在提交信息里说明理由。唯一例外是自动生成的 `auto-imports.d.ts` / `components.d.ts`（已 gitignore）。
