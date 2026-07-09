@@ -14,8 +14,9 @@ pnpm monorepo，三个包：`apps/server`（agent 引擎 + API）、`apps/dashbo
 - Node `>=20.19.0`；pnpm 由根 `package.json` 的 `packageManager` 字段固定，**不要用别的包管理器**。
 - `apps/server` 是**纯 JavaScript**（`allowJs: true, checkJs: false`），靠 tsc 产出 `.d.ts`。
   它是 `verbatimModuleSyntax` + `strict` + `noUncheckedIndexedAccess` 的严格环境，写 JS 也要按类型写。
-- **依赖极简是刻意维护的属性**。服务端运行时依赖只有 `ws` 一个。加依赖前先确认没有几十行手写就能解决的问题，
-  并说明为什么必须引入。
+- **依赖极简是刻意维护的属性**。服务端的外部运行时依赖只有 `ws` 一个
+  （`dependencies` 里另一条 `@atri/shared` 是 workspace 内部包，不算外部依赖）。
+  加依赖前先确认没有几十行手写就能解决的问题，并说明为什么必须引入。
 
 ## 上手
 
