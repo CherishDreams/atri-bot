@@ -3,7 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 让浏览器按当前配色画出原生控件（滚动条、表单默认样式），否则会固定用浅色那套。 -->
+    <meta name="color-scheme" content="light dark" />
     <title>atri-bot 控制台</title>
+    <!--
+      在应用脚本之前把主题落到 <html> 上。
+
+      Vue 挂载前页面就已经按 `:root`（浅色）绘制，深色用户的主题要等 JS 跑完才生效，
+      于是一进来看见白底再翻黑——首帧闪白。这里提前写同一个属性，闪白就不存在了。
+
+      这段是 `src/theme/mode.ts` 里那一小段解析逻辑的第二份实现，确实重复；
+      但它必须在 Vue 加载之前跑，而 `mode.ts` 要 import vue 与 naive-ui，
+      没法塞进 <head>。两边共用同一个 localStorage 键与同一个属性名，
+      改动时两处一起动（属性名在 mode.ts 里叫 THEME_ATTR）。
+    -->
+    <script>
+      (function () {
+        var KEY = "atri.themeMode";
+        var stored;
+        try {
+          stored = localStorage.getItem(KEY);
+        } catch (e) {
+          stored = null;
+        }
+        var dark =
+          stored === "dark" ||
+          ((stored === null || stored === "system") &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.setAttribute("data-atri-theme", dark ? "dark" : "light");
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>
