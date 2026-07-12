@@ -34,29 +34,26 @@ async function onSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div class="grid min-h-full place-items-center bg-bg px-4 text-fg">
-    <form
-      class="w-full max-w-[360px] rounded-xl border border-[#2b3040] bg-panel p-6 shadow-lg"
-      @submit.prevent="onSubmit"
-    >
-      <h1 class="m-0 mb-1 text-lg text-fg">atri-bot</h1>
-      <p class="m-0 mb-5 text-xs text-muted">请登录以访问控制台</p>
+  <div class="grid min-h-full place-items-center bg-canvas px-4 text-ink">
+    <form class="surface-card w-full max-w-[360px] p-6" @submit.prevent="onSubmit">
+      <h1 class="m-0 mb-1 text-lg text-ink">atri-bot</h1>
+      <p class="m-0 mb-5 text-xs text-ink-muted">请登录以访问控制台</p>
 
-      <label class="mb-3 block text-xs text-muted" for="username">用户名</label>
+      <label class="mb-1.5 block text-xs text-ink-muted" for="username">用户名</label>
       <input
         id="username"
         v-model="username"
-        class="mb-4 w-full rounded-lg border border-[#2b3040] bg-bg px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+        class="field-input mb-4"
         type="text"
         autocomplete="username"
         required
       />
 
-      <label class="mb-3 block text-xs text-muted" for="password">密码</label>
+      <label class="mb-1.5 block text-xs text-ink-muted" for="password">密码</label>
       <input
         id="password"
         v-model="password"
-        class="mb-4 w-full rounded-lg border border-[#2b3040] bg-bg px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+        class="field-input mb-4"
         type="password"
         autocomplete="current-password"
         required
@@ -65,7 +62,7 @@ async function onSubmit(): Promise<void> {
       <p v-if="error" class="m-0 mb-3 text-xs text-danger">{{ error }}</p>
 
       <button
-        class="w-full rounded-lg border border-[#2b3040] bg-accent px-3 py-2 text-sm text-white disabled:opacity-60"
+        class="w-full cursor-pointer rounded-md bg-primary px-3 py-2 text-sm font-medium text-surface transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-60"
         type="submit"
         :disabled="submitting || auth.loading"
       >

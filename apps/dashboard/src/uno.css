@@ -1,10 +1,10 @@
 @import "@unocss/reset/tailwind-v4.css";
 
-:root {
-  /* 聊天页顶栏高度。ChatHeader 用它定高，ChatLayout 用它给内容区留出偏移，
-     两边引用同一个值，避免各写一份 60px 后改一处就错位。 */
-  --atri-header-h: 60px;
-}
+/*
+ * 全站 CSS 变量（`--atri-*`，含 `--atri-header-h`）不在这里写，
+ * 由 uno.config.ts 的 preflight 从 `src/theme/tokens.ts` 生成。
+ * 在这里再抄一份就是第二个真源，深浅色翻转时它不会跟着翻。
+ */
 
 html,
 body,

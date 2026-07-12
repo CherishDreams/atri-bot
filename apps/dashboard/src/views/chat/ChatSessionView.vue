@@ -24,6 +24,16 @@ const status = ref<"loading" | "ready" | "missing">("loading");
 const sessionId = computed(() => String(route.params.sessionId ?? ""));
 const canSend = computed(() => draft.value.trim().length > 0 && !sessions.sending);
 
+/**
+ * 角色名本地化。线协议里的 `role` 是英文（`user`/`assistant`），
+ * 直接渲染会在整片中文界面里露出两个英文单词；这里只改显示，
+ * 判断分支仍然比对原始的 `m.role`。
+ */
+const ROLE_LABELS: Record<string, string> = { user: "用户", assistant: "助手" };
+function roleLabel(role: string): string {
+  return ROLE_LABELS[role] ?? role;
+}
+
 let unsubscribe: (() => void) | null = null;
 
 async function scrollToBottom(): Promise<void> {
@@ -121,7 +131,7 @@ onBeforeUnmount(() => {
 
     <div v-else-if="status === 'missing'" class="grid flex-1 place-items-center px-4 text-center">
       <div>
-        <p class="m-0 mb-3 text-sm text-muted">
+        <p class="m-0 mb-3 text-sm text-ink-muted">
           {{ sessions.error ?? "会话不存在或已被删除" }}
         </p>
         <n-button size="small" @click="router.push({ name: 'chat-new' })">创建新会话</n-button>
@@ -129,34 +139,47 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
-      <div ref="scrollBox" class="flex-1 overflow-y-auto px-4 py-3">
-        <p v-if="sessions.log.length === 0" class="m-0 py-8 text-center text-xs text-muted">
-          还没有消息，说点什么吧。
-        </p>
+      <div ref="scrollBox" class="scroll-y flex-1 px-4 py-3">
+        <div class="mx-auto w-full max-w-[var(--atri-reading-w)]">
+          <p v-if="sessions.log.length === 0" class="m-0 py-8 text-center text-xs text-ink-muted">
+            还没有消息，说点什么吧。
+          </p>
 
-        <div
-          v-for="m in sessions.log"
-          :key="m.id"
-          class="mb-3 flex flex-col"
-          :class="m.role === 'user' ? 'items-end' : 'items-start'"
-        >
-          <span class="mb-1 text-xs text-muted">{{ m.role }}</span>
           <div
-            class="max-w-[80%] rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap"
-            :class="
-              m.role === 'user'
-                ? 'bg-[#222836] text-fg'
-                : 'border border-[#2b3040] bg-panel text-fg'
-            "
+            v-for="m in sessions.log"
+            :key="m.id"
+            class="mb-3 flex flex-col"
+            :class="m.role === 'user' ? 'items-end' : 'items-start'"
           >
-            {{ m.content }}
+            <span class="mb-1 text-xs text-ink-faint">{{ roleLabel(m.role) }}</span>
+            <div
+              class="max-w-[85%] rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap"
+              :class="
+                m.role === 'user'
+                  ? 'bg-primary-soft text-ink'
+                  : 'border-1 border-line bg-raised text-ink'
+              "
+            >
+              {{ m.content }}
+            </div>
+          </div>
+
+          <!-- 流式进行中给一行提示：首字虽已可见，但用户无从判断是「答完了」还是「还在想」。 -->
+          <div v-if="sessions.streaming" class="flex flex-col items-start">
+            <span class="mb-1 text-xs text-ink-faint">助手</span>
+            <div
+              class="rounded-lg border-1 border-line bg-raised px-3 py-2 text-sm text-ink-faint"
+              aria-live="polite"
+            >
+              正在输入…
+            </div>
           </div>
         </div>
       </div>
 
       <div v-if="sessions.error" class="px-4 pb-2 text-xs text-danger">{{ sessions.error }}</div>
 
-      <form class="edge-line flex gap-2 border-t p-3" @submit.prevent="onSend">
+      <form class="flex gap-2 border-t-1 border-line p-3" @submit.prevent="onSend">
         <n-input
           v-model:value="draft"
           type="textarea"

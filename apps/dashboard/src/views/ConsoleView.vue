@@ -54,12 +54,16 @@ onBeforeUnmount(() => {
 
 <template>
   <!-- 桌面端保持原三栏 240/1fr/300；窄屏降级为单列堆叠，避免横向溢出。 -->
-  <div class="grid h-full grid-cols-1 overflow-hidden bg-bg text-fg lg:grid-cols-[240px_1fr_300px]">
+  <div
+    class="grid h-full grid-cols-1 overflow-hidden bg-canvas text-ink lg:grid-cols-[240px_1fr_300px]"
+  >
     <SessionList />
 
     <div class="flex min-w-0 flex-col">
-      <header class="edge-line flex items-center justify-end gap-3 border-b px-4 py-2">
-        <span class="text-xs text-muted">{{ auth.user?.username }}</span>
+      <header
+        class="flex items-center justify-end gap-3 border-b-1 border-line px-4 py-2 text-ink-muted"
+      >
+        <span class="text-xs">{{ auth.user?.username }}</span>
         <button class="btn-ghost" type="button" title="退出登录" @click="onLogout">登出</button>
       </header>
       <Conversation class="min-h-0 flex-1" />

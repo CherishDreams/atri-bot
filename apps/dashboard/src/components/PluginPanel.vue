@@ -5,8 +5,8 @@ const plugins = usePluginsStore();
 </script>
 
 <template>
-  <section class="edge-line overflow-y-auto border-l bg-panel p-3">
-    <h2 class="m-0 mb-3 text-sm text-fg">插件</h2>
+  <section class="overflow-y-auto border-l-1 border-line bg-surface p-3">
+    <h2 class="m-0 mb-3 text-sm text-ink">插件</h2>
 
     <p v-if="plugins.error" class="m-0 mb-3 text-xs text-danger">操作失败: {{ plugins.error }}</p>
 
@@ -14,16 +14,16 @@ const plugins = usePluginsStore();
       <li
         v-for="p in plugins.plugins"
         :key="p.id"
-        class="flex flex-col gap-2 rounded-lg border border-[#2b3040] p-2.5"
+        class="flex flex-col gap-2 rounded-lg border-1 border-line p-2.5"
         :class="p.status === 'active' ? '' : 'opacity-55'"
       >
         <div>
-          <b class="text-fg">{{ p.name }}</b>
-          <span class="ml-1 text-xs text-muted">v{{ p.version }}</span>
-          <div class="mt-0.5 text-xs text-muted">{{ p.description ?? "" }}</div>
+          <b class="text-ink">{{ p.name }}</b>
+          <span class="ml-1 text-xs text-ink-faint">v{{ p.version }}</span>
+          <div class="mt-0.5 text-xs text-ink-muted">{{ p.description ?? "" }}</div>
           <div
             class="mt-1 text-xs"
-            :class="p.status === 'active' ? 'text-[#5ed6a4]' : 'text-muted'"
+            :class="p.status === 'active' ? 'text-success' : 'text-ink-muted'"
           >
             {{ p.status === "active" ? "运行中" : "已禁用" }}
           </div>
