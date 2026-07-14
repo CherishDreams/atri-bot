@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { icon } from "@/components/shared/icons";
 import { useSessionsStore } from "@/stores/sessions";
+
+/** 两个按钮的图标走命名表，不再在模板里各写一份 `<svg>`。 */
+const AttachIcon = icon("plus");
+const SendIcon = icon("arrowUp");
 
 const router = useRouter();
 const sessions = useSessionsStore();
@@ -85,19 +90,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 浅色主题：这套卡片运行在 naive-ui 的浅色外壳里，
-       不能用 uno.config.ts 里那套暗色 token（bg-panel / text-fg），
-       否则深色卡片配浅色标题落在白底上，标题会几乎看不见。 -->
-  <div class="atri-session-new flex h-full items-center justify-center px-4">
-    <div class="w-full max-w-[760px]">
-      <h1
-        class="atri-session-new-title mb-8 text-center text-[28px] leading-tight font-bold text-black"
-      >
-        今天想聊点什么?
-      </h1>
+  <!--
+    颜色全部走语义 token（`bg-surface`/`text-ink`/…），它们随 `data-atri-theme` 翻转，
+    所以这里不再需要「本页必须写死浅色」的那套特殊处理：卡片和外壳现在同属一个主题。
+  -->
+  <div class="flex h-full items-center justify-center bg-canvas px-4">
+    <div class="w-full max-w-[var(--atri-reading-w)]">
+      <h1 class="mb-8 text-center text-3xl font-bold text-ink">今天想聊点什么?</h1>
 
       <div
-        class="atri-session-card flex min-h-[98px] cursor-text flex-col justify-between rounded-[14px] border border-[#d9d9d9] bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
+        class="surface-card flex min-h-24 cursor-text flex-col justify-between transition-colors focus-within:border-primary"
         @click="focusInput"
       >
         <textarea
@@ -106,65 +108,45 @@ onBeforeUnmount(() => {
           rows="1"
           placeholder="想问什么都可以"
           autocomplete="off"
-          class="session-new-input w-full resize-none overflow-hidden bg-transparent px-[16px] pt-[13px] text-sm leading-[21px] text-black outline-none placeholder:text-[#707070]"
+          class="w-full resize-none bg-transparent px-4 pt-3 text-sm leading-normal text-ink outline-none placeholder:text-ink-faint"
           @input="autogrow"
           @keydown.enter.exact.prevent="onCreate"
         ></textarea>
 
-        <div class="flex shrink-0 items-center justify-between px-[14px] pt-1 pb-[8px]">
+        <div class="flex shrink-0 items-center justify-between px-3.5 pt-1 pb-2">
           <button
-            class="input-config-toggle cursor-pointer rounded-full text-[#1e1e1e]"
+            class="grid h-7 w-7 cursor-pointer place-items-center rounded-full text-ink-muted transition-colors hover:bg-tint hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             type="button"
             title="添加附件"
             aria-label="添加附件"
             @click="onAttach"
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-              <path
-                d="M6 1v10M1 6h10"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linecap="round"
-              />
-            </svg>
+            <component :is="AttachIcon" />
           </button>
 
           <button
-            class="send-btn grid h-7 w-7 cursor-pointer place-items-center rounded-full disabled:cursor-not-allowed"
-            :class="canSubmit ? 'bg-[#4a9fd8]' : 'bg-[#96c7e3]'"
+            class="grid h-7 w-7 cursor-pointer place-items-center rounded-full transition-colors disabled:cursor-not-allowed"
+            :class="
+              canSubmit
+                ? 'bg-primary text-surface hover:bg-primary-hover'
+                : 'bg-tint text-ink-faint'
+            "
             type="button"
             :disabled="!canSubmit"
             :title="creating ? '创建中…' : '创建会话（Enter）'"
             aria-label="创建会话"
             @click="onCreate"
           >
-            <svg
-              v-if="!creating"
-              width="13"
-              height="13"
-              viewBox="0 0 13 13"
-              fill="none"
-              aria-hidden="true"
-            >
-              <path
-                d="M6.5 11V2M6.5 2 2.5 6M6.5 2l4 4"
-                stroke="#ffffff"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-            <span v-else class="text-[10px] leading-none text-white">…</span>
+            <component :is="SendIcon" v-if="!creating" />
+            <span v-else class="text-xs leading-none">…</span>
           </button>
         </div>
       </div>
 
-      <p v-if="attachHint" class="atri-session-hint mt-3 text-center text-xs text-[#707070]">
+      <p v-if="attachHint" class="mt-3 text-center text-xs text-ink-muted">
         附件上传还没接后端，先把文字发过来吧。
       </p>
-      <p v-if="error" class="atri-session-error mt-3 text-center text-xs text-[#d03050]">
-        {{ error }}
-      </p>
+      <p v-if="error" class="mt-3 text-center text-xs text-danger">{{ error }}</p>
     </div>
   </div>
 </template>
