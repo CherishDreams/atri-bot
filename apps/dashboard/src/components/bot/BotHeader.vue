@@ -3,6 +3,7 @@ import { RouterLink } from "vue-router";
 import logoUrl from "@/assets/images/logo.png";
 import ModelSelectMenu from "@/components/shared/ModelSelectMenu.vue";
 import PlatformSwitch from "@/components/shared/PlatformSwitch.vue";
+import ThemeToggle from "@/components/shared/ThemeToggle.vue";
 import TopBarMenu from "@/components/shared/TopBarMenu.vue";
 
 /**
@@ -22,7 +23,7 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
 
 <template>
   <header
-    class="atri-bot-header flex h-[var(--atri-header-h)] w-full items-center gap-3 border-b-1 border-[#ccc] px-4"
+    class="atri-bot-header flex h-[var(--atri-header-h)] w-full items-center gap-3 border-b-1 border-line px-4"
   >
     <!-- 点 logo 回控制台：这是 bot 平台的主页。
          `self-stretch` 不能省：顶栏是 items-center 的 flex 容器，
@@ -36,6 +37,7 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
 
     <div class="ml-auto flex items-center gap-3">
       <ModelSelectMenu />
+      <ThemeToggle />
       <PlatformSwitch />
       <TopBarMenu />
     </div>

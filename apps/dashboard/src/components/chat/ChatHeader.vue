@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import ModelSelectMenu from "@/components/shared/ModelSelectMenu.vue";
 import PlatformSwitch from "@/components/shared/PlatformSwitch.vue";
+import ThemeToggle from "@/components/shared/ThemeToggle.vue";
 import TopBarMenu from "@/components/shared/TopBarMenu.vue";
 
 /**
@@ -16,11 +17,12 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
 
 <template>
   <header
-    class="atri-chat-header flex h-[var(--atri-header-h)] w-full items-center justify-between border-b-1 border-[#ccc] px-4"
+    class="atri-chat-header flex h-[var(--atri-header-h)] w-full items-center justify-between border-b-1 border-line px-4"
   >
     <ModelSelectMenu />
 
     <div class="flex items-center gap-3">
+      <ThemeToggle />
       <PlatformSwitch />
       <TopBarMenu />
     </div>
