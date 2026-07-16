@@ -8,6 +8,7 @@
 import type { MenuOption } from "naive-ui";
 import { computed, h } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
+import { icon } from "@/components/shared/icons";
 
 /**
  * 导航项用 RouterLink 渲染，而不是绑点击事件手动 push：
@@ -26,10 +27,12 @@ const router = useRouter();
 const menuOptions: MenuOption[] = [
   {
     key: "console",
+    icon: icon("console"),
     label: () => h(RouterLink, { to: { name: "console" } }, { default: () => "控制台" }),
   },
   {
     key: "providerConfig",
+    icon: icon("provider"),
     label: () => h(RouterLink, { to: { name: "providerConfig" } }, { default: () => "供应商配置" }),
   },
 ];

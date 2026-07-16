@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import BotHeader from "@/components/bot/BotHeader.vue";
 import BotNavigation from "@/components/bot/BotNavigation.vue";
+import { layout } from "@/theme/tokens";
 </script>
 
 <template>
@@ -26,7 +27,12 @@ import BotNavigation from "@/components/bot/BotNavigation.vue";
       所以内层若保持 static，`flex: auto` 也不会有任何效果。
     -->
     <n-layout has-sider position="absolute" class="top-[var(--atri-header-h)]!">
-      <n-layout-sider class="border-r border-#ccc">
+      <!--
+        分隔线走 naive-ui 的 `bordered` + Layout.siderBorderColor，而不是在 UnoCSS 里
+        补一个 `border-r border-#ccc`：naive-ui 把 `--n-*` 写成元素内联样式，
+        工具类和它的胜负取决于类出现顺序而不是特异性，手写那条迟早会输。
+      -->
+      <n-layout-sider bordered :width="layout.navW">
         <bot-navigation />
       </n-layout-sider>
       <n-layout-content class="h-full">

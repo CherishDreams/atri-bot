@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import ChatHeader from "@/components/chat/ChatHeader.vue";
 import Navigation from "@/components/chat/Navigation.vue";
+import { layout } from "@/theme/tokens";
 </script>
 
 <template>
   <n-layout has-sider position="absolute">
-    <n-layout-sider>
+    <!-- 与 bot 侧同一档宽度与同一条分隔线：两边切换时侧栏不会突然变宽变窄。 -->
+    <n-layout-sider bordered :width="layout.navW">
       <navigation />
     </n-layout-sider>
     <n-layout>

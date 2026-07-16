@@ -32,20 +32,12 @@ const mode = computed({
 <template>
   <!-- n-radio-group + n-radio-button 是 naive-ui 里最接近 AstrBot 那个
        v-btn-toggle 的控件：连体按钮、选中项描边高亮。
-       size="small" 是为了压在 60px 顶栏里不显笨重。 -->
+       size="small" 是为了压在 60px 顶栏里不显笨重。
+       高度与字号不再由本组件的 `<style>` 用 `:deep(.n-radio-button)` 抬到 32px——
+       那只是为了和汉堡按钮对齐的补丁，现在两处共用 `theme/tokens.ts` 的
+       `layout.controlH`，由 theme/naive.ts 的 `Radio.buttonHeightSmall` 统一给出。 -->
   <n-radio-group v-model:value="mode" name="atri-platform" size="small" class="atri-mode-switch">
     <n-radio-button value="bot">Bot</n-radio-button>
     <n-radio-button value="chat">Chat</n-radio-button>
   </n-radio-group>
 </template>
-
-<style scoped>
-/**
- * 默认高度 28px，比顶栏里的汉堡按钮（32px）矮一档，两者并排会显得按钮「陷进去」。
- * 抬到 32px 与图标按钮对齐；字号维持 12px，否则 Bot/Chat 会撑得比汉堡按钮还宽。
- */
-.atri-mode-switch :deep(.n-radio-button) {
-  height: 32px;
-  font-size: 12px;
-}
-</style>
