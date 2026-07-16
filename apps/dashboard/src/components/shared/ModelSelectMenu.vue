@@ -6,7 +6,7 @@
     animated
     class="model-select-menu"
   >
-    <div class="model-select-menu-container w-80">
+    <div class="model-select-menu-container w-[20rem]">
       <n-grid cols="24" item-responsive>
         <n-grid-item :span="8">
           <n-select
@@ -21,17 +21,21 @@
       </n-grid>
       <n-divider class="my-2!" />
 
-      <div class="max-h-72 overflow-auto">
+      <div class="max-h-[18rem] overflow-y-auto">
         <button
           type="button"
-          class="flex w-full cursor-pointer items-center justify-between rounded px-2 py-1 text-left hover:bg-#00000010"
+          class="row-base flex w-full items-center justify-between gap-2 px-2 py-1 text-left"
           @click="choose(null)"
         >
           <span>默认模型</span>
-          <span v-if="providers.selection === null">✓</span>
+          <!-- 图标工厂是无函数组件，class 传不进去（会被 props 忽略），
+               所以外层套一个 span 上色——svg 用的是 currentColor，跟着继承。 -->
+          <span v-if="providers.selection === null" class="shrink-0 text-primary">
+            <component :is="CheckIcon" />
+          </span>
         </button>
 
-        <div v-if="filtered.length === 0" class="px-2 py-3 text-sm text-#888">
+        <div v-if="filtered.length === 0" class="px-2 py-3 text-sm text-ink-muted">
           <span v-if="providers.choices.length === 0">
             还没有可用的模型，先去「供应商配置」添加并启用
           </span>
@@ -42,24 +46,26 @@
           v-for="choice in filtered"
           :key="choice.providerId"
           type="button"
-          class="flex w-full cursor-pointer items-center justify-between rounded px-2 py-1 text-left hover:bg-#00000010"
+          class="row-base flex w-full items-center justify-between gap-2 px-2 py-1 text-left"
           @click="choose(choice)"
         >
           <span class="min-w-0">
             <span class="block truncate">{{ choice.model }}</span>
-            <span class="block truncate text-xs text-#999">
+            <span class="block truncate text-xs text-ink-faint">
               {{ choice.source }} · {{ choice.type }}
             </span>
           </span>
-          <span v-if="providers.selection?.model === choice.model">✓</span>
+          <span v-if="providers.selection?.model === choice.model" class="shrink-0 text-primary">
+            <component :is="CheckIcon" />
+          </span>
         </button>
       </div>
     </div>
 
     <template #trigger>
-      <n-text strong class="model-active cursor-pointer select-none">
+      <n-text strong class="model-active flex cursor-pointer select-none items-center gap-1">
         <span class="active-model">{{ providers.activeModel }}</span>
-        <span class="meta-icon">↓</span>
+        <span class="text-ink-faint"><component :is="ChevronIcon" /></span>
       </n-text>
     </template>
   </n-popover>
@@ -69,6 +75,10 @@
 import { useProvidersStore, type ModelChoice } from "@/stores/providers";
 import type { SelectOption } from "naive-ui";
 import { computed, onMounted, ref, watch } from "vue";
+import { icon } from "./icons.js";
+
+const CheckIcon = icon("check");
+const ChevronIcon = icon("chevronDown");
 
 const providers = useProvidersStore();
 

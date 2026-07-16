@@ -4,7 +4,7 @@ import type { HTMLAttributes, VNodeChild } from "vue";
 import { useRouter } from "vue-router";
 import type { DropdownDividerOption, DropdownOption } from "naive-ui";
 import { useAuthStore } from "@/stores/auth";
-import { strokeIcon } from "./icons.js";
+import { icon } from "./icons.js";
 
 /**
  * 顶栏右侧的汉堡菜单：bot 与 chat 两侧共用同一份菜单项与样式，
@@ -23,20 +23,14 @@ const auth = useAuthStore();
  */
 type MenuItem = DropdownOption | DropdownDividerOption;
 
+const MenuIcon = icon("menu");
+
 const menuItems = computed<MenuItem[]>(() => [
-  {
-    key: "console",
-    label: "返回控制台",
-    icon: strokeIcon("M6.5 8h7M10 4.5 13.5 8 10 11.5M2.5 2.5h4v11h-4z"),
-  },
-  { key: "new-session", label: "新建会话", icon: strokeIcon("M8 3v10M3 8h10") },
+  { key: "console", label: "返回控制台", icon: icon("console") },
+  { key: "new-session", label: "新建会话", icon: icon("plus") },
   // 退出登录单独分组：以后新增的普通功能都放上面，它会一直留在最后一段。
   { type: "divider", key: "divider-account" },
-  {
-    key: "logout",
-    label: "退出登录",
-    icon: strokeIcon("M6 2.5H3.5v11H6M10 5.5 12.5 8 10 10.5M12.5 8H6.5"),
-  },
+  { key: "logout", label: "退出登录", icon: icon("logout") },
 ]);
 
 /**
@@ -47,25 +41,13 @@ function menuProps(): HTMLAttributes {
   return { class: "atri-topbar-dropdown" };
 }
 
-/**
- * 圆角与悬停底色走主题变量，比覆盖内部类更稳。
- *
- * 阴影必须嵌在 peers.Popover 下：Dropdown 主题把 Popover 声明为 peer，
- * use-theme 取的是 selfOverrides.peers（源码 _mixins/use-theme.mjs 里
- * peerOverrides: merge({}, builtinOverrides.peers, globalPeersOverrides, peersOverrides)），
- * 写成顶层 Popover 会被静默忽略、阴影仍是默认值。
- * 这组值取自 Vuetify 的 elevation-8 三层阴影，比 naive-ui 默认更实。
+/*
+ * 这里原本挂着一份组件级 `theme-overrides`（borderRadius / optionColorHover /
+ * 以及嵌在 peers.Popover 下的三层阴影）。现在三者都上移到 theme/naive.ts，
+ * 由全站统一给，本组件不再需要局部覆盖。
+ * `peers.Popover` 那条结论（阴影必须挂在 peers 下，写顶层会被静默忽略）
+ * 已经连同原因一起记在 naive.ts 的 Dropdown 段里。
  */
-const dropdownThemeOverrides = {
-  borderRadius: "8px",
-  optionColorHover: "rgba(0, 0, 0, 0.08)",
-  peers: {
-    Popover: {
-      boxShadow:
-        "0 5px 5px -3px rgba(0, 0, 0, 0.2), 0 8px 10px 1px rgba(0, 0, 0, 0.14), 0 3px 14px 2px rgba(0, 0, 0, 0.12)",
-    },
-  },
-};
 
 async function onSelect(key: string): Promise<void> {
   switch (key) {
@@ -89,7 +71,6 @@ async function onSelect(key: string): Promise<void> {
     placement="bottom-end"
     :options="menuItems"
     :menu-props="menuProps"
-    :theme-overrides="dropdownThemeOverrides"
     @select="onSelect"
   >
     <!-- n-dropdown 的触发元素是默认插槽，不是 #trigger 插槽
@@ -97,19 +78,12 @@ async function onSelect(key: string): Promise<void> {
          写成 #trigger 会让默认插槽为空，整个按钮不渲染且控制台只报一句
          slot[trigger] should have exactly one child。 -->
     <button
-      class="atri-topbar-menu grid h-8 w-8 cursor-pointer place-items-center rounded-lg text-[#333] hover:bg-[#f5f5f5]"
+      class="atri-topbar-menu grid h-[var(--atri-control-h)] w-[var(--atri-control-h)] cursor-pointer place-items-center rounded-md text-ink-muted transition-colors hover:bg-tint hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       type="button"
       aria-label="打开菜单"
       aria-haspopup="menu"
     >
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path
-          d="M2 4h12M2 8h12M2 12h12"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-        />
-      </svg>
+      <component :is="MenuIcon" />
     </button>
   </n-dropdown>
 </template>
@@ -119,13 +93,16 @@ async function onSelect(key: string): Promise<void> {
  * n-dropdown 会把菜单 teleport 到 body，scoped 样式打不到它，
  * 所以用 menuProps 打上的专属类名做全局作用域限定，避免影响其它弹出层。
  *
- * 这里的每条规则都要压过 naive-ui 自带的同名规则，所以选择器深度比看上去更啰嗦：
- *   .n-dropdown-menu:not(.n-dropdown-menu--scrollable) { padding: var(--n-padding) }   是 (0,2,0)
- *   .n-dropdown-menu .n-dropdown-option .n-dropdown-option-body::before                 是 (0,3,0)
+ * 剩下的每条都是**naive-ui 没有对应主题键**的东西，只能覆盖内部类：
+ * 选项行自己的圆角（`Dropdown.borderRadius` 只管菜单外框）、
+ * 行内 `::before` 的左右贴边、标签的左内边距、分隔线外边距、以及入场动画。
+ * 圆角/悬停底色/阴影已经上移到 theme/naive.ts，这里不再重复。
+ *
+ * 保留的规则仍需注意选择器深度：naive-ui 用的是
+ * `.n-dropdown-menu .n-dropdown-option .n-dropdown-option-body::before`（0,3,0），
  * 只写一层类名会静默失效（改不动外观，也不报错）。
  */
-.atri-topbar-dropdown.n-dropdown-menu:not(.n-dropdown-menu--scrollable) {
-  padding: 4px;
+.atri-topbar-dropdown {
   min-width: 168px;
 }
 
