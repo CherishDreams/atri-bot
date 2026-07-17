@@ -1,7 +1,7 @@
 <template>
   <div
-    class="provider-card flex w-full cursor-pointer select-none items-center gap-3 rounded-lg border border-#ccc px-3 py-2"
-    :class="active ? 'bg-#00000010 border-#999' : 'hover:bg-#00000008'"
+    class="provider-card flex w-full cursor-pointer select-none items-center gap-3 rounded-lg border-1 border-line px-3 py-2 transition-colors hover:bg-tint"
+    :class="active ? 'border-line-strong bg-primary-soft' : ''"
   >
     <!--
       这里曾是一个空的 `.provider-icon` 占位 div——留一个谁也不填的盒子，
@@ -18,7 +18,7 @@
     <div class="flex min-w-0 flex-col">
       <div class="provider-name truncate font-bold">{{ provider.name || provider.id }}</div>
       <!-- 第二行原本也渲染 provider.name，两行一模一样等于白占一行 -->
-      <div class="provider-baseurl truncate text-xs text-#888">
+      <div class="provider-baseurl truncate text-xs text-ink-muted">
         {{ provider.baseUrl || "默认地址" }}
       </div>
     </div>

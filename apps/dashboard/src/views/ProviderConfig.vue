@@ -1,9 +1,9 @@
 <template>
   <div class="atri-provider-config relative h-full w-full">
     <n-layout has-sider position="absolute">
-      <n-layout-sider :width="300" class="border-r border-#ccc">
+      <n-layout-sider bordered :width="layout.navW">
         <div class="flex items-center justify-between px-4 py-3">
-          <h2 class="text-xl font-bold">供应商源</h2>
+          <h2 class="text-lg font-bold text-ink">供应商源</h2>
           <n-button text type="primary" @click="openCreate">添加供应商</n-button>
         </div>
 
@@ -17,7 +17,7 @@
             <provider-card :provider="source" :active="source.id === providers.selectedSourceId" />
             <button
               type="button"
-              class="absolute right-2 top-2 hidden cursor-pointer rounded px-1 text-xs text-#999 group-hover:block hover:bg-#00000010 hover:text-#f00"
+              class="absolute right-2 top-2 hidden cursor-pointer rounded px-1 text-xs text-ink-faint group-hover:block hover:bg-tint hover:text-danger"
               :aria-label="`删除 ${source.id}`"
               @click.stop="askRemoveSource(source.id)"
             >
@@ -38,11 +38,13 @@
           <n-empty description="左侧还没有可编辑的供应商源，点「添加供应商」开始" />
         </div>
 
-        <div v-else class="mx-auto max-w-3xl p-6">
+        <div v-else class="mx-auto max-w-form p-6">
           <div class="mb-4 flex items-end justify-between gap-4">
             <div class="min-w-0">
-              <h3 class="truncate text-2xl font-bold">{{ providers.selectedSource.id }}</h3>
-              <p class="truncate text-sm text-#888">
+              <h3 class="truncate text-2xl font-bold text-ink">
+                {{ providers.selectedSource.id }}
+              </h3>
+              <p class="truncate text-sm text-ink-muted">
                 {{ providers.selectedSource.baseUrl || "默认地址" }}
               </p>
             </div>
@@ -126,35 +128,44 @@
             </template>
 
             <n-spin :show="providers.loadingModels">
-              <div v-if="providers.availableModels.length === 0" class="py-2 text-sm text-#888">
+              <div
+                v-if="providers.availableModels.length === 0"
+                class="py-2 text-sm text-ink-muted"
+              >
                 点「获取模型列表」从上游拉取；该网关没有 /models 接口时用「自定义模型」手填。
               </div>
               <div v-else class="flex flex-col">
-                <div class="mb-2 text-sm text-#888">
+                <div class="mb-2 text-sm text-ink-muted">
                   共 {{ providers.availableModels.length }} 个，点击即可添加
                 </div>
-                <button
-                  v-for="model in providers.availableModels"
-                  :key="model"
-                  type="button"
-                  class="cursor-pointer truncate rounded px-2 py-1 text-left hover:bg-#00000010"
-                  @click="providers.addModel(model)"
-                >
-                  {{ model }}
-                </button>
+                <!--
+                  封顶高度 + 内部滚动：OpenAI 兼容网关的 /models 动辄几百条，
+                  不封顶的话这张卡片会把整页撑到看不见下面的「已配置的模型」。
+                -->
+                <div class="flex max-h-[18rem] flex-col overflow-y-auto">
+                  <button
+                    v-for="model in providers.availableModels"
+                    :key="model"
+                    type="button"
+                    class="row-base truncate px-2 py-1 text-left text-sm"
+                    @click="providers.addModel(model)"
+                  >
+                    {{ model }}
+                  </button>
+                </div>
               </div>
             </n-spin>
           </n-card>
 
           <n-card size="small" :title="`已配置的模型（${modelsOfSource.length}）`">
-            <div v-if="modelsOfSource.length === 0" class="py-2 text-sm text-#888">
+            <div v-if="modelsOfSource.length === 0" class="py-2 text-sm text-ink-muted">
               暂无已配置的模型，点击上方的「获取模型列表」添加
             </div>
             <div v-else class="flex flex-col gap-2">
               <div
                 v-for="entry in modelsOfSource"
                 :key="entry.id"
-                class="flex items-center gap-3 rounded-lg border border-#eee px-3 py-2"
+                class="flex items-center gap-3 rounded-lg border-1 border-line px-3 py-2"
               >
                 <n-switch
                   :value="entry.enabled !== false"
@@ -169,9 +180,11 @@
                       加载失败
                     </n-tag>
                   </div>
-                  <div class="truncate text-xs text-#888">{{ entry.id }}</div>
+                  <div class="truncate text-xs text-ink-muted">{{ entry.id }}</div>
                   <!-- 加载失败的原因必须露出来：只显示一个红标签，用户不知道去改哪里。 -->
-                  <div v-if="entry.error" class="mt-1 text-xs text-#d03050">{{ entry.error }}</div>
+                  <div v-if="entry.error" class="mt-1 text-xs text-danger">
+                    {{ entry.error }}
+                  </div>
                 </div>
                 <n-button
                   v-if="!entry.default"
@@ -189,13 +202,15 @@
       </n-layout-content>
     </n-layout>
 
-    <!-- 新增源。id 由前端预生成一个不冲突的建议值，改不改都行，但要过服务端校验。 -->
+    <!-- 新增源。id 由前端预生成一个不冲突的建议值，改不改都行，但要过服务端校验。
+         宽度只由 `w-[32rem]` 决定：原先同时写着 `class="max-w-lg"`（=32rem=512px）
+         和 `:style="{ width: '520px' }"`，后者永远被前者钳住，等于白写。
+         `max-w-[92vw]` 保证窄屏不溢出。 -->
     <n-modal
       v-model:show="createVisible"
       preset="card"
       title="添加供应商源"
-      class="max-w-lg"
-      :style="{ width: '520px' }"
+      class="w-[32rem] max-w-[92vw]"
     >
       <n-form label-placement="top">
         <n-form-item label="ID">
@@ -256,6 +271,7 @@ import {
   PROVIDER_TYPES,
   useProvidersStore,
 } from "@/stores/providers";
+import { layout } from "@/theme/tokens";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 const providers = useProvidersStore();
