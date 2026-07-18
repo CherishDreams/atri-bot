@@ -23,14 +23,10 @@ const menuOptions: MenuOption[] = [
     label: () =>
       h(
         RouterLink,
-        {
-          to: {
-            name: "chat-new",
-            params: {
-              lang: "zh-CN",
-            },
-          },
-        },
+        // 原来这里带着 `params: { lang: "zh-CN" }`，但 chat-new 的路径里没有 `:lang`
+        // 段——多余参数不会出现在 URL 里、也不会被路由消费，只会在控制台刷一条
+        // `Discarded invalid param(s) "lang"`。BotNavigation 里同样的问题已经修过。
+        { to: { name: "chat-new" } },
         { default: () => "创建会话" },
       ),
     key: "create-session",
