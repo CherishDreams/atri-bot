@@ -23,6 +23,16 @@ async function onSend(): Promise<void> {
 <template>
   <main class="flex min-w-0 flex-col">
     <div class="flex-1 overflow-y-auto p-4">
+      <!--
+        切会话要再发一次 GET /sessions/:id 才能拿到历史，这里给个反馈。
+        `sessions.loading` 此前被 open() 设值却无人读，正好用它。
+        历史较长时不显示进度，用户会以为点击没生效。
+      -->
+      <p v-if="sessions.loading" class="m-0 py-8 text-center text-xs text-ink-muted">加载中…</p>
+      <p v-else-if="sessions.log.length === 0" class="m-0 py-8 text-center text-xs text-ink-muted">
+        还没有消息，说点什么吧。
+      </p>
+
       <div v-for="m in sessions.log" :key="m.id" class="mb-3">
         <b :class="m.role === 'user' ? 'text-primary' : 'text-success'">{{ roleLabel(m.role) }}</b>
         <!--

@@ -101,12 +101,6 @@ export const useSessionsStore = defineStore("sessions", {
       }
     },
 
-    select(session: Session): void {
-      this.active = session;
-      this.log = [];
-      this.error = null;
-    },
-
     /** 没有活跃会话时兜底创建一个，保证发送永远有落点。 */
     async ensureActive(): Promise<void> {
       if (this.active) return;
