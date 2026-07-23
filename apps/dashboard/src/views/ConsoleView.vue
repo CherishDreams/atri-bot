@@ -53,9 +53,19 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 桌面端保持原三栏 240/1fr/300；窄屏降级为单列堆叠，避免横向溢出。 -->
+  <!--
+    桌面端保持原三栏 240/1fr/300；窄屏降级为单列堆叠，避免横向溢出。
+
+    grid-rows 的 minmax(0,1fr) 不能省。隐式行默认是 auto，行高会被最高的那个
+    item 的内容撑开；容器虽有 h-full + overflow-hidden，行却不受容器高度约束，
+    于是超出部分直接被裁掉——实测 1280x420 视口下行高 1056px 而容器只有 360px。
+    更隐蔽的是 overflow-hidden 的容器仍能接受程序滚动，所以 scrollTop 设得进去、
+    用户却没有滚动条也滚不动，内容彻底不可达。
+    下界必须是 0：`1fr` 等价于 `minmax(auto,1fr)`，auto 仍会被内容顶开。
+    窄屏是 1 列 3 行，所以三行都要封。
+  -->
   <div
-    class="grid h-full grid-cols-1 overflow-hidden bg-canvas text-ink lg:grid-cols-[240px_1fr_300px]"
+    class="grid h-full grid-cols-1 grid-rows-[repeat(3,minmax(0,1fr))] overflow-hidden bg-canvas text-ink lg:grid-cols-[240px_1fr_300px] lg:grid-rows-[minmax(0,1fr)]"
   >
     <SessionList />
 
