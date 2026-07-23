@@ -31,16 +31,6 @@ const status = ref<"loading" | "ready" | "missing">("loading");
 const sessionId = computed(() => String(route.params.sessionId ?? ""));
 const canSend = computed(() => draft.value.trim().length > 0 && !sessions.sending);
 
-/**
- * 角色名本地化。线协议里的 `role` 是英文（`user`/`assistant`），
- * 直接渲染会在整片中文界面里露出两个英文单词；这里只改显示，
- * 判断分支仍然比对原始的 `m.role`。
- */
-const ROLE_LABELS: Record<string, string> = { user: "用户", assistant: "助手" };
-function roleLabel(role: string): string {
-  return ROLE_LABELS[role] ?? role;
-}
-
 let unsubscribe: (() => void) | null = null;
 
 /**
@@ -208,53 +198,13 @@ onBeforeUnmount(() => {
     <template v-else>
       <div ref="scrollBox" class="scroll-y flex-1 px-4 py-3" @scroll="onScroll">
         <div class="mx-auto w-full max-w-[var(--atri-reading-w)]">
-          <p v-if="sessions.log.length === 0" class="m-0 py-8 text-center text-xs text-ink-muted">
-            还没有消息，说点什么吧。
-          </p>
-
-          <div
-            v-for="m in sessions.log"
-            :key="m.id"
-            class="mb-3 flex flex-col"
-            :class="m.role === 'user' ? 'items-end' : 'items-start'"
-          >
-            <span class="mb-1 text-xs text-ink-faint">{{ roleLabel(m.role) }}</span>
-
-            <!--
-              三条分支互斥，必须留在同一条 v-if/v-else-if/v-else 链上：
-              拆成两个独立 v-if 会让有内容的助手消息渲染两遍。
-
-              1. 正在流、还没收到第一个 token 的助手草稿 —— 显示占位文案。
-                 用 streamingId 精确判定，而不是「助手 + 内容为空」：后者会让
-                 content 恰好为空的最终消息永远挂着「正在输入…」。
-                 send() 先往 log 里 push 一条空 content 的草稿，以前这里既渲染
-                 这个空气泡、又在其旁边单独挂一行「正在输入…」，两个东西占一个位置。
-              2. 其余助手消息 —— 走 markdown。回复是模型写的、带格式的那一侧。
-              3. 用户消息 —— 纯文本 + pre-wrap。把输入里的 `*` `_` 当强调符号解析
-                 会排错版，而它本来就没有格式意图。
-
-              助手气泡底色必须是 surface：MarkdownView 的行内代码与代码块用 raised，
-              气泡也是 raised 的话代码记号就完全看不见。
-            -->
-            <div
-              v-if="m.role !== 'user' && !m.content && sessions.streamingId === m.id"
-              class="max-w-[85%] rounded-lg border-1 border-line bg-surface px-3 py-2 text-sm text-ink-faint"
-              aria-live="polite"
-            >
-              正在输入…
-            </div>
-            <markdown-view
-              v-else-if="m.role !== 'user'"
-              :content="m.content"
-              class="max-w-[85%] rounded-lg border-1 border-line bg-surface px-3 py-2 text-sm text-ink"
-            />
-            <div
-              v-else
-              class="max-w-[85%] rounded-lg bg-primary-soft px-3 py-2 text-sm break-words whitespace-pre-wrap text-ink"
-            >
-              {{ m.content }}
-            </div>
-          </div>
+          <!--
+            气泡本体在 shared/MessageList 里，与 bot 控制台共用同一套渲染：
+            两处各写一份的话，同一条消息在两个平台会长得不一样。
+            对齐、底色、角色名三个维度怎么标识发送方、三条分支为什么要留在
+            同一条 v-if 链上，都记在 MessageBubble 里。
+          -->
+          <message-list :messages="sessions.log" :streaming-id="sessions.streamingId" />
         </div>
       </div>
 
