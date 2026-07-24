@@ -141,13 +141,19 @@
                 <!--
                   封顶高度 + 内部滚动：OpenAI 兼容网关的 /models 动辄几百条，
                   不封顶的话这张卡片会把整页撑到看不见下面的「已配置的模型」。
+
+                  shrink-0 是必需的，不是保险。这个容器同时是 flex flex-col，
+                  列里的子项默认 flex-shrink: 1；本该挡住压缩的自动最小尺寸
+                  （min-height: auto）被 truncate 带来的 overflow:hidden 归零了，
+                  于是 143 个按钮被等比压进 288px，只剩 py-1 的上下 padding——
+                  实测每项正好 8px、文字全被截掉。
                 -->
                 <div class="flex max-h-[18rem] flex-col overflow-y-auto">
                   <button
                     v-for="model in providers.availableModels"
                     :key="model"
                     type="button"
-                    class="row-base truncate px-2 py-1 text-left text-sm"
+                    class="row-base shrink-0 truncate px-2 py-1 text-left text-sm"
                     @click="providers.addModel(model)"
                   >
                     {{ model }}
