@@ -26,7 +26,7 @@
   ],
   "overrides": [
     {
-      "files": ["apps/server/test/**", "**/*.test.js"],
+      "files": ["apps/server/test/**", "**/*.test.js", "**/*.test.ts"],
       "rules": {
         "no-underscore-dangle": "off"
       }

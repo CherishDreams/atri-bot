@@ -24,12 +24,13 @@
   "devDependencies": {
     "@hey-api/openapi-ts": "0.99.0",
     "@types/node": "^22.10.2",
+    "@types/ws": "8.18.2",
     "oxfmt": "^0.72.0",
     "oxlint": "^1.87.0",
     "typescript": "^5.7.2"
   },
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.18.0"
   },
   "packageManager": "pnpm@12.11.2"
 }
