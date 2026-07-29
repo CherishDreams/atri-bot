@@ -18,7 +18,7 @@ import {
   ProviderConfigError,
   ProviderConfigStore,
 } from "../src/core/provider/store.js";
-import { configFilePath } from "../src/config/file.js";
+import { configFilePath } from "../src/config/file.ts";
 
 /** 建一个临时 root，并在需要时预置一份配置文件。 */
 function withRoot(preset) {

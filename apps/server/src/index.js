@@ -1,5 +1,5 @@
 import { createApp } from "./app.js";
-import { loadConfig } from "./config/index.js";
+import { loadConfig } from "./config/index.ts";
 
 /**
  * 薄入口：解析配置、构建应用、启动、挂接退出信号。

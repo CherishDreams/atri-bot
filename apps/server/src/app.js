@@ -1,4 +1,4 @@
-import { createLogger } from "./core/logger.js";
+import { createLogger } from "./core/logger.ts";
 import { AgentEngine } from "./core/agent/engine.js";
 import { SessionManager } from "./core/session/manager.js";
 import { ProviderRegistry } from "./core/provider/registry.js";

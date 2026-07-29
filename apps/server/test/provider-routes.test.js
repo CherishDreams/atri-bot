@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createApp } from "../src/app.js";
-import { configFilePath } from "../src/config/file.js";
+import { configFilePath } from "../src/config/file.ts";
 
 /**
  * 一个最小的上游：记下每次收到的请求，并按 `label` 回一句固定的流式回复。
