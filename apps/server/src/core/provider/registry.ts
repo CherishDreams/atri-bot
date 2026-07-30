@@ -1,18 +1,30 @@
+import type {
+  ChatMessage,
+  ChatOptions,
+  ChatReply,
+  ChatStreamOptions,
+  ProviderImpl,
+} from "./types.ts";
+
+/** `list()` 的视图：注册表自己的调试/选路视图，与 API 层的 `ProviderInfo` 不是一个东西。 */
+export interface RegistryEntry {
+  id: string;
+  name: string;
+  models: string[];
+  type: string;
+  default: boolean;
+}
+
 /**
  * 模型 provider 注册表。具体实现（OpenAI 兼容、Anthropic、本地运行时）
  * 自行注册到这里；引擎从不 import 特定 SDK。
  * 新增一个 provider = 调用 register()，无需改动引擎。
  */
 export class ProviderRegistry {
-  #providers = new Map();
-  /** @type {string | null} */
-  #defaultId = null;
+  #providers = new Map<string, ProviderImpl>();
+  #defaultId: string | null = null;
 
-  constructor(config = {}) {
-    this.config = config;
-  }
-
-  register(provider) {
+  register(provider: ProviderImpl): ProviderImpl {
     if (!provider?.id) throw new Error("provider 必须带有 id");
     this.#providers.set(provider.id, provider);
     return provider;
@@ -23,31 +35,31 @@ export class ProviderRegistry {
    * 释放的资源，在途请求已经持有自己的实例引用，因此整体替换是安全的——
    * 那个请求会用它开始时的那份配置跑完，下一个请求才用新配置。
    */
-  clear() {
+  clear(): this {
     this.#providers.clear();
     this.#defaultId = null;
     return this;
   }
 
-  get(id) {
+  get(id: string): ProviderImpl | null {
     return this.#providers.get(id) ?? null;
   }
 
   /** 设为默认 provider（未指定 model 时使用）。 */
-  setDefault(id) {
+  setDefault(id: string): this {
     this.#defaultId = id;
     return this;
   }
 
-  get defaultId() {
+  get defaultId(): string | null {
     return this.#defaultId;
   }
 
-  get size() {
+  get size(): number {
     return this.#providers.size;
   }
 
-  list() {
+  list(): RegistryEntry[] {
     return [...this.#providers.values()].map((p) => ({
       id: p.id,
       name: p.name ?? p.id,
@@ -64,7 +76,7 @@ export class ProviderRegistry {
    * 注意：只有「一个 provider 都没注册」时才会走回声。一旦有 provider，
    * 调用失败必须抛错——把故障伪装成正常回复会让问题永远暴露不出来。
    */
-  async chat({ model, messages, signal }) {
+  async chat({ model, messages, signal }: ChatOptions): Promise<ChatReply> {
     const provider = this.#resolveFor(model);
     if (!provider) return echoReply(model, messages);
     return provider.chat({ model: this.#modelFor(provider, model), messages, signal });
@@ -74,7 +86,7 @@ export class ProviderRegistry {
    * 流式补全。provider 未实现 `chatStream` 时退化为一次性回调整段文本，
    * 这样引擎无需为「这家支不支持流式」分叉。
    */
-  async chatStream({ model, messages, onDelta, signal }) {
+  async chatStream({ model, messages, onDelta, signal }: ChatStreamOptions): Promise<ChatReply> {
     const provider = this.#resolveFor(model);
     if (!provider) {
       const reply = echoReply(model, messages);
@@ -102,7 +114,7 @@ export class ProviderRegistry {
    * 第二、三级保留原有回退：上游的模型名常常比配置里列的更全，
    * 本地列表只是一个提示，不该成为硬闸门。
    */
-  #resolveFor(model) {
+  #resolveFor(model: string | undefined): ProviderImpl | null {
     if (model) {
       const byId = this.#providers.get(model);
       if (byId) return byId;
@@ -126,7 +138,7 @@ export class ProviderRegistry {
    * 前者要换成该实例实际绑定的模型，否则会把 "deepseek/deepseek-chat"
    * 这种东西当模型名发给上游，上游回一句「模型不存在」。
    */
-  #modelFor(provider, model) {
+  #modelFor(provider: ProviderImpl, model: string | undefined): string | undefined {
     if (!model) return provider.models?.[0];
     if (model === provider.id) return provider.models?.[0] ?? model;
     return model;
@@ -134,7 +146,7 @@ export class ProviderRegistry {
 }
 
 /** 未注册任何 provider 时的兜底，保证骨架可运行。 */
-function echoReply(model, messages) {
+function echoReply(model: string | undefined, messages: ChatMessage[]): ChatReply {
   const last = messages.at(-1);
   return {
     role: "assistant",

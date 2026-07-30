@@ -1,6 +1,6 @@
-import { toNetworkError, toProviderError } from "./errors.js";
+import { toNetworkError, toProviderError } from "./errors.ts";
 import { normalizeModels } from "./openai.js";
-import { parseSseJson } from "./sse.js";
+import { parseSseJson } from "./sse.ts";
 
 /**
  * Anthropic provider（`POST /v1/messages`）。

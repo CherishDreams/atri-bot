@@ -1,10 +1,10 @@
 import { createLogger } from "./core/logger.ts";
 import { AgentEngine } from "./core/agent/engine.js";
-import { SessionManager } from "./core/session/manager.js";
-import { ProviderRegistry } from "./core/provider/registry.js";
+import { SessionManager } from "./core/session/manager.ts";
+import { ProviderRegistry } from "./core/provider/registry.ts";
 import { createProviders, readDefaultProviderId } from "./core/provider/factory.js";
 import { ProviderConfigStore } from "./core/provider/store.js";
-import { AuthManager } from "./core/auth/manager.js";
+import { AuthManager } from "./core/auth/manager.ts";
 import { PluginManager } from "./plugins/manager.js";
 import { AdapterManager } from "./adapters/manager.js";
 import { createHttpServer } from "./api/server.js";
@@ -21,8 +21,8 @@ export async function createApp(config) {
   // 必须早于 HTTP 服务启动：未配置口令时要先把随机口令写进配置文件。
   await auth.init();
 
-  const sessions = new SessionManager(config);
-  const providers = new ProviderRegistry(config);
+  const sessions = new SessionManager();
+  const providers = new ProviderRegistry();
 
   // provider 配置的读写入口。启动时读一次，之后每次界面改动都经由它落盘。
   const providerConfig = new ProviderConfigStore(config, logger);

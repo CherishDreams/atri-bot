@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseSse, parseSseJson } from "../src/core/provider/sse.js";
+import { parseSse, parseSseJson } from "../src/core/provider/sse.ts";
 import { AnthropicProvider, splitMessages } from "../src/core/provider/anthropic.js";
 import { OpenAIProvider } from "../src/core/provider/openai.js";
-import { ProviderError } from "../src/core/provider/errors.js";
+import { ProviderError } from "../src/core/provider/errors.ts";
 import { createProviders, readDefaultProviderId } from "../src/core/provider/factory.js";
-import { ProviderRegistry } from "../src/core/provider/registry.js";
+import { ProviderRegistry } from "../src/core/provider/registry.ts";
 
 /** 用内存流拼出 fetch 的 Response，避免测试依赖真实网络。 */
 function sseResponse(chunks, { status = 200 } = {}) {

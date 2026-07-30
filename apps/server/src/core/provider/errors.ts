@@ -10,19 +10,36 @@
  * 都必须让使用者看见。否则故障会被伪装成一条正常回复，问题永远暴露不出来。
  */
 export class ProviderError extends Error {
-  constructor(message, { provider, status, detail, cause } = {}) {
-    super(message, cause !== undefined ? { cause } : undefined);
+  /** 出错 provider 的 id，便于分辨是哪一个后端。 */
+  provider?: string;
+  /** 上游 HTTP 状态码；网络层失败时为 undefined。 */
+  status?: number;
+  /** 上游返回的原始错误文本（已截断），只用于排查，不直接展示给终端用户。 */
+  detail?: string;
+
+  constructor(message: string, { provider, status, detail, cause }: ProviderErrorOptions = {}) {
+    super(message, cause === undefined ? undefined : { cause });
     this.name = "ProviderError";
-    /** 出错 provider 的 id，便于分辨是哪一个后端。 */
     this.provider = provider;
-    /** 上游 HTTP 状态码；网络层失败时为 undefined。 */
     this.status = status;
-    /** 上游返回的原始错误文本（已截断），只用于排查，不直接展示给终端用户。 */
     this.detail = detail;
   }
 }
 
-const STATUS_HINTS = {
+interface ProviderErrorOptions {
+  provider?: string;
+  status?: number;
+  detail?: string;
+  /** 上游/网络层的原始失败。`Error` 的 cause 是 `unknown`，这里不替它收窄。 */
+  cause?: unknown;
+}
+
+interface ProviderLabel {
+  provider?: string;
+  model?: string;
+}
+
+const STATUS_HINTS: Record<string, string> = {
   400: "请求被上游拒绝",
   401: "密钥无效或未提供",
   403: "无权访问该模型或接口",
@@ -34,21 +51,28 @@ const STATUS_HINTS = {
 };
 
 /** 把上游状态码翻成一句人话。5xx 统一按上游故障处理。 */
-export function describeStatus(status) {
-  if (STATUS_HINTS[status]) return STATUS_HINTS[status];
+export function describeStatus(status: number): string {
+  const hint = STATUS_HINTS[status];
+  if (hint) return hint;
   if (status >= 500) return "上游服务出错";
   return `上游返回 ${status}`;
 }
 
+/** JSON 之外还可能是纯文本/HTML，所以任何对象形状都在这里收窄一次。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 /** 从上游响应体里尽量抠出一句可读的错误说明。 */
-export function extractUpstreamMessage(payload) {
+export function extractUpstreamMessage(payload: unknown): string {
   if (!payload) return "";
   if (typeof payload === "string") return payload;
+  if (!isRecord(payload)) return "";
 
   // OpenAI / Anthropic 都把说明放在 error.message；部分兼容网关只给 message 或 detail。
   const nested = payload.error;
   if (typeof nested === "string") return nested;
-  if (nested && typeof nested.message === "string") return nested.message;
+  if (isRecord(nested) && typeof nested.message === "string") return nested.message;
   if (typeof payload.message === "string") return payload.message;
   if (typeof payload.detail === "string") return payload.detail;
   return "";
@@ -58,8 +82,11 @@ export function extractUpstreamMessage(payload) {
  * 读取失败响应的正文并拼装成 ProviderError。
  * 上游正文可能是 JSON、纯文本甚至 HTML，所以解析失败一律退回原文。
  */
-export async function toProviderError(response, { provider, model } = {}) {
-  let payload;
+export async function toProviderError(
+  response: Response,
+  { provider, model }: ProviderLabel = {},
+): Promise<ProviderError> {
+  let payload: unknown;
   let text = "";
   try {
     text = await response.text();
@@ -86,17 +113,28 @@ export async function toProviderError(response, { provider, model } = {}) {
 }
 
 /** 网络层失败（DNS、连接被拒、超时、被 abort）也统一成 ProviderError。 */
-export function toNetworkError(err, { provider, model } = {}) {
-  if (err?.name === "AbortError") {
+export function toNetworkError(
+  err: unknown,
+  { provider, model }: ProviderLabel = {},
+): ProviderError {
+  // 不做 `err instanceof Error` 的整体收窄：被 abort 的值可能来自不同实现，
+  // 而我们真正需要的只是 name/message/cause.code 这几个字段在不在。
+  const bag = isRecord(err) ? err : {};
+  const name = typeof bag.name === "string" ? bag.name : undefined;
+  const message = typeof bag.message === "string" ? bag.message : "";
+  const cause = isRecord(bag.cause) ? bag.cause : undefined;
+  const causeCode = cause && typeof cause.code === "string" ? cause.code : "";
+  const ownCode = typeof bag.code === "string" ? bag.code : "";
+
+  if (name === "AbortError") {
     return new ProviderError(`provider「${provider}」的请求已被取消`, {
       provider,
-      detail: String(err?.message ?? ""),
+      detail: message,
       cause: err,
     });
   }
 
-  const cause = err?.cause?.code ?? err?.code ?? "";
-  const detail = [err?.name, err?.message, cause].filter(Boolean).join(" / ");
+  const detail = [name, message, causeCode || ownCode].filter(Boolean).join(" / ");
   const label = model
     ? `provider「${provider}」调用模型 ${model} 失败`
     : `provider「${provider}」调用失败`;

@@ -12,13 +12,20 @@
  * 出错也最难从集成测试里定位的一环（跨 chunk 切断、CRLF、多行 data）。
  */
 
+/** 一帧 SSE 事件。三个字段都可能有空值：注释帧没有 data，未声明 event 的帧用默认名。 */
+export interface SseFrame {
+  event: string;
+  data: string;
+  id: string;
+}
+
 /**
  * 把 fetch 的 ReadableStream 逐帧解析成 SSE 事件。
  *
- * @param {ReadableStream<Uint8Array>} body
- * @returns {AsyncGenerator<{event: string, data: string, id: string}>}
+ * 返回类型交给推断（async generator 的三元组类型在不同 TS 版本里写法不同，
+ * 显式标注反而会把工程绑在某个版本上）。
  */
-export async function* parseSse(body) {
+export async function* parseSse(body: ReadableStream<Uint8Array>) {
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -44,8 +51,8 @@ export async function* parseSse(body) {
 }
 
 /** 解析单个事件块。返回 null 表示这帧没有 data，可以忽略（例如注释帧）。 */
-function parseFrame(frame) {
-  const dataLines = [];
+function parseFrame(frame: string): SseFrame | null {
+  const dataLines: string[] = [];
   let event = "";
   let id = "";
 
@@ -70,6 +77,13 @@ function parseFrame(frame) {
   return { event, data: dataLines.join("\n"), id };
 }
 
+/** `parseSseJson` 的产出：`payload` 为 null 有两种含义，靠 `data` 是否为 `[DONE]` 区分。 */
+export interface SseJsonFrame {
+  event: string;
+  data: string;
+  payload: unknown;
+}
+
 /**
  * 逐帧读取 `data:` 的 JSON 载荷，跳过无法解析的帧。
  *
@@ -77,13 +91,15 @@ function parseFrame(frame) {
  * 为了一个心跳把整条流打断得不偿失。但 `[DONE]` 这类哨兵值必须让调用方看见，
  * 所以原样回传字符串，由调用方判断。
  */
-export async function* parseSseJson(body) {
+export async function* parseSseJson(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<SseJsonFrame> {
   for await (const frame of parseSse(body)) {
     if (frame.data === "[DONE]") {
       yield { event: frame.event, data: "[DONE]", payload: null };
       continue;
     }
-    let payload;
+    let payload: unknown;
     try {
       payload = JSON.parse(frame.data);
     } catch {

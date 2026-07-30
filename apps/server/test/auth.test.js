@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ABSOLUTE_TTL_MS, IDLE_TTL_MS, AuthManager } from "../src/core/auth/manager.js";
+import { ABSOLUTE_TTL_MS, IDLE_TTL_MS, AuthManager } from "../src/core/auth/manager.ts";
 
 /** 静默 logger，避免测试输出被日志刷屏。 */
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };

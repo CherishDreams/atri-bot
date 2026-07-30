@@ -1,5 +1,5 @@
-import { toNetworkError, toProviderError } from "./errors.js";
-import { parseSseJson } from "./sse.js";
+import { toNetworkError, toProviderError } from "./errors.ts";
+import { parseSseJson } from "./sse.ts";
 
 /**
  * OpenAI 兼容 provider（`POST /chat/completions`）。

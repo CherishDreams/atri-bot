@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { createApp } from "../src/app.js";
 import { AnthropicProvider } from "../src/core/provider/anthropic.js";
 import { OpenAIProvider, normalizeModels } from "../src/core/provider/openai.js";
-import { ProviderError } from "../src/core/provider/errors.js";
+import { ProviderError } from "../src/core/provider/errors.ts";
 
 /**
  * 起一个假的上游：按 `respond` 决定怎么回，并把收到的请求记下来。
