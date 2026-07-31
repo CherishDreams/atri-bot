@@ -1,5 +1,13 @@
-import { OpenAIProvider } from "./openai.js";
-import { AnthropicProvider } from "./anthropic.js";
+import type { Logger } from "../logger.ts";
+import type {
+  ProviderEntryConfig,
+  ProvidersFileConfig,
+  ProviderSourceEntryConfig,
+} from "../../config/file.ts";
+import { errorMessage } from "../errors.ts";
+import { OpenAIProvider } from "./openai.ts";
+import { AnthropicProvider } from "./anthropic.ts";
+import type { ProviderConstructor, ProviderImpl, ProviderOptions } from "./types.ts";
 
 /**
  * 按配置构造 provider。
@@ -33,7 +41,7 @@ import { AnthropicProvider } from "./anthropic.js";
  */
 
 /** 认得的实现类型。写成表而不是 if-else，新增厂商只需加一行。 */
-const TYPES = {
+const TYPES: Record<string, ProviderConstructor> = {
   openai: OpenAIProvider,
   anthropic: AnthropicProvider,
 };
@@ -41,11 +49,14 @@ const TYPES = {
 /** 保留键：`providers.default` 存的是默认 provider 的 id，不是 provider 配置。 */
 export const DEFAULT_PROVIDER_KEY = "default";
 
+/** 「源 + 实例」合并后的形状。老的内联写法下源就是实例自己。 */
+interface MergedConfig extends ProviderEntryConfig, ProviderSourceEntryConfig {}
+
 /**
  * 从配置里解析出默认 provider 的 id。
  * 兼容两种写法：`providers.default` 字符串，或某个 provider 上的 `default: true`。
  */
-export function readDefaultProviderId(providersConfig = {}) {
+export function readDefaultProviderId(providersConfig: ProvidersFileConfig = {}): string | null {
   const explicit = providersConfig[DEFAULT_PROVIDER_KEY];
   if (typeof explicit === "string" && explicit) return explicit;
 
@@ -54,6 +65,12 @@ export function readDefaultProviderId(providersConfig = {}) {
     if (value && typeof value === "object" && value.default === true) return key;
   }
   return null;
+}
+
+interface CreateProvidersOptions {
+  /** `providerSources` 段。 */
+  sources?: Record<string, ProviderSourceEntryConfig>;
+  logger?: Logger;
 }
 
 /**
@@ -65,14 +82,13 @@ export function readDefaultProviderId(providersConfig = {}) {
  *
  * `enabled: false` 是**有意关闭**，不算错误：跳过构造、不记进 `errors`，
  * 否则每次启动都会有一条「故障」日志，把真正的故障淹掉。
- *
- * @param {Record<string, any>} providersConfig `providers` 段
- * @param {{sources?: Record<string, any>, logger?: any}} [options] `providerSources` 段
- * @returns {{providers: object[], errors: {id: string, message: string}[]}}
  */
-export function createProviders(providersConfig = {}, { sources = {}, logger } = {}) {
-  const providers = [];
-  const errors = [];
+export function createProviders(
+  providersConfig: ProvidersFileConfig = {},
+  { sources = {}, logger }: CreateProvidersOptions = {},
+): { providers: ProviderImpl[]; errors: { id: string; message: string }[] } {
+  const providers: ProviderImpl[] = [];
+  const errors: { id: string; message: string }[] = [];
 
   for (const [id, raw] of Object.entries(providersConfig)) {
     if (id === DEFAULT_PROVIDER_KEY) continue;
@@ -83,9 +99,9 @@ export function createProviders(providersConfig = {}, { sources = {}, logger } =
 
     // 两层合并：provider 级覆盖源级。没有 source 时 merged 就是 raw 自己，
     // 老的内联写法因此继续可用。
-    let merged = raw;
+    let merged: MergedConfig = raw;
     if (typeof raw.source === "string" && raw.source) {
-      const source = sources?.[raw.source];
+      const source = sources[raw.source];
       if (!source || typeof source !== "object") {
         errors.push({ id, message: `未找到 id 为「${raw.source}」的 provider source` });
         continue;
@@ -109,7 +125,7 @@ export function createProviders(providersConfig = {}, { sources = {}, logger } =
     }
 
     try {
-      const provider = new Impl({
+      const options = {
         ...merged,
         id,
         name: merged.name ?? id,
@@ -118,7 +134,13 @@ export function createProviders(providersConfig = {}, { sources = {}, logger } =
         models: merged.model ? [merged.model] : (merged.models ?? []),
         // 密钥挂在源上（一个源一份凭证），环境变量也按源的 id 取。
         apiKey: resolveApiKey(raw.source ?? id, merged),
-      });
+      } as ProviderOptions;
+      // 上面那个 `as` 是**边界收窄**，不是糊错误：配置文件里的 provider 段是任意 JSON
+      // （`FileConfig` 带索引签名，未知键原样透传），而构造器只认领 `ProviderOptions`
+      // 里列出的那几个键。逐键校验发生在 `ProviderConfigStore` 写入时，这里不重复。
+      // 之所以不逐键挑出来构造：那会逼 factory 认识每家的私有字段（`version`、`maxTokens`…），
+      // 「新增厂商只需加一行 TYPES」这个性质就没了。
+      const provider = new Impl(options);
       providers.push(provider);
       // 用 `logger?.info?.(` 而不是 `logger?.info(`：可选链只保护 logger 本身，
       // 若传入的 logger 没有 info 方法，后面那种写法会直接抛
@@ -127,7 +149,7 @@ export function createProviders(providersConfig = {}, { sources = {}, logger } =
         `provider 已加载: ${id} (${type}${provider.models.length ? `, ${provider.models.length} 个模型` : ""})`,
       );
     } catch (err) {
-      errors.push({ id, message: err.message });
+      errors.push({ id, message: errorMessage(err) });
     }
   }
 
@@ -143,7 +165,7 @@ export function createProviders(providersConfig = {}, { sources = {}, logger } =
  * 用环境变量而不是只认配置文件，是因为 `atri.config.json` 虽然已被 .gitignore
  * 忽略，但把明文密钥写在磁盘文件里仍然不如注入环境变量安全。
  */
-function resolveApiKey(id, raw) {
+function resolveApiKey(id: string, raw: MergedConfig): string {
   if (typeof raw.apiKey === "string" && raw.apiKey) return raw.apiKey;
 
   const envKey = `ATRI_${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;

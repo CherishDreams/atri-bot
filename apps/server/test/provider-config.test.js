@@ -17,7 +17,7 @@ import {
   MIN_TIMEOUT_MS,
   ProviderConfigError,
   ProviderConfigStore,
-} from "../src/core/provider/store.js";
+} from "../src/core/provider/store.ts";
 import { configFilePath } from "../src/config/file.ts";
 
 /** 建一个临时 root，并在需要时预置一份配置文件。 */

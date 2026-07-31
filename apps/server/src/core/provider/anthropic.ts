@@ -1,5 +1,16 @@
 import { toNetworkError, toProviderError } from "./errors.ts";
-import { normalizeModels } from "./openai.js";
+import { normalizeModels } from "./openai.ts";
+import type {
+  AnthropicChatPayload,
+  AnthropicStreamPayload,
+  ChatMessage,
+  ChatOptions,
+  ChatReply,
+  ChatStreamOptions,
+  ListModelsOptions,
+  OpenAIModelsPayload,
+  ProviderOptions,
+} from "./types.ts";
 import { parseSseJson } from "./sse.ts";
 
 /**
@@ -17,18 +28,17 @@ import { parseSseJson } from "./sse.ts";
  * 鉴权用 `x-api-key`，并且必须带 `anthropic-version`。
  */
 export class AnthropicProvider {
-  /**
-   * @param {object} options
-   * @param {string} options.id
-   * @param {string} [options.name]
-   * @param {string[]} [options.models]
-   * @param {string} [options.baseUrl] 例如 `https://api.anthropic.com/v1`
-   * @param {string} [options.apiKey]
-   * @param {string} [options.version] anthropic-version 请求头
-   * @param {number} [options.maxTokens] 必填字段的取值，默认 8192
-   * @param {Record<string,string>} [options.headers]
-   * @param {number} [options.timeoutMs]
-   */
+  id: string;
+  name: string;
+  models: string[];
+  type = "anthropic";
+  baseUrl: string;
+  apiKey: string;
+  version: string;
+  maxTokens: number;
+  headers: Record<string, string>;
+  timeoutMs: number;
+
   constructor({
     id,
     name,
@@ -39,12 +49,11 @@ export class AnthropicProvider {
     maxTokens = 8192,
     headers = {},
     timeoutMs = 120_000,
-  } = {}) {
+  }: ProviderOptions = {}) {
     if (!id) throw new Error("anthropic provider 必须带有 id");
     this.id = id;
     this.name = name ?? id;
     this.models = models;
-    this.type = "anthropic";
     this.baseUrl = (baseUrl ?? "https://api.anthropic.com/v1").replace(/\/+$/, "");
     this.apiKey = apiKey ?? "";
     this.version = version;
@@ -53,12 +62,15 @@ export class AnthropicProvider {
     this.timeoutMs = timeoutMs;
   }
 
-  #endpoint() {
+  #endpoint(): string {
     return `${this.baseUrl}/messages`;
   }
 
-  #request(messages, { model, stream, signal }) {
-    const headers = {
+  #request(
+    messages: ChatMessage[],
+    { model, stream, signal }: { model?: string; stream: boolean; signal?: AbortSignal },
+  ): { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal } {
+    const headers: Record<string, string> = {
       "content-type": "application/json",
       "anthropic-version": this.version,
       ...this.headers,
@@ -82,16 +94,17 @@ export class AnthropicProvider {
     };
   }
 
-  async chat({ model, messages, signal }) {
+  async chat({ model, messages, signal }: ChatOptions): Promise<ChatReply> {
     const response = await this.#fetch(messages, { model, stream: false, signal });
     if (!response.ok) throw await toProviderError(response, { provider: this.id, model });
 
-    const payload = await response.json();
+    // `response.json()` 交出 unknown（JSON 边界），只在此处认领要用的那几个键。
+    const payload = (await response.json()) as AnthropicChatPayload;
     const text = extractText(payload?.content);
     return { role: "assistant", content: text };
   }
 
-  async chatStream({ model, messages, onDelta, signal }) {
+  async chatStream({ model, messages, onDelta, signal }: ChatStreamOptions): Promise<ChatReply> {
     const response = await this.#fetch(messages, { model, stream: true, signal });
     if (!response.ok) throw await toProviderError(response, { provider: this.id, model });
     if (!response.body) {
@@ -103,12 +116,14 @@ export class AnthropicProvider {
 
     let content = "";
     for await (const frame of parseSseJson(response.body)) {
+      // JSON.parse 交出的是 unknown，这里认领 Anthropic 流式帧里的那几个键。
+      const chunk = frame.payload as AnthropicStreamPayload | null;
       // 事件类型在 `event:` 字段里，而不是 data 载荷内。
       switch (frame.event) {
         case "message_stop":
           return { role: "assistant", content };
         case "content_block_delta": {
-          const delta = frame.payload?.delta?.text;
+          const delta = chunk?.delta?.text;
           if (typeof delta === "string" && delta.length > 0) {
             content += delta;
             onDelta?.(delta);
@@ -116,7 +131,7 @@ export class AnthropicProvider {
           break;
         }
         case "error": {
-          const detail = frame.payload?.error?.message ?? JSON.stringify(frame.payload?.error);
+          const detail = chunk?.error?.message ?? JSON.stringify(chunk?.error);
           throw await toProviderError(new Response(detail, { status: 502 }), {
             provider: this.id,
             model,
@@ -130,7 +145,10 @@ export class AnthropicProvider {
     return { role: "assistant", content };
   }
 
-  async #fetch(messages, options) {
+  async #fetch(
+    messages: ChatMessage[],
+    options: { model?: string; stream: boolean; signal?: AbortSignal },
+  ): Promise<Response> {
     try {
       return await fetch(this.#endpoint(), {
         ...this.#request(messages, options),
@@ -148,17 +166,17 @@ export class AnthropicProvider {
    * 所以复用同一个 `normalizeModels`。差异只在鉴权头：这里用 `x-api-key`
    * 与 `anthropic-version`，而不是 `Authorization: Bearer`。
    *
-   * @returns {Promise<string[]>} 去重并按字典序排好的模型 id
+   * @returns 去重并按字典序排好的模型 id
    */
-  async listModels({ signal } = {}) {
-    const headers = {
+  async listModels({ signal }: ListModelsOptions = {}): Promise<string[]> {
+    const headers: Record<string, string> = {
       accept: "application/json",
       "anthropic-version": this.version,
       ...this.headers,
     };
     if (this.apiKey) headers["x-api-key"] = this.apiKey;
 
-    let response;
+    let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/models`, {
         method: "GET",
@@ -170,9 +188,22 @@ export class AnthropicProvider {
     }
     if (!response.ok) throw await toProviderError(response, { provider: this.id });
 
-    const payload = await response.json();
+    const payload = (await response.json()) as OpenAIModelsPayload;
     return normalizeModels(payload?.data);
   }
+}
+
+/** `tool` 角色在 Anthropic 里的表达：一条 user 消息 + 一个 `tool_result` 内容块。 */
+interface AnthropicToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string;
+}
+
+/** Anthropic 的 messages 项：文本消息用 string，工具结果用内容块数组。 */
+interface AnthropicBodyMessage {
+  role: "user" | "assistant";
+  content: string | AnthropicToolResultBlock[];
 }
 
 /**
@@ -181,9 +212,12 @@ export class AnthropicProvider {
  * 注意所有 system 消息合并成一个字符串：Anthropic 的 `system` 是单个字段
  * 而不是数组，多条 system 直接覆盖会让前面几条静默消失。
  */
-export function splitMessages(messages) {
-  const systems = [];
-  const body = [];
+export function splitMessages(messages: ChatMessage[]): {
+  system: string;
+  body: AnthropicBodyMessage[];
+} {
+  const systems: string[] = [];
+  const body: AnthropicBodyMessage[] = [];
 
   for (const message of messages) {
     if (message.role === "system") {
@@ -222,8 +256,8 @@ export function splitMessages(messages) {
  * user 消息很常见（例如用户连发两条）。不合并会被上游以
  * 「messages: roles must alternate」拒绝。
  */
-function mergeAdjacent(messages) {
-  const merged = [];
+function mergeAdjacent(messages: AnthropicBodyMessage[]): AnthropicBodyMessage[] {
+  const merged: AnthropicBodyMessage[] = [];
   for (const message of messages) {
     const prev = merged.at(-1);
     if (prev && prev.role === message.role && typeof prev.content === "string") {
@@ -238,7 +272,7 @@ function mergeAdjacent(messages) {
 }
 
 /** 从 Anthropic 的 content blocks 里取出纯文本，忽略 thinking / tool_use 等块。 */
-function extractText(content) {
+function extractText(content: AnthropicChatPayload["content"]): string {
   if (!Array.isArray(content)) return "";
   return content
     .filter((block) => block?.type === "text" && typeof block.text === "string")
@@ -246,7 +280,7 @@ function extractText(content) {
     .join("");
 }
 
-function withTimeout(signal, timeoutMs) {
+function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }

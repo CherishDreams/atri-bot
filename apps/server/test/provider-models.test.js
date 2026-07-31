@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createApp } from "../src/app.js";
-import { AnthropicProvider } from "../src/core/provider/anthropic.js";
-import { OpenAIProvider, normalizeModels } from "../src/core/provider/openai.js";
+import { AnthropicProvider } from "../src/core/provider/anthropic.ts";
+import { OpenAIProvider, normalizeModels } from "../src/core/provider/openai.ts";
 import { ProviderError } from "../src/core/provider/errors.ts";
 
 /**

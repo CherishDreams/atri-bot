@@ -6,8 +6,8 @@ import { API_PREFIX, WS_PATH, APP_NAME } from "@atri/shared";
 import { Router } from "./router.js";
 import { sendJson, sendError, readJson, startSse, sendSse } from "./http.js";
 import { parseCookies, setSessionCookie, clearSessionCookie, requireAuth } from "./auth.js";
-import { createProviders } from "../core/provider/factory.js";
-import { httpStatusForError } from "../core/provider/store.js";
+import { createProviders } from "../core/provider/factory.ts";
+import { httpStatusForError } from "../core/provider/store.ts";
 
 /**
  * 写操作的响应形状。

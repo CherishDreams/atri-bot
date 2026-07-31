@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseSse, parseSseJson } from "../src/core/provider/sse.ts";
-import { AnthropicProvider, splitMessages } from "../src/core/provider/anthropic.js";
-import { OpenAIProvider } from "../src/core/provider/openai.js";
+import { AnthropicProvider, splitMessages } from "../src/core/provider/anthropic.ts";
+import { OpenAIProvider } from "../src/core/provider/openai.ts";
 import { ProviderError } from "../src/core/provider/errors.ts";
-import { createProviders, readDefaultProviderId } from "../src/core/provider/factory.js";
+import { createProviders, readDefaultProviderId } from "../src/core/provider/factory.ts";
 import { ProviderRegistry } from "../src/core/provider/registry.ts";
 
 /** 用内存流拼出 fetch 的 Response，避免测试依赖真实网络。 */
