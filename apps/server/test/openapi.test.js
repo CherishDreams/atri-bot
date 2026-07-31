@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createApp } from "../src/app.js";
+import { createApp } from "../src/app.ts";
 
 /**
  * `apps/server/openapi.json` 是手写的规格，前端 SDK 由它生成。

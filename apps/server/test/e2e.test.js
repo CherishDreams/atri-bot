@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { createApp } from "../src/app.js";
+import { createApp } from "../src/app.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const staticDir = join(repoRoot, "apps", "dashboard", "dist");

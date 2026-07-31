@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import { createApp } from "../src/app.js";
+import { createApp } from "../src/app.ts";
 import { resolveStaticPath } from "../src/api/server.js";
 import { DEFAULT_AUTH_COOKIE_NAME, API_PREFIX } from "@atri/shared";
 

@@ -484,7 +484,14 @@ export function createHttpServer(deps) {
   return {
     listen: (port, host) => new Promise((done) => server.listen(port, host, done)),
     // 暴露实际绑定端口，使 `port: 0`（随机端口）可用于测试与并行启动。
-    address: () => server.address(),
+    // 暴露实际绑定端口，使 `port: 0`（随机端口）可用于测试与并行启动。
+    // `server.address()` 的类型是 `AddressInfo | string | null`，而这里只需要 TCP 那一支：
+    // 真在 listen 之前被调用属于调用方用法错误，给一句中文错而不是留一个 TypeError。
+    address: () => {
+      const bound = server.address();
+      if (bound === null || typeof bound === "string") throw new Error("服务尚未监听");
+      return bound;
+    },
     /**
      * 真实注册的 API 路由。测试拿它比对 `apps/server/openapi.json`——
      * 那份规格是手写的，需要一道「代码与规格没走散」的检查。

@@ -13,7 +13,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createApp } from "../src/app.js";
+import { createApp } from "../src/app.ts";
 import { configFilePath } from "../src/config/file.ts";
 
 /**

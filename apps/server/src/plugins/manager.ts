@@ -1,7 +1,64 @@
 import { readdir, stat } from "node:fs/promises";
-import { join, resolve, basename } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { PluginContext } from "./context.js";
+import type { PluginInfo, PluginStatus } from "@atri/shared";
+import type { Logger } from "../core/logger.ts";
+import { errorMessage } from "../core/errors.ts";
+import { PluginContext, type PluginContextConfig } from "./context.ts";
+
+/**
+ * 插件契约（`index.js` 默认导出）：
+ *   `{ id, name?, version?, description?, config?, setup?(ctx), teardown?() }`
+ * 也支持默认导出一个工厂函数 `(shared) => 上述对象`。
+ *
+ * 这些类型从 `context.ts`/本文件导出，**源码即契约**：仓库不再产出 `.d.ts`
+ * （见 `docs/architecture.md` 的插件章节），插件作者要类型就直接读这里。
+ */
+export interface PluginDefinition {
+  id: string;
+  name?: string;
+  version?: string;
+  description?: string;
+  /** 与运行期配置合并后交给 `ctx.config`。 */
+  config?: PluginContextConfig;
+  setup?: (ctx: PluginContext) => void | Promise<void>;
+  teardown?: () => void | Promise<void>;
+}
+
+export type PluginFactory = (shared: PluginShared) => PluginDefinition | Promise<PluginDefinition>;
+
+/** 传给插件工厂的共享能力。 */
+export interface PluginShared {
+  logger: Logger;
+  config: PluginManagerConfig;
+}
+
+/** PluginManager 实际读写的配置键。 */
+export interface PluginManagerConfig {
+  pluginDirs?: string[];
+}
+
+/** 运行时记录：模块之外由框架持有的那一份状态。 */
+interface PluginRecord {
+  id: string;
+  dir: string;
+  plugin: PluginDefinition;
+  ctx: PluginContext | null;
+  status: PluginStatus;
+  error: string | null;
+  meta: PluginMeta;
+}
+
+/** `shared.PluginInfo` 里没有 `error`，而列表接口要带它，所以这里是扩展而不是平行。 */
+export type PluginView = PluginInfo & { error: string | null };
+
+interface PluginMeta {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  dir: string;
+}
 
 /**
  * 插件管理器：负责插件的发现、加载、重载、启用/禁用与卸载。
@@ -13,28 +70,26 @@ import { PluginContext } from "./context.js";
  *   - 实例：每次加载都由框架创建一个插件实例，并把它的副作用登记到
  *     `PluginContext`。卸载 = 逆序释放 effect + 调 teardown + 丢弃实例。
  *     所以即便模块仍在模块图里，实例也能干净地销毁与重建。
- *
- * 插件契约（`index.js` 默认导出）：
- *   { id, name?, version?, description?, config?, setup?(ctx), teardown?() }
- * 也支持默认导出一个工厂函数 `(shared) => 上述对象`。
  */
 export class PluginManager {
-  /** @type {Map<string, object>} 插件 id -> 运行时记录 */
-  #records = new Map();
+  #records = new Map<string, PluginRecord>();
   /** 带自增序号的缓存击穿计数器，保证每次重载都能拿到新代码 */
   #revision = 0;
 
-  constructor(config, logger) {
+  config: PluginManagerConfig;
+  logger: Logger;
+
+  constructor(config: PluginManagerConfig, logger: Logger) {
     this.config = config;
     this.logger = logger;
   }
 
   /** 供插件使用的共享能力。 */
-  get shared() {
+  get shared(): PluginShared {
     return { logger: this.logger, config: this.config };
   }
 
-  async loadAll() {
+  async loadAll(): Promise<void> {
     for (const dir of this.config.pluginDirs ?? []) {
       await this.#scanDir(dir);
     }
@@ -42,7 +97,7 @@ export class PluginManager {
     this.logger.info(`已加载 ${active.length} 个插件`);
   }
 
-  async #scanDir(dir) {
+  async #scanDir(dir: string): Promise<void> {
     let entries;
     try {
       entries = await readdir(dir);
@@ -54,6 +109,8 @@ export class PluginManager {
       const pluginDir = join(dir, name);
       const info = await stat(pluginDir).catch(() => null);
       if (!info?.isDirectory()) continue;
+      // 这两个 "index.js" 是**磁盘上的入口文件名**，不是 import 说明符：
+      // 插件由用户手写、按约定提供 index.js，本仓迁到 TS 不改变这个契约。
       const entry = join(pluginDir, "index.js");
       const ok = await stat(entry).catch(() => null);
       if (!ok) continue;
@@ -62,21 +119,23 @@ export class PluginManager {
   }
 
   /** 加载（或重新加载）某个插件目录，返回其对外元数据。 */
-  async load(pluginDir) {
+  async load(pluginDir: string): Promise<PluginView> {
     const dir = resolve(pluginDir);
     const module = await this.#importFresh(join(dir, "index.js"));
-    const def = module.default ?? module;
-
-    const plugin = typeof def === "function" ? await def(this.shared) : def;
+    // 插件是用户手写的 JS，模块形状只能在运行时收窄：默认导出优先，
+    // 工厂写法先调用它拿到定义，然后统一由下面的 `!plugin?.id` 守卫把关。
+    const exported: unknown = module.default ?? module;
+    const plugin = (
+      typeof exported === "function" ? await exported(this.shared) : exported
+    ) as PluginDefinition;
     if (!plugin?.id) {
       throw new Error(`插件缺少 id: ${dir}`);
     }
     const id = plugin.id;
 
     // 同 id 已在运行则先销毁旧实例，避免重复。
-    if (this.#records.has(id)) {
-      await this.#teardown(this.#records.get(id));
-    }
+    const existing = this.#records.get(id);
+    if (existing) await this.#teardown(existing);
 
     const ctx = new PluginContext({
       id,
@@ -88,10 +147,10 @@ export class PluginManager {
       await plugin.setup?.(ctx);
     } catch (err) {
       await ctx.dispose();
-      throw new Error(`插件 ${id} 初始化失败: ${err.message}`, { cause: err });
+      throw new Error(`插件 ${id} 初始化失败: ${errorMessage(err)}`, { cause: err });
     }
 
-    this.#records.set(id, {
+    const record: PluginRecord = {
       id,
       dir,
       plugin,
@@ -105,13 +164,16 @@ export class PluginManager {
         description: plugin.description,
         dir: basename(dir),
       },
-    });
+    };
+    this.#records.set(id, record);
     this.logger.info(`插件已加载: ${id}`);
-    return this.#view(this.#records.get(id));
+    // 直接视图化刚建好的那份记录：`#records.get()` 在类型上可能为空，
+    // 而这里注定存在，握着引用比再查一次更清楚。
+    return this.#view(record);
   }
 
   /** 重载单个插件：销毁旧实例 -> 重新 import 模块 -> 创建新实例。 */
-  async reload(id) {
+  async reload(id: string): Promise<PluginView> {
     const rec = this.#records.get(id);
     if (!rec) throw new Error(`未知插件: ${id}`);
     this.logger.info(`正在重载插件: ${id}`);
@@ -120,7 +182,7 @@ export class PluginManager {
   }
 
   /** 卸载单个插件：释放副作用并销毁实例，从管理器中移除。 */
-  async unload(id) {
+  async unload(id: string): Promise<{ id: string; unloaded: boolean }> {
     const rec = this.#records.get(id);
     if (!rec) throw new Error(`未知插件: ${id}`);
     await this.#teardown(rec);
@@ -134,7 +196,7 @@ export class PluginManager {
    * 禁用 = 释放副作用、标记为 disabled（保留元数据以便再启用）；
    * 启用 = 从原目录重新加载。
    */
-  async setEnabled(id, enabled) {
+  async setEnabled(id: string, enabled: boolean): Promise<PluginView> {
     const rec = this.#records.get(id);
     if (!rec) throw new Error(`未知插件: ${id}`);
 
@@ -152,31 +214,33 @@ export class PluginManager {
   }
 
   /** 释放一个记录的运行时资源（teardown + 逆序 effect），保留记录本身。 */
-  async #teardown(rec) {
+  async #teardown(rec: PluginRecord): Promise<void> {
     try {
       await rec.plugin.teardown?.();
     } catch (err) {
-      this.logger.warn(`插件 ${rec.id} teardown 失败: ${err.message}`);
+      this.logger.warn(`插件 ${rec.id} teardown 失败: ${errorMessage(err)}`);
     }
     await rec.ctx?.dispose();
   }
 
   /** 用带版本参数的 URL 重新 import，绕过 ESM 模块缓存。 */
-  async #importFresh(entryPath) {
+  async #importFresh(entryPath: string): Promise<Record<string, unknown>> {
     const url = `${pathToFileURL(entryPath).href}?v=${++this.#revision}`;
+    // 动态 import 的返回类型在这里就是未定的：插件是用户手写的 JS。
+    // 真正的收窄发生在下面（`module.default ?? module` + `!plugin?.id` 守卫）。
     return import(url);
   }
 
-  get(id) {
+  get(id: string): PluginView | null {
     const rec = this.#records.get(id);
     return rec ? this.#view(rec) : null;
   }
 
-  list() {
+  list(): PluginView[] {
     return [...this.#records.values()].map((r) => this.#view(r));
   }
 
-  #view(rec) {
+  #view(rec: PluginRecord): PluginView {
     return {
       ...rec.meta,
       status: rec.status,
@@ -185,7 +249,7 @@ export class PluginManager {
     };
   }
 
-  async unloadAll() {
+  async unloadAll(): Promise<void> {
     for (const rec of this.#records.values()) {
       await this.#teardown(rec);
     }

@@ -1,20 +1,21 @@
 import { createLogger } from "./core/logger.ts";
-import { AgentEngine } from "./core/agent/engine.js";
+import { AgentEngine } from "./core/agent/engine.ts";
 import { SessionManager } from "./core/session/manager.ts";
 import { ProviderRegistry } from "./core/provider/registry.ts";
 import { createProviders, readDefaultProviderId } from "./core/provider/factory.ts";
 import { ProviderConfigStore } from "./core/provider/store.ts";
 import { AuthManager } from "./core/auth/manager.ts";
-import { PluginManager } from "./plugins/manager.js";
-import { AdapterManager } from "./adapters/manager.js";
+import { PluginManager } from "./plugins/manager.ts";
+import { AdapterManager } from "./adapters/manager.ts";
 import { createHttpServer } from "./api/server.js";
+import type { AppConfig } from "./config/index.ts";
 
 /**
  * 组合根（composition root）：唯一知道各部件如何拼装的地方。
  * 下层通过构造函数注入协作者，彼此互不感知，
  * 从而让 core/ 不掺杂任何传输层细节。
  */
-export async function createApp(config) {
+export async function createApp(config: AppConfig) {
   const logger = createLogger(config.logLevel);
 
   const auth = new AuthManager(config, logger);
@@ -69,7 +70,7 @@ export async function createApp(config) {
   rebuildProviders();
 
   const plugins = new PluginManager(config, logger);
-  const engine = new AgentEngine({ config, sessions, providers, plugins, logger });
+  const engine = new AgentEngine({ sessions, providers, logger });
 
   const adapters = new AdapterManager({ config, engine, logger });
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PluginManager } from "../src/plugins/manager.js";
+import { PluginManager } from "../src/plugins/manager.ts";
 
 /** 建一个临时插件目录，写入给定源码的 index.js。 */
 async function makePlugin(source) {
