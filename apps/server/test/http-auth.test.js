@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { createApp } from "../src/app.ts";
-import { resolveStaticPath } from "../src/api/server.js";
+import { resolveStaticPath } from "../src/api/server.ts";
 import { DEFAULT_AUTH_COOKIE_NAME, API_PREFIX } from "@atri/shared";
 
 /**

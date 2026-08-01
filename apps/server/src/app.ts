@@ -7,7 +7,7 @@ import { ProviderConfigStore } from "./core/provider/store.ts";
 import { AuthManager } from "./core/auth/manager.ts";
 import { PluginManager } from "./plugins/manager.ts";
 import { AdapterManager } from "./adapters/manager.ts";
-import { createHttpServer } from "./api/server.js";
+import { createHttpServer } from "./api/server.ts";
 import type { AppConfig } from "./config/index.ts";
 
 /**
