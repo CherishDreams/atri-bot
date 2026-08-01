@@ -6,10 +6,34 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { createApp } from "../src/app.ts";
+import type { LoginResponse } from "@atri/shared";
+import { makeTestConfig } from "./helpers/config.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const staticDir = join(repoRoot, "apps", "dashboard", "dist");
 const distIndex = join(staticDir, "index.html");
+
+/**
+ * 只回 `{ error }` 的失败响应。
+ *
+ * 为什么要给 `Response` 单独标一个类型：`Response.json()` 在 undici 的类型里是
+ * `Promise<unknown>`（JSON 里可以有任何东西），而有一条断言写成
+ * `assert.equal((await bad.json()).error, "账号或密码错误")`——断言序列在本次迁移中
+ * 逐字冻结（有快照比对），收窄插不进那一行，只能标在**取到响应的那一行**（不是断言行）。
+ * `error` 这个键名来自 `src/api/http.ts` 的 `sendError`：所有失败响应都是
+ * `{ error: "<中文说明>" }`。
+ */
+type ErrorResponse = Omit<Response, "json"> & { json(): Promise<{ error: string }> };
+
+/**
+ * WS 握手的结果，做成**以 `opened` 为判别式**的联合。
+ *
+ * 理由同 `ws-auth.test.ts` 的 `ConnectResult`：有断言紧接着读 `wsResult.frame.type`，
+ * 而那一行逐字冻结、插不进守卫；判成联合之后，上一行的
+ * `assert.equal(wsResult.opened, true, …)` 就把类型筛到了「带第一帧」那一支。
+ * 连不上时本来就没有帧 —— 与迁移前 `done({ opened: false })` 的实际形状一致。
+ */
+type WsHandshake = { opened: true; frame: { type: string } } | { opened: false; frame?: undefined };
 
 /**
  * 端到端冒烟：在同一个进程里验证「构建产物 + 鉴权闸门 + SPA 回退」协同工作，
@@ -23,23 +47,11 @@ test(
   { skip: !existsSync(distIndex) && "未找到 apps/dashboard/dist，先运行 pnpm build" },
   async (t) => {
     const root = mkdtempSync(join(tmpdir(), "atri-e2e-"));
-    const config = {
-      root,
-      host: "127.0.0.1",
-      port: 0,
-      logLevel: "error",
-      dataDir: join(root, "data"),
-      pluginDirs: [],
-      adapters: {},
-      providers: {},
-      auth: {
-        adminUser: "admin",
-        adminPassword: "e2e-secret",
-        cookieName: "atri_session",
-        cookieSecure: false,
-        staticDir,
-      },
-    };
+    // 共享 fixture 的默认值与迁移前这里手抄的那份逐项相同（host / port 0 / logLevel /
+    // dataDir / pluginDirs / adapters / providers，`"atri_session"` 就是
+    // `DEFAULT_AUTH_COOKIE_NAME`、`cookieSecure: false`）。这里的 `staticDir` 是**真实的构建产物**
+    // ——本用例要的就是 `cache-control: no-cache` 与带哈希资源的长缓存，不能换成假目录。
+    const config = makeTestConfig({ root, staticDir, adminPassword: "e2e-secret" });
 
     const app = await createApp(config);
     await app.start();
@@ -71,11 +83,12 @@ test(
     assert.match(asset.headers.get("cache-control") ?? "", /max-age=/, "带哈希的资源应当长缓存");
 
     // 口令错误：401、不下发 Cookie、消息不泄露账号是否存在。
-    const bad = await fetch(`${api}/auth/login`, {
+    // `as ErrorResponse` 的理由见该类型注释：下面那条断言直接读 `bad.json()` 的 `error`。
+    const bad = (await fetch(`${api}/auth/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ username: "admin", password: "wrong" }),
-    });
+    })) as ErrorResponse;
     assert.equal(bad.status, 401);
     assert.equal(bad.headers.getSetCookie().length, 0, "登录失败绝不能签发 Cookie");
     assert.equal((await bad.json()).error, "账号或密码错误");
@@ -91,14 +104,21 @@ test(
     assert.ok(setCookie.includes("HttpOnly"), "会话 Cookie 必须 HttpOnly");
     assert.ok(setCookie.includes("SameSite=Lax"));
     const cookie = setCookie.split(";")[0];
+    // 守卫：`split(";")[0]` 在 `noUncheckedIndexedAccess` 下是 `string | undefined`，
+    // 而下面几处要把它塞进 `headers`（fetch 的 Header 值不接受 undefined）。
+    // 上一行已经断言过 Set-Cookie 非空，这里为空只可能是解析坏了。
+    assert.ok(cookie, "登录响应的 Set-Cookie 里必须有 name=value 分段");
 
     // 带 Cookie 后可读受保护数据。
     assert.equal((await fetch(`${api}/sessions`, { headers: { cookie } })).status, 200);
-    const me = await (await fetch(`${api}/auth/me`, { headers: { cookie } })).json();
+    const meRes = await fetch(`${api}/auth/me`, { headers: { cookie } });
+    // 边界收窄：`Response.json()` 的类型是 `Promise<unknown>`，而 `/auth/me` 的响应体就是
+    // 线协议里的 `LoginResponse`（见 `src/api/server.ts`：`{ user, expiresAt }`）。
+    const me = (await meRes.json()) as LoginResponse;
     assert.equal(me.user.username, "admin");
 
     // WS 复用同一 Cookie 完成握手，浏览器无需为鉴权做任何额外动作。
-    const wsResult = await new Promise((done) => {
+    const wsResult = await new Promise<WsHandshake>((done) => {
       const ws = new WebSocket(`ws://127.0.0.1:${app.address().port}/ws`, { headers: { cookie } });
       const timer = setTimeout(() => {
         ws.terminate();

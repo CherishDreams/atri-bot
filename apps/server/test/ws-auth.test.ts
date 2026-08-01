@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,30 +7,50 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { createApp } from "../src/app.ts";
 import { DEFAULT_AUTH_COOKIE_NAME, API_PREFIX, WS_PATH } from "@atri/shared";
+import { makeTestConfig } from "./helpers/config.ts";
 
 /**
  * WebSocket 鉴权。浏览器无法为 WS 握手自定义请求头，令牌只能来自 Cookie，
  * 因此这里用 `ws` 客户端手工构造 Cookie 头，覆盖「被拒」与「被放行」两侧。
  */
-async function startServer(t) {
+
+/**
+ * `tryConnect` 的选项。
+ *
+ * 与 `http-auth.test.ts` 的 `CallOptions` 同一个理由：`cookie` **没有默认值**
+ * （它的「缺省」就是「不带 Cookie 头」，函数体靠真值判断区分），让 TS 从解构默认值
+ * 推断会把 options 推成只有 `headers` 一个键，于是每个传 cookie 的调用点都成 TS2353。
+ */
+interface ConnectOptions {
+  /** 完整的 `name=value`；不传即匿名握手。 */
+  cookie?: string | null;
+  headers?: Record<string, string>;
+}
+
+/**
+ * 握手结果，刻意做成**以 `opened` 为判别式**的联合。
+ *
+ * 为什么不是 `{ opened: boolean; ws?: WebSocket }`：有断言紧接着读 `result.ws` 与
+ * `first.ws`，而断言序列在本次迁移中逐字冻结（有快照比对），守卫插不进那些行。
+ * 判成联合之后，上一行的 `assert.equal(result.opened, true)` 就能把类型筛到
+ * `opened: true` 那一支（严格模式下 `assert.equal` 就是 `strictEqual`，带
+ * `asserts actual is T` 签名），于是 `ws` 必然存在。
+ * 被拒的那一支没有 `ws` —— 与迁移前 `done({ opened: false, code, error })` 的实际形状一致。
+ */
+type ConnectResult =
+  | { opened: true; ws: WebSocket; code: null; error: null }
+  | { opened: false; ws?: undefined; code: number | null; error: Error | null };
+
+async function startServer(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), "atri-ws-"));
-  const config = {
+  // 共享 fixture 的默认值与迁移前这里手抄的那份逐项相同（host / port 0 / logLevel /
+  // dataDir / pluginDirs / adapters / providers，`"atri_session"` 就是
+  // `DEFAULT_AUTH_COOKIE_NAME`、`cookieSecure: false`），口令与 staticDir 用本文件的值。
+  const config = makeTestConfig({
     root,
-    host: "127.0.0.1",
-    port: 0,
-    logLevel: "error",
-    dataDir: join(root, "data"),
-    pluginDirs: [],
-    adapters: {},
-    providers: {},
-    auth: {
-      adminUser: "admin",
-      adminPassword: "pw-for-test",
-      cookieName: DEFAULT_AUTH_COOKIE_NAME,
-      cookieSecure: false,
-      staticDir: join(root, "dist"),
-    },
-  };
+    staticDir: join(root, "dist"),
+    adminPassword: "pw-for-test",
+  });
 
   const app = await createApp(config);
   await app.start();
@@ -41,8 +62,8 @@ async function startServer(t) {
 }
 
 /** 建立连接并给出结果：`opened` 表示握手是否通过。 */
-function tryConnect(url, { cookie, headers = {} } = {}) {
-  return new Promise((done) => {
+function tryConnect(url: string, { cookie, headers = {} }: ConnectOptions = {}) {
+  return new Promise<ConnectResult>((done) => {
     const ws = new WebSocket(url, {
       headers: { ...(cookie ? { cookie } : {}), ...headers },
     });
@@ -64,7 +85,10 @@ function tryConnect(url, { cookie, headers = {} } = {}) {
     ws.on("unexpected-response", (_req, res) => {
       clearTimeout(timer);
       ws.terminate();
-      done({ opened: false, code: res.statusCode, error: null });
+      // `IncomingMessage.statusCode` 在 node 的类型上是 `number | undefined`
+      // （还没读到状态行时就是 undefined）。这里 `?? null` 不改变判定：断言看的是
+      // 「被拒时状态码必须是 401」， undefined 与 null 都会让那条断言同样地红。
+      done({ opened: false, code: res.statusCode ?? null, error: null });
     });
     ws.on("close", (code) => {
       clearTimeout(timer);
@@ -73,17 +97,22 @@ function tryConnect(url, { cookie, headers = {} } = {}) {
   });
 }
 
-async function loginCookie(http) {
+async function loginCookie(http: string): Promise<string> {
   const res = await fetch(`${http}${API_PREFIX}/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ username: "admin", password: "pw-for-test" }),
   });
   assert.equal(res.status, 200);
-  return res.headers
+  const header = res.headers
     .getSetCookie()
-    .find((h) => h.startsWith(`${DEFAULT_AUTH_COOKIE_NAME}=`))
-    .split(";")[0];
+    .find((h) => h.startsWith(`${DEFAULT_AUTH_COOKIE_NAME}=`));
+  // 用抛错而不是 `assert.ok` 做守卫：这两处只是将类型上的「可能没有」落到运行时，
+  // 本文件的断言序列是比对基线，能少加一行就少加一行。
+  if (!header) throw new Error("登录响应里没有会话 Cookie");
+  const [pair] = header.split(";");
+  if (!pair) throw new Error("Set-Cookie 没有 name=value 分段");
+  return pair;
 }
 
 test("无 Cookie 的 WS 握手被拒（401），不会进入连接", async (t) => {

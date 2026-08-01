@@ -12,29 +12,113 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { Logger } from "../src/core/logger.ts";
+import type {
+  FileConfig,
+  ProviderEntryConfig,
+  ProviderSourceEntryConfig,
+} from "../src/config/file.ts";
 import {
   MAX_TIMEOUT_MS,
   MIN_TIMEOUT_MS,
   ProviderConfigError,
   ProviderConfigStore,
 } from "../src/core/provider/store.ts";
+import type { WriteInput } from "../src/core/provider/store.ts";
 import { configFilePath } from "../src/config/file.ts";
 
+/** 这些用例断言的是返回值与落盘内容，不看日志（store 只在删掉默认项时 warn 一条）。 */
+const quietLogger: Logger = {
+  debug() {},
+  info() {},
+  warn() {},
+  error() {},
+  child() {
+    return quietLogger;
+  },
+};
+
+/**
+ * 落盘文件里 store 会写的那两个键的「已写入」形状。
+ *
+ * `FileConfig` 的键**全可选**（文件由人手写，任何键都可能缺），照它读 `read()` 的结果会
+ * 到处是 `undefined`；而这里的用例读的都是自己刚写进去的那几个 id，所以把它们声明成必有键。
+ * 这只描述这几条 fixture，不是在声称运行时一定存在。
+ */
+interface WrittenFile extends FileConfig {
+  providerSources: Record<string, ProviderSourceEntryConfig> & {
+    s: ProviderSourceEntryConfig;
+    deepseek: ProviderSourceEntryConfig;
+  };
+  providers: Record<string, ProviderEntryConfig | string> & {
+    p: ProviderEntryConfig;
+  };
+}
+
+/**
+ * store 的「读不到就失败」视图。
+ *
+ * `getSource()` / `getProvider()` 的返回带 `| null`（未知 id 就是 null，「注入式配置退化为
+ * 只读」那条用例正专门断言这个 null）。多数用例读的是刚写进去的那条，那一步分支走不到，
+ * 于是包一层：读到 null 就明确失败。这样断言不必每处补 `!`，真读不到时报的是「没有这条
+ * 记录」，而不是 `Cannot read properties of null`（看不出是被测行为坏了还是 fixture 写错）。
+ *
+ * 其余方法逐个转发，**不用原型链委托**：`ProviderConfigStore` 的状态在私有字段里
+ * （`#root` / `#baseline`），`this` 换成别的对象就读不到，brand 检查会直接 TypeError。
+ */
+function strictStore(store: ProviderConfigStore) {
+  return {
+    createSource: (input?: WriteInput) => store.createSource(input),
+    updateSource: (id: string, patch?: WriteInput) => store.updateSource(id, patch),
+    deleteSource: (id: string, options?: { cascade?: boolean }) => store.deleteSource(id, options),
+    createProvider: (input?: WriteInput) => store.createProvider(input),
+    updateProvider: (id: string, patch?: WriteInput) => store.updateProvider(id, patch),
+    deleteProvider: (id: string) => store.deleteProvider(id),
+    get sources() {
+      return store.sources;
+    },
+    get providers() {
+      return store.providers;
+    },
+    get defaultId() {
+      return store.defaultId;
+    },
+    getSource(id: string) {
+      const found = store.getSource(id);
+      if (!found) throw new Error(`没有 source「${id}」`);
+      return found;
+    },
+    getProvider(id: string) {
+      const found = store.getProvider(id);
+      if (!found) throw new Error(`没有 provider「${id}」`);
+      return found;
+    },
+  };
+}
+
 /** 建一个临时 root，并在需要时预置一份配置文件。 */
-function withRoot(preset) {
+function withRoot(preset?: FileConfig) {
   const root = mkdtempSync(join(tmpdir(), "atri-store-"));
+  // store 提到外面构造，是因为 `strict` 要包**同一个**实例。构造只存基线、不读盘
+  // （读发生在 `#current()`），所以放在写预置文件之前不改变行为。
+  const store = new ProviderConfigStore({ root }, quietLogger);
   if (preset !== undefined) {
     writeFileSync(configFilePath(root), JSON.stringify(preset, null, 2) + "\n", "utf8");
   }
   return {
     root,
-    store: new ProviderConfigStore({ root }, { warn() {}, error() {} }),
-    read: () => JSON.parse(readFileSync(configFilePath(root), "utf8")),
+    store,
+    strict: strictStore(store),
+    // `read()` 是 JSON 边界：解析结果按 `WrittenFile` 认领（见该类型的说明）。
+    read: (): WrittenFile => JSON.parse(readFileSync(configFilePath(root), "utf8")),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
 
-async function withStore(preset, fn) {
+async function withStore(
+  preset: FileConfig | undefined,
+  fn: (ctx: ReturnType<typeof withRoot>) => void,
+) {
   const ctx = withRoot(preset);
   try {
     await fn(ctx);
@@ -96,7 +180,7 @@ test("校验：timeoutMs 必须是 1000..600000 之间的整数", async () => {
 });
 
 test("校验：timeoutMs 缺省时用 120000 而不是留下 undefined", async () => {
-  await withStore({}, ({ store }) => {
+  await withStore({}, ({ strict: store }) => {
     const source = store.createSource({ id: "s" });
     assert.equal(source.timeoutMs, 120_000);
     // 落盘的也必须是具体数字：undefined 会被 JSON.stringify 直接删掉，
@@ -147,7 +231,7 @@ test("校验：update 不存在的东西回 404", async () => {
 // --- enabled / default 的语义 -----------------------------------------------
 
 test("语义：新建 provider 默认启用", async () => {
-  await withStore({}, ({ store }) => {
+  await withStore({}, ({ strict: store }) => {
     store.createSource({ id: "s" });
     // 刻意不继承 AstrBot 的 enabled:false 默认值——否则「配置里明明有、
     // 就是选不到」这种状态很难自查。
@@ -202,7 +286,7 @@ test("语义：deleteProvider 返回被删的 id，删不存在的回 404", asyn
 test("语义：不能把保留键 default 当成 provider 来删", async () => {
   await withStore(
     { providers: { p: { type: "openai", models: ["m"] }, default: "p" } },
-    ({ store }) => {
+    ({ strict: store }) => {
       // 保留键不是一个 provider，删它应当被当成「找不到」，而不是把默认项顺手删掉。
       assert.throws(() => store.deleteProvider("default"), /未找到/);
       assert.equal(store.getProvider("p").id, "p");
@@ -214,7 +298,7 @@ test("语义：不能把保留键 default 当成 provider 来删", async () => {
 // --- patch 语义 -------------------------------------------------------------
 
 test("patch：只覆盖出现的字段，其余保持原值", async () => {
-  await withStore({}, ({ store }) => {
+  await withStore({}, ({ strict: store }) => {
     store.createSource({ id: "s", baseUrl: "https://a/v1", apiKey: "k", timeoutMs: 5000 });
     store.updateSource("s", { name: "改名" });
     const after = store.getSource("s");
@@ -226,7 +310,7 @@ test("patch：只覆盖出现的字段，其余保持原值", async () => {
 });
 
 test("patch：源 id 不可改（写了也被忽略，不当成新源）", async () => {
-  await withStore({}, ({ store }) => {
+  await withStore({}, ({ strict: store }) => {
     store.createSource({ id: "s" });
     store.updateSource("s", { id: "换名字" });
     assert.equal(store.getSource("s").id, "s");
@@ -235,7 +319,7 @@ test("patch：源 id 不可改（写了也被忽略，不当成新源）", async
 });
 
 test("patch：能覆盖 provider 的 model 与 source", async () => {
-  await withStore({}, ({ store }) => {
+  await withStore({}, ({ strict: store }) => {
     store.createSource({ id: "a" });
     store.createSource({ id: "b" });
     store.createProvider({ id: "p", source: "a", model: "m1" });
@@ -247,7 +331,7 @@ test("patch：能覆盖 provider 的 model 与 source", async () => {
 });
 
 test("patch：改成引用不存在的源要拒绝", async () => {
-  await withStore({}, ({ store }) => {
+  await withStore({}, ({ strict: store }) => {
     store.createSource({ id: "a" });
     store.createProvider({ id: "p", source: "a", model: "m" });
     assert.throws(() => store.updateProvider("p", { source: "不存在" }), /不存在/);
@@ -270,7 +354,7 @@ test("patch：把 default 置 false 只对「本来就是默认」的那一项�
 });
 
 test("patch：未知字段一律忽略，不会漏进配置文件", async () => {
-  await withStore({}, ({ store, read }) => {
+  await withStore({}, ({ strict: store, read }) => {
     store.createSource({ id: "s" });
     store.updateSource("s", { 乱写的: "值", type: "anthropic" });
     assert.equal(store.getSource("s").type, "anthropic");
@@ -346,7 +430,7 @@ test("落盘：写进 atri.config.json 后能原样读回", async () => {
     assert.equal(file.providers.p.model, "deepseek-chat");
 
     // 换一个 store 实例读同一份文件，结果应完全一致（这才是「落盘成功」）。
-    const fresh = new ProviderConfigStore({ root }, {});
+    const fresh = strictStore(new ProviderConfigStore({ root }, quietLogger));
     assert.equal(fresh.getSource("deepseek").apiKey, "sk-1");
   });
 });
@@ -383,7 +467,7 @@ test("落盘：配置文件损坏时拒绝写入，而不是当成空配置覆�
   const root = mkdtempSync(join(tmpdir(), "atri-store-"));
   try {
     writeFileSync(configFilePath(root), "{ 这不是 JSON", "utf8");
-    const store = new ProviderConfigStore({ root }, {});
+    const store = new ProviderConfigStore({ root }, quietLogger);
     assert.throws(() => store.createSource({ id: "s" }), /不是合法 JSON/);
     // 关键：原文件必须原封不动。若被当成空配置写回，用户其它设置就没了。
     assert.equal(readFileSync(configFilePath(root), "utf8"), "{ 这不是 JSON");

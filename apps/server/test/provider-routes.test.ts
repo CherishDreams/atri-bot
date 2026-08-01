@@ -8,21 +8,66 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { TestContext } from "node:test";
 import { createServer } from "node:http";
+import type { Server } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createApp } from "../src/app.ts";
 import { configFilePath } from "../src/config/file.ts";
+import type { FileConfig } from "../src/config/file.ts";
+import type { ProviderEntry, SourceEntry } from "../src/core/provider/store.ts";
+import { makeTestConfig } from "./helpers/config.ts";
+import type { Session } from "@atri/shared";
+
+/**
+ * 桩上游记下的一次补全请求。
+ * `url` 在 Node 的类型上本来就可为 undefined，不是把它写宽了。
+ */
+interface SeenRequest {
+  url: string | undefined;
+  /** 上游收到的请求体。桩上游只会被打 `POST /chat/completions`，所以是补全参数。 */
+  body: { model?: string; messages?: unknown };
+}
+
+/**
+ * 桩上游的请求日志。
+ *
+ * `at()` 在 `Array<T>` 上的返回类型带 `| undefined`（越界就是 undefined），而断言行在本次
+ * 迁移里逐字冻结（有快照比对），那条读 `seen.at(-1).body.model` 的断言加不了守卫。
+ * 用例读的都是**刚刚发生的那一次请求**（上一行才发过消息），所以这里把返回收窄成
+ * `SeenRequest`；真的没有请求时运行时仍是 TypeError，与迁移前 `any[]` 的表现一致。
+ */
+interface RequestLog extends Array<SeenRequest> {
+  at(index: number): SeenRequest;
+}
+
+/**
+ * 桩上游绑定后取它的 TCP 端口。
+ *
+ * `server.address()` 的类型是 `AddressInfo | string | null`（TCP / Unix socket / 未监听
+ * 共用一个方法）。这里用运行时判断而不是 `as AddressInfo`：真没监听上时要得到一句
+ * 说得通的错误，而不是在模板串里冒出 TypeError（`src/api/server.ts` 的 `address()` 同形）。
+ */
+function listenPort(server: Server): number {
+  const bound = server.address();
+  if (bound === null || typeof bound === "string") {
+    throw new Error(`桩上游未绑定 TCP 端口（address=${String(bound)}）`);
+  }
+  return bound.port;
+}
 
 /**
  * 一个最小的上游：记下每次收到的请求，并按 `label` 回一句固定的流式回复。
  * 回复里带上 label，就能从聊天结果反推「这次到底打了哪个上游」。
  */
-async function startUpstream(label) {
-  const seen = [];
-  const server = createServer((req, res) => {
+async function startUpstream(label: string) {
+  // 暴露出去时收窄成 RequestLog，理由见那儿的说明。
+  const seen: SeenRequest[] = [];
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
@@ -33,11 +78,13 @@ async function startUpstream(label) {
       res.end();
     });
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
+  // `listen` 的回调类型是 `() => void`，直接把 Promise 的 resolve 递过去会带上一个
+  // 必填参数而不匹配，所以包一层空参箭头函数。
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = listenPort(server);
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
-    seen,
+    seen: seen as RequestLog,
     stop: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -49,27 +96,13 @@ async function startUpstream(label) {
  * 别的内容」或「启动时就带着一条坏 provider」的场景——这两种都必须在
  * `createApp` 之前就位，事后改文件是模拟不出来的（注册表不会因此重建）。
  */
-async function startApp(t, preset) {
+async function startApp(t: TestContext, preset?: FileConfig) {
   const root = mkdtempSync(join(tmpdir(), "atri-routes-"));
   t?.after(() => rmSync(root, { recursive: true, force: true }));
   if (preset) writeFileSync(configFilePath(root), `${JSON.stringify(preset, null, 2)}\n`);
-  const app = await createApp({
-    root,
-    host: "127.0.0.1",
-    port: 0,
-    logLevel: "error",
-    dataDir: join(root, "data"),
-    pluginDirs: [],
-    adapters: {},
-    providers: {},
-    auth: {
-      adminUser: "admin",
-      adminPassword: "pw",
-      cookieName: "atri_session",
-      cookieSecure: false,
-      staticDir: join(root, "nonexistent"),
-    },
-  });
+  // 共享 fixture 的默认值与迁移前这里手抄的那份逐字段相同
+  // （`"atri_session"` 就是 `DEFAULT_AUTH_COOKIE_NAME`），所以换成它不改变行为。
+  const app = await createApp(makeTestConfig({ root }));
   await app.start();
   return {
     origin: `http://127.0.0.1:${app.address().port}`,
@@ -81,31 +114,83 @@ async function startApp(t, preset) {
   };
 }
 
-async function login(origin) {
+async function login(origin: string): Promise<string> {
   const res = await fetch(`${origin}/api/v1/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ username: "admin", password: "pw" }),
   });
   assert.equal(res.status, 200);
-  return res.headers.get("set-cookie").split(";")[0];
+  // `Headers.get()` 的类型是 `string | null`，第一个分段才是要回传的 `name=value`。
+  // 缺头就意味着登录没成功（上一行的状态码断言先兜住），这里用抛错做类型守卫，
+  // 不新增断言行：断言序列是本次迁移的比对基线。
+  const setCookie = res.headers.get("set-cookie");
+  if (!setCookie) throw new Error("登录响应缺少 set-cookie");
+  const [cookie] = setCookie.split(";");
+  if (!cookie) throw new Error("set-cookie 没有 name=value 分段");
+  return cookie;
 }
 
-function call(origin, cookie, method, path, body) {
+/** provider 实例在 HTTP 层的视图：配置条目 + 这条路由额外补上的运行时标注。 */
+type ProviderView = ProviderEntry & {
+  /** 是不是保留键 `providers.default` 指向的那一个。 */
+  default: boolean;
+  /** 是不是真的注册进了工厂（配置写着 ≠ 跑得起来）。 */
+  loaded: boolean;
+  /** 加载失败的原因，只在 `loaded: false` 时出现。 */
+  error?: string;
+};
+
+/**
+ * `call()` 的返回体形状：这几个用例里被断言读到的那些键。
+ *
+ * 为什么是「一根类型上多根键都必填」而不是每个端点一个形状：有 5 处断言把
+ * `await get(...)` 直接内联写在断言里（列表端点那几条），而断言行在本次迁移中逐字冻结
+ * （有快照比对），内联的调用点加不了类型参数，于是 `call()` 的返回体只能有**一个**形状。
+ * 实际每个响应只填其中一根键（见 `src/api/server.ts` 的各 handler），读到不存在的键在
+ * 运行时是 undefined，与迁移前一模一样，断言该失败时照样失败。
+ *
+ * 为什么 `sources` / `providers` 是「首项必填」的元组：`noUncheckedIndexedAccess` 让
+ * 普通数组的 `[0]` 带 undefined，而有一处内联断言读 `providers[0].default`——那条用例
+ * 刚刚创建并把这一项设成了默认，空列表时它本来就该失败。
+ */
+interface ApiBody {
+  source: SourceEntry;
+  sources: [SourceEntry, ...SourceEntry[]];
+  provider: ProviderView;
+  providers: [ProviderView, ...ProviderView[]];
+  /** 删源返回的被删 id 列表（删实例返回的是单个 id，那几个用例不读它）。 */
+  deleted: string[];
+  /** 失败响应：`{ error: "<中文说明>" }`（见 `api/http.ts` 的 sendError）。 */
+  error: string;
+  session: Session;
+}
+
+function call(
+  origin: string,
+  cookie: string,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: ApiBody }> {
   return fetch(`${origin}/api/v1${path}`, {
     method,
     headers: { "content-type": "application/json", cookie },
     // GET 不允许带 body，连值为 undefined 的键都不能出现。
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }).then(async (res) => ({ status: res.status, body: await res.json() }));
+  }).then(async (res) => ({
+    status: res.status,
+    // 边界收窄：`Response.json()` 的返回是 `unknown`（JSON 里可以有任何东西）。
+    body: (await res.json()) as ApiBody,
+  }));
 }
 
-const get = (o, c, p) => call(o, c, "GET", p);
-const post = (o, c, p, b) => call(o, c, "POST", p, b);
-const del = (o, c, p) => call(o, c, "DELETE", p);
+const get = (o: string, c: string, p: string) => call(o, c, "GET", p);
+const post = (o: string, c: string, p: string, b?: unknown) => call(o, c, "POST", p, b);
+const del = (o: string, c: string, p: string) => call(o, c, "DELETE", p);
 
 /** 建会话、发一条消息、读完整条 SSE，返回助手回复文本。 */
-async function chat(origin, cookie, model) {
+async function chat(origin: string, cookie: string, model?: string): Promise<string> {
   const { body: created } = await post(origin, cookie, "/sessions", { title: "t" });
   const res = await fetch(`${origin}/api/v1/sessions/${created.session.id}/messages/stream`, {
     method: "POST",
@@ -348,5 +433,11 @@ test("路由：加载失败（缺源）的条目仍出现在列表里并带上�
   // 旧语义下这条会凭空消失，用户看到的是「我配的东西不见了」而无从下手。
   assert.ok(entry, "加载失败的条目也要列出来");
   assert.equal(entry.loaded, false);
+  // `error` 在 HTTP 视图上只在 `loaded: false` 时才出现（见 api/server.ts 的 GET /providers），
+  // 而这条用例验的正是「失败必须给原因」。先做运行时守卫让类型收窄，不新增断言行：
+  // 断言序列是本次迁移的比对基线。
+  if (typeof entry.error !== "string") {
+    throw new Error("加载失败的条目没有带上 error 原因");
+  }
   assert.match(entry.error, /未找到/);
 });

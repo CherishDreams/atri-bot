@@ -8,6 +8,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
+import type { IncomingHttpHeaders, Server } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,29 +18,77 @@ import { createApp } from "../src/app.ts";
 import { AnthropicProvider } from "../src/core/provider/anthropic.ts";
 import { OpenAIProvider, normalizeModels } from "../src/core/provider/openai.ts";
 import { ProviderError } from "../src/core/provider/errors.ts";
+import { makeTestConfig } from "./helpers/config.ts";
+
+/**
+ * 桩上游的应答器：自己决定往 `res` 上写什么。
+ * 允许「什么都不写」——测超时用的就是这种（`timeoutMs` 那条用例）。
+ */
+type StubResponder = (req: IncomingMessage, res: ServerResponse) => void;
+
+/**
+ * 桩上游记下的一次请求。
+ * `method` / `url` 在 Node 的类型上本来就是 `string | undefined`（还未 route 的请求
+ * 可以是空），不是我们把它写宽了。
+ */
+interface StubRequest {
+  method: string | undefined;
+  url: string | undefined;
+  headers: IncomingHttpHeaders;
+}
+
+/**
+ * 桩上游的请求日志：一个「至少已经收到一次请求」的数组。
+ *
+ * 为什么不是 `StubRequest[]`：断言行在本次迁移里逐字冻结（有快照比对），而
+ * `noUncheckedIndexedAccess` 会让 `seen[0]` 与 `const [req] = seen` 的读法带
+ * `undefined`，那些直接按下标读日志的断言就加不了守卫。这几个用例读首项时上游必然已被
+ * provider 打过一次（就在上一行），所以类型上写成首项必填；真的空了（用例自己写错）
+ * 运行时仍是 TypeError，与迁移前 `any[]` 的表现一致，断言没有被放宽。
+ * 只读长度不读首项的那条（`evil.seen.length === 0`）不受这个假设影响。
+ */
+type StubLog = [StubRequest, ...StubRequest[]];
+
+/**
+ * 桩上游绑定后取它的 TCP 端口。
+ *
+ * `server.address()` 的类型是 `AddressInfo | string | null`（TCP / Unix socket / 未监听
+ * 三种状态都共用这一个方法）。这里用运行时判断而不是 `as AddressInfo`：真的没监听上时
+ * 要得到一句说得通的错误，而不是在模板串里冒出 TypeError。
+ */
+function listenPort(server: Server): number {
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error(`桩上游未绑定 TCP 端口（address=${String(address)}）`);
+  }
+  return address.port;
+}
 
 /**
  * 起一个假的上游：按 `respond` 决定怎么回，并把收到的请求记下来。
  * `GET /models` 与 `POST /chat/completions` 都走同一个处理器，
  * 因为「模型列表」与「真的能发消息」需要连起来验证。
  */
-async function startUpstream(respond) {
-  const seen = [];
+async function startUpstream(respond: StubResponder) {
+  const seen: StubRequest[] = [];
   const server = createServer((req, res) => {
     seen.push({ method: req.method, url: req.url, headers: req.headers });
     respond(req, res);
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
+  // `listen` 的回调类型是 `() => void`，直接把 Promise 的 resolve 递过去会带上一个
+  // 必填参数而不匹配，所以包一层空参箭头函数。
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = listenPort(server);
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
-    seen,
+    // 收窄见 StubLog 的说明：请求确实发生过才读它，这里只是把类型写出来。
+    seen: seen as StubLog,
     stop: () => new Promise((resolve) => server.close(resolve)),
   };
 }
 
 /** 一个总是回同一份模型列表的上游。 */
-function modelsResponder(body, status = 200) {
+function modelsResponder(body: unknown, status = 200): StubResponder {
   return (_req, res) => {
     res.writeHead(status, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
@@ -143,6 +193,11 @@ test("上游 401 归一成一句可读的话（密钥无效）", async (t) => {
       assert.equal(err.status, 401);
       assert.match(err.message, /密钥无效/);
       // 上游原文要保留，否则用户拿不到能搜索的关键词。
+      // `detail` 在 ProviderError 上是可选的（上游回了空体时就没有），而 401 这条路径
+      // 必然带上原文；先做这个运行时守卫，`assert.match` 才拿得到一个 `string`。
+      if (typeof err.detail !== "string") {
+        throw new Error(`ProviderError 缺少上游原文: ${err.message}`);
+      }
       assert.match(err.detail, /Invalid API key/);
       return true;
     },
@@ -205,23 +260,9 @@ test("上游挂起不返回时按 timeoutMs 中断", async (t) => {
 
 async function startApp() {
   const root = mkdtempSync(join(tmpdir(), "atri-models-"));
-  const app = await createApp({
-    root,
-    host: "127.0.0.1",
-    port: 0,
-    logLevel: "error",
-    dataDir: join(root, "data"),
-    pluginDirs: [],
-    adapters: {},
-    providers: {},
-    auth: {
-      adminUser: "admin",
-      adminPassword: "pw",
-      cookieName: "atri_session",
-      cookieSecure: false,
-      staticDir: join(root, "nonexistent"),
-    },
-  });
+  // 共享 fixture 的默认值与迁移前这里手抄的那份逐字段相同
+  // （`"atri_session"` 就是 `DEFAULT_AUTH_COOKIE_NAME`），所以换成它不改变行为。
+  const app = await createApp(makeTestConfig({ root }));
   await app.start();
   return {
     origin: `http://127.0.0.1:${app.address().port}`,
@@ -232,23 +273,52 @@ async function startApp() {
   };
 }
 
-async function login(origin) {
+async function login(origin: string): Promise<string> {
   const res = await fetch(`${origin}/api/v1/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ username: "admin", password: "pw" }),
   });
   assert.equal(res.status, 200);
-  return res.headers.get("set-cookie").split(";")[0];
+  // `Headers.get()` 的类型是 `string | null`，第一个分段才是要回传的 `name=value`。
+  // 缺头说明登录根本没成功（`res.status` 那条断言在之前就兜住了），这里用抛错做守卫，
+  // 不新增 assert 行：断言序列是这次迁移的比对基线。
+  const setCookie = res.headers.get("set-cookie");
+  if (!setCookie) throw new Error("登录响应缺少 set-cookie");
+  const [cookie] = setCookie.split(";");
+  if (!cookie) throw new Error("set-cookie 没有 name=value 分段");
+  return cookie;
 }
 
-async function postJson(origin, cookie, path, body) {
+/**
+ * 这几个用例从响应体里读到的键。
+ *
+ * 为什么收成**一处**而不是每个端点一个形状：`Response.json()` 的返回是 `unknown`，
+ * 必须在某个地方收窄；而这几根键就是全部读法，在 `postJson()` 的返回类型上写一次，
+ * 比在四个调用点各抄一遍形状更好（形状走散时最先烂掉的就是测试）。
+ * 键都写成必填：实际每个响应只填其中一根（见 `src/api/server.ts` 的各 handler），
+ * 读到不存在的键在运行时是 undefined，与迁移前一模一样，断言该失败时照样失败。
+ */
+interface ApiBody {
+  /** `/provider-sources/:id/models` 成功时的模型列表。 */
+  models: string[];
+  /** 失败响应：`{ error: "<中文说明>" }`（见 `api/http.ts` 的 sendError）。 */
+  error: string;
+}
+
+async function postJson(
+  origin: string,
+  cookie: string,
+  path: string,
+  body?: unknown,
+): Promise<{ res: Response; body: ApiBody }> {
   const res = await fetch(`${origin}/api/v1${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
     body: JSON.stringify(body ?? {}),
   });
-  return { res, body: await res.json() };
+  // 边界收窄：`Response.json()` 的返回是 `unknown`（JSON 里可以有任何东西）。
+  return { res, body: (await res.json()) as ApiBody };
 }
 
 test("端点：用已保存的源拉到模型列表", async (t) => {
