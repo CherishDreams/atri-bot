@@ -11,12 +11,19 @@
 pnpm monorepo，三个包：`apps/server`（agent 引擎 + API）、`apps/dashboard`（Vue 3 控制台）、
 `packages/shared`（两个 app 共享的类型、常量、线协议）。
 
-- Node `>=20.19.0`；pnpm 由根 `package.json` 的 `packageManager` 字段固定，**不要用别的包管理器**。
-- `apps/server` 是**纯 JavaScript**（`allowJs: true, checkJs: false`），靠 tsc 产出 `.d.ts`。
-  它是 `verbatimModuleSyntax` + `strict` + `noUncheckedIndexedAccess` 的严格环境，写 JS 也要按类型写。
+- Node `>=22.18.0`；pnpm 由根 `package.json` 的 `packageManager` 字段固定，**不要用别的包管理器**。
+  下限卡在 22.18 是因为它是「TypeScript 类型擦除默认开启」的那个版本（2025-07-31，LTS Jod）——
+  本仓**不编译、不装 tsx**，`dev`/`start`/`test` 都直接跑 `.ts` 源码，靠的正是这个默认开启的擦除。
+  `.npmrc` 里 `engine-strict=true` 让这条下限有牙齿：Node 20 上 `pnpm install` 会直接失败，
+  这比让人跑到一半撞见语法错误好。`@types/node` 的主版本必须跟这条保持一致。
+- `apps/server` 是 **TypeScript**，`noEmit` 只做类型检查（不产出 `dist`，也没有任何 `.d.ts` 消费者）。
+  `verbatimModuleSyntax` + `strict` + `noUncheckedIndexedAccess` 全开，类型标注就是运行时契约的一部分。
 - **依赖极简是刻意维护的属性**。服务端的外部运行时依赖只有 `ws` 一个
   （`dependencies` 里另一条 `@atri/shared` 是 workspace 内部包，不算外部依赖）。
   加依赖前先确认没有几十行手写就能解决的问题，并说明为什么必须引入。
+  纯类型的 devDependency（如 `@types/ws`）不在这条约束内 —— 它不进 `dependencies`、
+  不改变运行时足迹，但同样要少：`ws` 自己不产出类型声明，没有它 `import { WebSocketServer }`
+  就是 `TS7016`。也**不要**为「类型太严」去写手工的模块声明，那份假声明比不写更坏。
 
 ## 上手
 
@@ -42,8 +49,8 @@ pnpm --filter @atri/shared build   # 必须。shared 的 dist 不入库，没有
 | `pnpm lint` / `lint:fix`       | `oxlint --deny-warnings .` / `oxlint --fix .`                            |
 | `pnpm format` / `format:check` | oxfmt 改写 / 只校验                                                      |
 | `pnpm codegen`                 | 按 `apps/server/openapi.json` 重新生成前端 SDK                           |
-| `pnpm test`                    | 全部包；服务端是 `node --test`                                           |
-| `pnpm build`                   | 全部包                                                                   |
+| `pnpm test`                    | 全部包；服务端是 `node --test "test/**/*.test.ts"`                       |
+| `pnpm build`                   | `packages/shared` + `apps/dashboard`（服务端不产出构建物）               |
 | `pnpm start`                   | 起服务端（= `pnpm --filter @atri/server start`）                         |
 
 三条容易踩的规则：
@@ -64,13 +71,13 @@ plugins/  ─> 只依赖注入给它的 ctx
 
 - **`core/` 不得 import `api/`、`adapters/`、`plugins/` 里的任何东西。**
 - **没有任何模块 import `api/`**。传输层是最外层、可整体替换（换 gRPC / CLI 不碰业务逻辑）。
-- `app.js` 是**唯一**的组合根。装配只在那一处发生；其余模块不知道别人是谁。
+- `app.ts` 是**唯一**的组合根。装配只在那一处发生；其余模块不知道别人是谁。
 - 依赖一律走**构造参数**。不要引入全局单例、模块级可变状态、或「import 一下就自动注册」的副作用。
   这条是测试能直接 `createApp(config)` 起真服务、而不必 mock 掉半个世界的原因。
-- 每个模块往里收一层：`index.js` 薄入口 → `app.js` 装配 → `core/` 逻辑 → `api/` 传输。
+- 每个模块往里收一层：`index.ts` 薄入口 → `app.ts` 装配 → `core/` 逻辑 → `api/` 传输。
 
-新增能力时的落点：入站适配 → `adapters/`；出站模型 → `core/provider/factory.js` 的 `TYPES` 表；
-业务逻辑 → `core/`；HTTP 表面 → `api/server.js` + `openapi.json`。
+新增能力时的落点：入站适配 → `adapters/`；出站模型 → `core/provider/factory.ts` 的 `TYPES` 表；
+业务逻辑 → `core/`；HTTP 表面 → `api/server.ts` + `openapi.json`。
 
 ### 命名上不要混用两个词
 
@@ -84,13 +91,28 @@ plugins/  ─> 只依赖注入给它的 ctx
 
 - **双引号**、100 列、分号、尾逗号 `all`、2 空格。`sortPackageJson: true` 会重排 `package.json` 的键。
 - `import type` 必须显式（`verbatimModuleSyntax`），否则运行时 import 一个不存在的绑定。
+- **相对 import 的扩展名两个包不一样，别「统一」它**：`apps/server` 写 `from "./x.ts"`，
+  `packages/shared` 写 `from "./types.js"`。判据只有一条 —— **这个包会不会被 node 直接执行源码**。
+  服务端会（靠类型擦除，而擦除不改写 import 说明符，写 `.js` 就解析不到文件）；
+  shared 不会（它先 `tsc` 出 `dist`，那边只认 `.js`）。另外服务端只允许**可擦除**的 TS 语法
+  （`erasableSyntaxOnly: true`）：`enum`、有运行时语义的 `namespace`、构造函数参数属性
+  都会被类型检查直接拒绝 —— 它们不是风格偏好，是「运行时跑不起来」的分界线。
+- 类型标注不许「替测试降强度」：各模块的构造参数声明**自己实际读写的那几个配置键**
+  （`ProviderStoreConfig { root?: string }` 这种），而不是收一个 `Partial<AppConfig>` 或
+  拿 `as unknown as AppConfig` 糊过去。前者让 `config.root` 之类必然存在的读取也变成可选、
+  把 `?? undefined` 一路传染下去；后者是把 `noUncheckedIndexedAccess` 的好处整个丢掉。
+  `as` 只用在真边界上（`JSON.parse`、`response.json()`、动态 import 的插件模块、
+  配置文件读回来的顶层对象），并且必须写清「为什么这里只能是这个形状」。
 - 数组排序/反转用 `toSorted()` / `toReversed()`，不要 `sort()` / `reverse()`
   （`unicorn(no-array-sort)`：后两者原地修改数组）。
 - 包装捕获到的错误时**带上 cause**，否则堆栈里丢了原始错误，排查变成猜：
 
-  ```js
-  throw new Error(`解析 ${filePath} 失败: ${err.message}`, { cause: err });
+  ```ts
+  throw new Error(`解析 ${filePath} 失败: ${errorMessage(err)}`, { cause: err });
   ```
+
+  （`err` 是 `unknown`，所以不能直接写 `err.message` —— 走 `core/errors.ts` 的
+  `errorMessage`/`errorStack`，别在每处 catch 里各写一遍三元。）
 
 - `oxlint` 的 `plugins` 字段**会覆盖默认插件集**，想用的必须全部列出（当前 unicorn / oxc / typescript / vue）。
 - 仓内目前**零** `oxlint-disable` / `oxfmt-ignore` 注释。不要靠抑制让 `pnpm check` 变绿；
@@ -116,7 +138,14 @@ plugins/  ─> 只依赖注入给它的 ctx
 
 ## 测试
 
-用内置 `node:test` + `node:assert/strict`，**不引入测试框架**。测试放在 `apps/server/test/*.test.js`。
+用内置 `node:test` + `node:assert/strict`，**不引入测试框架**。测试放在 `apps/server/test/*.test.ts`。
+
+测试也在 `tsconfig.json` 的 `include` 里，因此 `pnpm typecheck` **会**检查测试 —— 这从 JS 时代起
+就是新增的严格度。`test/helpers/config.ts` 的 `makeTestConfig()` 存在的唯一理由是：迁移前
+六个测试各抄了一份几乎相同的 config（只差 `providers`/`staticDir`/口令），而 `AppConfig`
+的必填键要求它们逐字补全，抄六遍不如收成一处；它**不替**任何测试补它今天没有生效的键，
+需要偏离默认就显式传参，让差异留在 diff 里看得见。除此之外测试文件之间不共享 helper：
+`startApp`/`login`/`call` 这些桩照旧各写一份（本仓的既有风格，比提前抽象好）。
 
 ```js
 test("...", async (t) => {
@@ -153,8 +182,8 @@ test("...", async (t) => {
 量 DOM 几何。可复用的做法：
 
 ```js
-const { loadConfig } = await import(".../apps/server/src/config/config.js");
-const { createApp } = await import(".../apps/server/src/app.js");
+const { loadConfig } = await import(".../apps/server/src/config/config.ts");
+const { createApp } = await import(".../apps/server/src/app.ts");
 const app = await createApp(loadConfig()); // async，漏 await 会得到 app.start is not a function
 await app.start();
 ```
@@ -209,7 +238,7 @@ apps/server/openapi.json  -->  pnpm codegen  -->  apps/dashboard/src/api/generat
 ```
 
 改接口的完整动作：改代码 → 同步改 `openapi.json` → `pnpm codegen` → 提交生成物。
-`apps/server/test/openapi.test.js` 会比对**真实注册的路由**与规格里的路径，
+`apps/server/test/openapi.test.ts` 会比对**真实注册的路由**与规格里的路径，
 所以「加了端点但忘了写进规格」会被它抓住——**不要为了让测试通过去改这个测试**，它自动覆盖新路由。
 
 生成物**豁免 oxlint/oxfmt**（两者 `ignorePatterns`）。这不只是为了省事：
@@ -222,6 +251,14 @@ WebSocket 描述不了，永远手写。
 ## 配置与安全
 
 - 解析顺序：**内置默认值 → `atri.config.json` → 环境变量**。密钥走环境变量，结构性设置走文件。
+- **两个看起来像 bug、其实不是的形状，别顺手「修正」**：
+  `AppConfig.logLevel` 是 `string` 而不是 `"debug"|"info"|"warn"|"error"` 联合（未知级别今天
+  退化成 info，收紧成联合会让 `ATRI_LOG_LEVEL=verbose` 从「安静地跑」变成「启动失败」）；
+  `staticDir` 在磁盘上是**顶层键**、在 `AppConfig` 里却嵌在 `auth` 段下
+  （`config.ts` 读顶层、`api/server.ts` 读 `config.auth.staticDir`），把它「归位」会同时
+  改配置文件格式与读取路径。两者都是行为变更，不是类型清理。
+  同理 `FileConfig` 必须带 `[key: string]: unknown` —— 读-改-写要原样保留我们不认识的键，
+  封闭的类型会让下一次写入丢掉用户的配置。
 - **`atri.config.json` 已被 gitignore**，因为它含明文口令与 `apiKey`。
   自动生成的口令会写进它——绝不要把它加进版本控制，也不要贴进对话或日志。
 - `atri.config.example.json` 与 `.env.example` 只放占位符，**不放真实凭证**。

@@ -7,15 +7,15 @@
 
 ```
 apps/server/src/
-├── index.js        薄入口：loadConfig -> createApp -> start -> 信号处理
-├── app.js          组合根：在一处装配所有对象，返回 { start, stop, address }
+├── index.ts        薄入口：loadConfig -> createApp -> start -> 信号处理
+├── app.ts          组合根：在一处装配所有对象，返回 { start, stop, address }
 ├── config/         配置加载（默认值 -> atri.config.json -> 环境变量）
 ├── core/           全部业务逻辑，不依赖上层
 │   ├── agent/      AgentEngine：一轮对话的编排
 │   ├── auth/       AuthManager：管理员口令与会话令牌
 │   ├── session/    SessionManager：会话与消息（当前为内存实现）
 │   ├── provider/   配置存储 + 装配 + ProviderRegistry + 厂商实现（openai / anthropic）
-│   └── logger.js
+│   └── logger.ts
 ├── api/            传输层：HTTP 路由、静态托管、WebSocket（无业务逻辑）
 ├── adapters/       可选启用的对外接入
 └── plugins/        插件加载器与上下文
@@ -37,27 +37,36 @@ plugins/  ─> 仅依赖注入给它的 ctx，不 import core/ 之外的具体�
 
 ## 组合根
 
-`app.js` 是唯一做装配的地方。其余模块都不知道别人是谁：
+`app.ts` 是唯一做装配的地方。其余模块都不知道别人是谁：
 
-```js
+```ts
 const logger = createLogger(config.logLevel);
-const sessions = new SessionManager(config);
 const auth = new AuthManager(config, logger);
 await auth.init(); // 必须早于 HTTP 启动：未配置口令时要先落盘
-const providers = new ProviderRegistry(config);
+const sessions = new SessionManager();
+const providers = new ProviderRegistry();
+const providerConfig = new ProviderConfigStore(config, logger);
 const plugins = new PluginManager(config, logger);
+// 引擎只吃三样东西；曾经还注入过 config 与 plugins，但两个字段在全仓没有任何读取点。
 const engine = new AgentEngine({ sessions, providers, logger });
-const adapters = new AdapterManager(config, logger);
+const adapters = new AdapterManager({ config, engine, logger });
 const http = await createHttpServer({
   config,
   logger,
   sessions,
   providers,
+  providerConfig,
+  reloadProviders: rebuildProviders, // 启动与「配置页改完保存」共用同一个装配函数
   plugins,
   adapters,
   auth,
+  engine,
 });
 ```
+
+`SessionManager` / `ProviderRegistry` 现在**不接配置**：给构造参数标类型这一步暴露出这两个类
+把传进来的 `config` 存成了一个从未被读取的字段 —— 那是「以后要持久化」的预留位，不是当前行为。
+留着它就得为它编一个没有任何真实用途的类型，所以删掉；真要做持久化时按当时的需求重新接线。
 
 依赖靠**构造参数**传入，没有全局单例、没有模块级可变状态。
 这使测试可以直接 `createApp(config)` 起一个真服务，而不需要 mock 掉半个世界。
@@ -84,7 +93,7 @@ HTTP 请求
 
 ### 路由表为什么是数组
 
-`api/router.js` 是手写的极简路由：注册顺序即匹配顺序，先命中者胜，支持 `/:param` 与 `*`。
+`api/router.ts` 是手写的极简路由：注册顺序即匹配顺序，先命中者胜，支持 `/:param` 与 `*`。
 这样 `GET /sessions/:id` 与其它的具体路径不会互相遮蔽，行为完全由注册顺序决定，
 不需要理解框架的优先级规则。
 
@@ -116,16 +125,16 @@ adapter 是长驻的 `start()`/`stop()`，provider 是每请求的 `chat()`。
 分层是「注册表只管存与取，存储与装配各自一层」：
 
 ```
-store.js    ProviderConfigStore：两层配置的校验与落盘（读写 atri.config.json）
-factory.js  配置 -> 实例（唯一入口，认得 type、两层合并与密钥解析）
-registry.js ProviderRegistry：选路与转发，不知道任何厂商细节
-openai.js   / anthropic.js：厂商实现
-sse.js      SSE 解析（两个实现共用）
-errors.js   ProviderError 与上游错误归一
+store.ts    ProviderConfigStore：两层配置的校验与落盘（读写 atri.config.json）
+factory.ts  配置 -> 实例（唯一入口，认得 type、两层合并与密钥解析）
+registry.ts ProviderRegistry：选路与转发，不知道任何厂商细节
+openai.ts   / anthropic.ts：厂商实现
+sse.ts      SSE 解析（两个实现共用）
+errors.ts   ProviderError 与上游错误归一
 ```
 
-把装配从注册表里拆出来，是为了让 `registry.js` 不 import 任何具体实现。
-新增一个厂商只需在 `factory.js` 的 `TYPES` 表里加一行。
+把装配从注册表里拆出来，是为了让 `registry.ts` 不 import 任何具体实现。
+新增一个厂商只需在 `factory.ts` 的 `TYPES` 表里加一行。
 
 ### 两层配置与落盘
 
@@ -136,10 +145,10 @@ errors.js   ProviderError 与上游错误归一
 这样切分是因为**凭证属于连接，不属于模型**：一个网关下的十个模型共享一份密钥，
 而超时也是连接级的性质。若压成一层，加一个模型就要重抄一遍密钥与端点。
 
-`factory.js` 对一个 provider 就是「一个模型实例」，所以构造时把 `model` 变成单元素
+`factory.ts` 对一个 provider 就是「一个模型实例」，所以构造时把 `model` 变成单元素
 `models: [model]`——注册表原来的按模型名选路因此完全不用改。
 
-`store.js` 承担全部校验（字段类型、`id` 字符集、`baseUrl` 协议、`timeoutMs` 区间），
+`store.ts` 承担全部校验（字段类型、`id` 字符集、`baseUrl` 协议、`timeoutMs` 区间），
 并保证**校验失败时文件一个字节都不动**：先在校验完的副本上改，通过才落盘，
 所以「用户点错一次把配置改坏」不会发生。写文件是「读-改-写」同一份 JSON，
 `host`/`auth` 等无关字段原样保留，权限设 `0600`（里面有明文密钥）。
@@ -151,7 +160,7 @@ errors.js   ProviderError 与上游错误归一
 
 ### 配置变更如何生效
 
-`app.js` 里 `rebuildProviders()` 是**唯一**的装配路径，启动与每次配置写入后都走它：
+`app.ts` 里 `rebuildProviders()` 是**唯一**的装配路径，启动与每次配置写入后都走它：
 清空注册表 → `createProviders` → 逐个注册 → 处理错误与默认项。
 两条装配路径容易在演进中走散（比如只有一个地方处理「默认项加载失败」），
 所以刻意只留一条。
@@ -179,7 +188,7 @@ errors.js   ProviderError 与上游错误归一
 
 ### 错误归一
 
-三个厂商的错误形状不同，`errors.js` 把它们统一成 `ProviderError`，
+三个厂商的错误形状不同，`errors.ts` 把它们统一成 `ProviderError`，
 并给已知状态码配中文解释（401「密钥无效」、429「触发限流」…）。
 `toNetworkError` 单独处理 `AbortError`——取消是预期路径，不该报成上游故障。
 
@@ -237,6 +246,18 @@ errors.js   ProviderError 与上游错误归一
 - `ctx.subscribe()` 在卸载时自动退订。
 
 这使「重载」成为一次干净的销毁+重建，而不是在旧状态上打补丁。
+
+### 插件的语言与类型入口
+
+插件目录里的入口**仍然叫 `index.js`**，且继续可以是纯 JavaScript —— 服务端按运行时
+`import()` 加载它，本仓迁到 TS 不改变这个契约（`plugins/manager.ts` 里那两个
+`join(pluginDir, "index.js")` 是**磁盘文件名**，不是 import 说明符，不参与扩展名改写）。
+
+类型入口是**源码本身**：`plugins/context.ts` 导出 `PluginContext` / `PluginShared` /
+`Subscribable`，`plugins/manager.ts` 导出 `PluginDefinition` / `PluginFactory` / `PluginView`。
+曾经考虑过另外产出一份手维护的 `plugin-types.d.ts` 给外部作者 `@type {import("...")}` 用，
+**否掉了**：那份声明和 `context.ts` 是同一事实的第二处书写，正是本仓反对的模式；
+而服务端现在 `noEmit`，也不再有任何 `.d.ts` 消费者。要类型就读源码，或者在自己的插件里写 JSDoc。
 
 ## 前端
 
@@ -351,6 +372,18 @@ src/
   它用 `git status --porcelain` 而不是 `git diff`——后者看不见未跟踪文件，
   而「新增了一个端点」正是最需要报警的情况。
 - 仓库**没有 CI**，`pnpm check` 需要手动在提交前运行。
+- **TypeScript 只在类型层，不进运行时**。`apps/server` 是 `noEmit` 的纯检查工程：
+  `dev`/`start`/`test` 都直接跑 `.ts` 源码，靠 Node 22.18+ 默认开启的类型擦除执行，
+  因此不产出 `dist`、没有 `.d.ts` 消费者，也不需要 `tsx`/`ts-node` 这类东西
+  （服务端外部运行时依赖仍然只有 `ws` 一个）。
+  配套的两条：`erasableSyntaxOnly: true` 把「只有可擦除语法才跑得起来」从口头约定
+  变成编译期检查；`allowImportingTsExtensions: true` 让源码写 `./x.ts` ——
+  因为擦除**不改写 import 说明符**，写 `.js` 在运行时解析不到文件。
+  反面做法都被否掉了：装 `fastify`+`@fastify/swagger`（自动导出规格，但传递依赖从 1 个变 70+，
+  含 `pino`/`semver`）、`hono`+`zod`（约 7 个包，但 Web Fetch 模型与现有 `node:http` 行为
+  —— WS 升级鉴权、静态目录穿越 403、Cookie 逐属性、SSE 的 `cache-control: no-store` —— 冲突面最大）。
+- `pnpm typecheck` 也检查测试（`test/**/*` 在 `include` 里）。测试因此不能再靠
+  「JS 不检查」蒙混，config 字面量要真的符合 `AppConfig`。
 
 ## 关停
 

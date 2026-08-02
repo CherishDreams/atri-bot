@@ -10,8 +10,8 @@ atri-bot/
 ├── apps/
 │   ├── server/          # 主程序（agent 引擎 + API）
 │   │   ├── src/
-│   │   │   ├── index.js     # 薄入口：配置 -> 应用 -> 启动 -> 关闭
-│   │   │   ├── app.js       # 组合根（在一处完成所有装配）
+│   │   │   ├── index.ts     # 薄入口：配置 -> 应用 -> 启动 -> 关闭
+│   │   │   ├── app.ts       # 组合根（在一处完成所有装配）
 │   │   │   ├── config/      # 配置加载（默认值 -> 文件 -> 环境变量）
 │   │   │   ├── core/        # 引擎、会话、provider、logger（全部逻辑）
 │   │   │   ├── api/         # HTTP + WebSocket 传输层（无业务逻辑）
@@ -37,7 +37,9 @@ atri-bot/
 
 ## 环境要求
 
-- Node >= 20.19
+- Node >= 22.18（服务端直接跑 TypeScript 源码，靠 Node 22.18 起默认开启的类型擦除，
+  不需要构建步骤；低于它会得到 `UnknownSyntaxError`，而 `.npmrc` 的 `engine-strict`
+  让 `pnpm install` 在这种机器上直接失败，好过跑到一半才崩）
 - pnpm 12（由 `packageManager` 字段固定为 `pnpm@12.11.2`；`.npmrc` 开了 `engine-strict`，
   版本不符会直接报错，所以别用 11 及以下）
 
@@ -208,7 +210,7 @@ provider 启动，并且在控制台的供应商配置页里以 `loaded: false` 
 
 ```bash
 pnpm build
-pnpm start            # 或 node apps/server/src/index.js
+pnpm start            # 或 node apps/server/src/index.ts
 # 打开 http://127.0.0.1:6185
 ```
 
