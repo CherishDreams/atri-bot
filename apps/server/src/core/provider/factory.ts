@@ -110,7 +110,7 @@ export function createProviders(
     }
 
     if (merged.enabled === false) {
-      logger?.info?.(`provider 已禁用，跳过加载: ${id}`);
+      logger?.info(`provider 已禁用，跳过加载: ${id}`);
       continue;
     }
 
@@ -142,10 +142,11 @@ export function createProviders(
       // 「新增厂商只需加一行 TYPES」这个性质就没了。
       const provider = new Impl(options);
       providers.push(provider);
-      // 用 `logger?.info?.(` 而不是 `logger?.info(`：可选链只保护 logger 本身，
-      // 若传入的 logger 没有 info 方法，后面那种写法会直接抛
-      // 「logger.info is not a function」，把这个 provider 误记成加载失败。
-      logger?.info?.(
+      // `logger` 本身可以是 undefined（工厂被单测直接调用时不传），所以留 `logger?.`；
+      // 但**方法上不再写 `?.`**：`Logger` 的四个方法与 child 都是必填的，
+      // 那一级可选链在今天已经是不可达分支，留着会让读者以为「传个半套 logger 也没事」，
+      // 而那种输入现在由编译期直接拒绝。
+      logger?.info(
         `provider 已加载: ${id} (${type}${provider.models.length ? `, ${provider.models.length} 个模型` : ""})`,
       );
     } catch (err) {

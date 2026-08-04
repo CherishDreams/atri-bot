@@ -59,11 +59,17 @@ export class ProviderRegistry {
     return this.#providers.size;
   }
 
+  /**
+   * `models` 直接取，不写 `?? []`：`ProviderImpl.models` 是必填的，
+   * 而注册进来的只有 factory 构造的那些实例（两个实现类都在构造里赋了数组）。
+   * 这里曾经写着 `p.models ?? []`，那在类型下是不可达分支，会让读者以为
+   * 「注册一个没有 models 的 provider 也是被支持的」。
+   */
   list(): RegistryEntry[] {
     return [...this.#providers.values()].map((p) => ({
       id: p.id,
       name: p.name ?? p.id,
-      models: p.models ?? [],
+      models: p.models,
       type: p.type ?? "unknown",
       default: p.id === this.#defaultId,
     }));
@@ -119,7 +125,7 @@ export class ProviderRegistry {
       const byId = this.#providers.get(model);
       if (byId) return byId;
 
-      const byModel = [...this.#providers.values()].find((p) => p.models?.includes(model));
+      const byModel = [...this.#providers.values()].find((p) => p.models.includes(model));
       if (byModel) return byModel;
     }
 
@@ -139,8 +145,9 @@ export class ProviderRegistry {
    * 这种东西当模型名发给上游，上游回一句「模型不存在」。
    */
   #modelFor(provider: ProviderImpl, model: string | undefined): string | undefined {
-    if (!model) return provider.models?.[0];
-    if (model === provider.id) return provider.models?.[0] ?? model;
+    // `models` 可以是空数组（配置里没写 model 的实例），那才是 `?? model` 挡的情况。
+    if (!model) return provider.models[0];
+    if (model === provider.id) return provider.models[0] ?? model;
     return model;
   }
 }

@@ -15,15 +15,32 @@ import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from 
 import { errorMessage, errorStack } from "../core/errors.ts";
 
 /**
+ * provider 实例在 `GET /providers` 里的元素：磁盘条目 + 这一条路由额外补上的运行时标注。
+ *
+ * 导出的理由：这个形状只存在于 HTTP 层（磁盘上没有 `loaded`/`error`），但**前端与测试都得
+ * 重述它一遍**。留在原地各写一份，就会漂移到「测试里的形状比接口更宽松」，那时测试不再
+ * 背书响应体。写操作（POST/PATCH）的响应见 `ProviderMutationResult`，它刻意不含
+ * `loaded`：那条路径刚重建过注册表，返回值里没有这个信息。
+ */
+export type ProviderListItem = ProviderEntry & {
+  /** 是不是保留键 `providers.default` 指向的那一个。 */
+  default: boolean;
+  /** 是不是真的注册进了工厂（配置里写着 ≠ 跑得起来）。 */
+  loaded: boolean;
+  /** 加载失败的原因，只在 `loaded: false` 时出现。 */
+  error?: string;
+};
+
+/** 写操作（POST /providers、POST /providers/:id）的响应形状。 */
+export type ProviderMutationResult = ProviderEntry & { default: boolean };
+
+/**
  * 写操作的响应形状。
  *
  * 补一个 `default` 字段：前端拿到响应后能直接更新高亮，不必为了「刚才设的
  * 默认项生效了吗」再拉一次列表。默认项来自保留键，所以由调用方传入。
  */
-function viewProvider(
-  entry: ProviderEntry,
-  defaultId: string | null,
-): ProviderEntry & { default: boolean } {
+function viewProvider(entry: ProviderEntry, defaultId: string | null): ProviderMutationResult {
   return { ...entry, default: entry.id === defaultId };
 }
 
@@ -251,7 +268,7 @@ export function createHttpServer(deps: HttpDeps) {
     const failedById = new Map(errors.map((e) => [e.id, e.message]));
     const defaultId = providerConfig.defaultId;
 
-    const list = providerConfig.providers.map((entry) => {
+    const list: ProviderListItem[] = providerConfig.providers.map((entry) => {
       const loaded = providers.get(entry.id) !== null;
       const reason = failedById.get(entry.id);
       return {

@@ -19,7 +19,8 @@ import { join } from "node:path";
 import { createApp } from "../src/app.ts";
 import { configFilePath } from "../src/config/file.ts";
 import type { FileConfig } from "../src/config/file.ts";
-import type { ProviderEntry, SourceEntry } from "../src/core/provider/store.ts";
+import type { SourceEntry } from "../src/core/provider/store.ts";
+import type { ProviderListItem, ProviderMutationResult } from "../src/api/server.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 import type { Session } from "@atri/shared";
 
@@ -131,15 +132,9 @@ async function login(origin: string): Promise<string> {
   return cookie;
 }
 
-/** provider 实例在 HTTP 层的视图：配置条目 + 这条路由额外补上的运行时标注。 */
-type ProviderView = ProviderEntry & {
-  /** 是不是保留键 `providers.default` 指向的那一个。 */
-  default: boolean;
-  /** 是不是真的注册进了工厂（配置写着 ≠ 跑得起来）。 */
-  loaded: boolean;
-  /** 加载失败的原因，只在 `loaded: false` 时出现。 */
-  error?: string;
-};
+/** provider 实例在 HTTP 层的视图（`default`/`loaded`/`error` 这几根键只在这条路由上出现），
+ *  与写操作的返回形状都直接从 `src/api/server.ts` 导入 —— 测试不另述一份，
+ *  否则接口改了形状而测试还绿，就等于没在测。 */
 
 /**
  * `call()` 的返回体形状：这几个用例里被断言读到的那些键。
@@ -157,8 +152,8 @@ type ProviderView = ProviderEntry & {
 interface ApiBody {
   source: SourceEntry;
   sources: [SourceEntry, ...SourceEntry[]];
-  provider: ProviderView;
-  providers: [ProviderView, ...ProviderView[]];
+  provider: ProviderMutationResult;
+  providers: [ProviderListItem, ...ProviderListItem[]];
   /** 删源返回的被删 id 列表（删实例返回的是单个 id，那几个用例不读它）。 */
   deleted: string[];
   /** 失败响应：`{ error: "<中文说明>" }`（见 `api/http.ts` 的 sendError）。 */

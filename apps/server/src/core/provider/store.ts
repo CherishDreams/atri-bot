@@ -450,7 +450,7 @@ export class ProviderConfigStore {
       // 删掉的正是默认项时必须清掉保留键，否则选路会指向一个不存在的 id。
       if (nextProviders[RESERVED_PROVIDER_ID] === id) {
         delete nextProviders[RESERVED_PROVIDER_ID];
-        this.#logger?.warn?.(
+        this.#logger?.warn(
           `已删除默认 provider「${id}」，默认项已清空，选路将退回第一个可用的 provider`,
         );
       }
