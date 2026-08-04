@@ -3,7 +3,7 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PluginInfo, PluginStatus } from "@atri/shared";
 import type { Logger } from "../core/logger.ts";
-import { errorMessage } from "../core/errors.ts";
+import { ApiError, errorMessage } from "../core/errors.ts";
 import { PluginContext, type PluginContextConfig } from "./context.ts";
 
 /**
@@ -175,7 +175,7 @@ export class PluginManager {
   /** 重载单个插件：销毁旧实例 -> 重新 import 模块 -> 创建新实例。 */
   async reload(id: string): Promise<PluginView> {
     const rec = this.#records.get(id);
-    if (!rec) throw new Error(`未知插件: ${id}`);
+    if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
     this.logger.info(`正在重载插件: ${id}`);
     await this.#teardown(rec);
     return this.load(rec.dir);
@@ -184,7 +184,7 @@ export class PluginManager {
   /** 卸载单个插件：释放副作用并销毁实例，从管理器中移除。 */
   async unload(id: string): Promise<{ id: string; unloaded: boolean }> {
     const rec = this.#records.get(id);
-    if (!rec) throw new Error(`未知插件: ${id}`);
+    if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
     await this.#teardown(rec);
     this.#records.delete(id);
     this.logger.info(`插件已卸载: ${id}`);
@@ -198,7 +198,7 @@ export class PluginManager {
    */
   async setEnabled(id: string, enabled: boolean): Promise<PluginView> {
     const rec = this.#records.get(id);
-    if (!rec) throw new Error(`未知插件: ${id}`);
+    if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
 
     if (enabled) {
       if (rec.status === "active") return this.#view(rec);

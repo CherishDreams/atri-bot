@@ -93,6 +93,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       }
@@ -233,6 +236,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       }
@@ -344,6 +350,12 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       }
@@ -385,6 +397,12 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       }
@@ -457,6 +475,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       }
@@ -507,6 +528,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       },
@@ -607,6 +631,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       }
@@ -657,6 +684,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       },
@@ -799,6 +829,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -838,6 +871,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -889,6 +925,12 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       }
@@ -987,6 +1029,16 @@
       },
       "NotFound": {
         "description": "资源不存在",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "请求体超过 1 MB 上限",
         "content": {
           "application/json": {
             "schema": {
@@ -1414,8 +1466,8 @@
             "description": "插件所在目录名，便于在控制台辨认"
           },
           "error": {
-            "type": "string",
-            "description": "加载失败时的可读原因"
+            "type": ["string", "null"],
+            "description": "加载失败时的可读原因；正常时为 null"
           }
         }
       }

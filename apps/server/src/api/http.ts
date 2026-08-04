@@ -1,5 +1,6 @@
 /** JSON HTTP 处理的辅助函数。 */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { ApiError } from "../core/errors.ts";
 import type { AppConfig } from "../config/index.ts";
 import type { AgentEngine } from "../core/agent/engine.ts";
 import type { AuthManager } from "../core/auth/manager.ts";
@@ -85,7 +86,7 @@ export async function readJson(
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > limitBytes) throw new Error("请求体过大");
+    if (size > limitBytes) throw new ApiError("请求体过大", 413);
     chunks.push(chunk);
   }
   if (size === 0) return {};
@@ -93,6 +94,6 @@ export async function readJson(
   try {
     return JSON.parse(raw);
   } catch {
-    throw new Error("JSON 请求体格式错误");
+    throw new ApiError("JSON 请求体格式错误");
   }
 }

@@ -232,9 +232,9 @@ export type PluginInfo = {
      */
     dir?: string;
     /**
-     * 加载失败时的可读原因
+     * 加载失败时的可读原因；正常时为 null
      */
-    error?: string;
+    error?: string | null;
 };
 
 /**
@@ -289,6 +289,10 @@ export type LoginErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type LoginError = LoginErrors[keyof LoginErrors];
@@ -402,6 +406,10 @@ export type CreateSessionErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type CreateSessionError = CreateSessionErrors[keyof CreateSessionErrors];
@@ -510,6 +518,14 @@ export type SendMessageErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type SendMessageError = SendMessageErrors[keyof SendMessageErrors];
@@ -546,6 +562,14 @@ export type StreamMessageErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type StreamMessageError = StreamMessageErrors[keyof StreamMessageErrors];
@@ -602,6 +626,10 @@ export type CreateProviderErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type CreateProviderError = CreateProviderErrors[keyof CreateProviderErrors];
@@ -676,6 +704,10 @@ export type UpdateProviderErrors = {
      * 资源不存在
      */
     404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type UpdateProviderError = UpdateProviderErrors[keyof UpdateProviderErrors];
@@ -734,6 +766,10 @@ export type CreateProviderSourceErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type CreateProviderSourceError = CreateProviderSourceErrors[keyof CreateProviderSourceErrors];
@@ -817,6 +853,10 @@ export type UpdateProviderSourceErrors = {
      * 资源不存在
      */
     404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type UpdateProviderSourceError = UpdateProviderSourceErrors[keyof UpdateProviderSourceErrors];
@@ -918,6 +958,10 @@ export type ReloadPluginErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
 };
 
 export type ReloadPluginError = ReloadPluginErrors[keyof ReloadPluginErrors];
@@ -954,6 +998,10 @@ export type UnloadPluginErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
 };
 
 export type UnloadPluginError = UnloadPluginErrors[keyof UnloadPluginErrors];
@@ -993,6 +1041,14 @@ export type SetPluginEnabledErrors = {
      * 未登录或会话已失效
      */
     401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
 };
 
 export type SetPluginEnabledError = SetPluginEnabledErrors[keyof SetPluginEnabledErrors];

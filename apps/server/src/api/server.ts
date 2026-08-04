@@ -7,12 +7,11 @@ import type { WebSocket } from "ws";
 import type { ServerFrame } from "@atri/shared";
 import { API_PREFIX, APP_NAME, WS_PATH } from "@atri/shared";
 import { createProviders } from "../core/provider/factory.ts";
-import { httpStatusForError } from "../core/provider/store.ts";
 import type { ProviderEntry } from "../core/provider/store.ts";
 import { Router } from "./router.ts";
 import { readJson, sendError, sendJson, sendSse, startSse, type HttpDeps } from "./http.ts";
 import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from "./auth.ts";
-import { errorMessage, errorStack } from "../core/errors.ts";
+import { errorMessage, errorStack, statusForError } from "../core/errors.ts";
 
 /**
  * provider 实例在 `GET /providers` 里的元素：磁盘条目 + 这一条路由额外补上的运行时标注。
@@ -35,13 +34,25 @@ export type ProviderListItem = ProviderEntry & {
 export type ProviderMutationResult = ProviderEntry & { default: boolean };
 
 /**
+ * 磁盘条目 -> 对外条目：补 `name` 的兜底。
+ *
+ * 规格里 `ProviderInfo.name` 是必填，而磁盘条目可以没有它（人手工编辑
+ * `atri.config.json` 时只写 model 就足够跑起来），前端 ProviderCard 又直接显示它。
+ * 与 `factory.ts` 构造实例时的 `name: merged.name ?? id` 用同一个兜底，否则会出现
+ * 「注册表里显示 A、配置页里显示空」这种只有界面能看见的分裂。
+ */
+function viewListEntry(entry: ProviderEntry): ProviderEntry {
+  return entry.name ? entry : { ...entry, name: entry.id };
+}
+
+/**
  * 写操作的响应形状。
  *
  * 补一个 `default` 字段：前端拿到响应后能直接更新高亮，不必为了「刚才设的
  * 默认项生效了吗」再拉一次列表。默认项来自保留键，所以由调用方传入。
  */
 function viewProvider(entry: ProviderEntry, defaultId: string | null): ProviderMutationResult {
-  return { ...entry, default: entry.id === defaultId };
+  return { ...viewListEntry(entry), default: entry.id === defaultId };
 }
 
 /**
@@ -166,7 +177,10 @@ export function createHttpServer(deps: HttpDeps) {
 
   router.delete(`${API_PREFIX}/sessions/:id`, async (_req, res, params) => {
     const ok = sessions.delete(params.id);
-    sendJson(res, ok ? 200 : 404, { deleted: ok });
+    // 失败时回标准错误体而不是 `{ deleted: false }`：404 配一个成功形状的身体，
+    // 客户端只能靠状态码猜，而规格里这个分支声明的是 `{ error }`。
+    if (!ok) return sendError(res, 404, "会话不存在");
+    sendJson(res, 200, { deleted: true });
   });
 
   router.post(`${API_PREFIX}/sessions/:id/messages`, async (req, res, params) => {
@@ -174,6 +188,9 @@ export function createHttpServer(deps: HttpDeps) {
     if (typeof body.content !== "string" || body.content.length === 0) {
       return sendError(res, 400, "必须提供 `content`（字符串）");
     }
+    // 与流式端点一致：会话不存在是 404。以前它被下面的 catch 一并算成 400，
+    // 于是「发消息给一个已经被删掉的会话」和「content 写错了」共用同一个状态码。
+    if (!sessions.get(params.id)) return sendError(res, 404, "会话不存在");
     try {
       const reply = await engine.handleMessage({
         sessionId: params.id,
@@ -268,7 +285,8 @@ export function createHttpServer(deps: HttpDeps) {
     const failedById = new Map(errors.map((e) => [e.id, e.message]));
     const defaultId = providerConfig.defaultId;
 
-    const list: ProviderListItem[] = providerConfig.providers.map((entry) => {
+    const list: ProviderListItem[] = providerConfig.providers.map((rawEntry) => {
+      const entry = viewListEntry(rawEntry);
       const loaded = providers.get(entry.id) !== null;
       const reason = failedById.get(entry.id);
       return {
@@ -293,7 +311,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 201, { provider: viewProvider(provider, providerConfig.defaultId) });
     } catch (err) {
-      sendError(res, httpStatusForError(err), errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -304,7 +322,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 200, { provider: viewProvider(provider, providerConfig.defaultId) });
     } catch (err) {
-      sendError(res, httpStatusForError(err), errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -314,7 +332,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 200, result);
     } catch (err) {
-      sendError(res, httpStatusForError(err), errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -334,7 +352,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 201, { source });
     } catch (err) {
-      sendError(res, httpStatusForError(err), errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -345,7 +363,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 200, { source });
     } catch (err) {
-      sendError(res, httpStatusForError(err), errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -358,7 +376,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 200, result);
     } catch (err) {
-      sendError(res, httpStatusForError(err), errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -405,7 +423,7 @@ export function createHttpServer(deps: HttpDeps) {
       const plugin = await plugins.reload(params.id);
       sendJson(res, 200, { plugin });
     } catch (err) {
-      sendError(res, 400, errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -414,7 +432,7 @@ export function createHttpServer(deps: HttpDeps) {
       const result = await plugins.unload(params.id);
       sendJson(res, 200, result);
     } catch (err) {
-      sendError(res, 400, errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -424,7 +442,7 @@ export function createHttpServer(deps: HttpDeps) {
       const result = await plugins.setEnabled(params.id, body.enabled !== false);
       sendJson(res, 200, { plugin: result });
     } catch (err) {
-      sendError(res, 400, errorMessage(err));
+      sendError(res, statusForError(err), errorMessage(err));
     }
   });
 
@@ -449,8 +467,18 @@ export function createHttpServer(deps: HttpDeps) {
       if (!hit) return serveStatic(req, res, pathname);
       await hit.handler(req, res, hit.params);
     } catch (err) {
-      logger.error(`请求处理出错: ${errorStack(err)}`);
-      if (!res.headersSent) sendError(res, 500, "服务器内部错误");
+      // 状态码由错误自己带（见 core/errors.ts 的 statusForError），这样「客户端把 JSON
+      // 写坏了」不会再被当成服务端故障回 500。
+      const status = statusForError(err);
+      if (status < 500) {
+        // 4xx 是使用方问题，只记一句：打堆栈会把真正的故障淹掉。
+        logger.warn(`请求被拒绝 (${status}): ${errorMessage(err)}`);
+        if (!res.headersSent) sendError(res, status, errorMessage(err));
+      } else {
+        logger.error(`请求处理出错: ${errorStack(err)}`);
+        // 不把内部错误原文回出去：500 的文案固定，细节只在日志里。
+        if (!res.headersSent) sendError(res, 500, "服务器内部错误");
+      }
     }
   });
 

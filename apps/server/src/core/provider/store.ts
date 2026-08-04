@@ -32,7 +32,7 @@ import type {
   ProviderSourceEntryConfig,
 } from "../../config/file.ts";
 import { configFilePath, readConfigFile, updateConfigFile } from "../../config/file.ts";
-import { errorMessage } from "../errors.ts";
+import { ApiError, errorMessage } from "../errors.ts";
 
 /** 认得的 provider 实现类型。与 factory.ts 的 TYPES 保持同步。 */
 export const PROVIDER_TYPES: readonly string[] = ["openai", "anthropic"];
@@ -60,15 +60,14 @@ export const DEFAULT_TIMEOUT_MS = 120_000;
  * 配置不合法。带上 `field` 供前端把错误定位到具体输入框，
  * `status` 则由 API 层直接用作响应码——比让调用方拿 message 做字符串匹配可靠。
  */
-export class ProviderConfigError extends Error {
+export class ProviderConfigError extends ApiError {
+  /** 出错的字段名，供前端把错误定位到具体输入框。 */
   field: string;
-  status: number;
 
   constructor(field: string, message: string, status = 400) {
-    super(message);
+    super(message, status);
     this.name = "ProviderConfigError";
     this.field = field;
-    this.status = status;
   }
 }
 
@@ -510,12 +509,4 @@ export class ProviderConfigStore {
       throw new Error(`写入 ${this.filePath} 失败：${errorMessage(err)}`, { cause: err });
     }
   }
-}
-
-/**
- * 把校验错误翻译成 HTTP 状态码。参数问题（字段不合法、id 冲突）是 400，
- * 找不到是 404——让调用方不必逐个 err.message 做字符串匹配。
- */
-export function httpStatusForError(err: unknown): number {
-  return err instanceof ProviderConfigError ? err.status : 500;
 }

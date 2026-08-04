@@ -11,6 +11,29 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** 需要回给客户端一个明确 HTTP 状态码的错误。 */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status = 400) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/**
+ * 错误 -> HTTP 状态码，全仓只有这一处规则。
+ *
+ * 存在的理由：状态码规则原先散在「provider 路由调 httpStatusForError、其余 handler 硬编码
+ * 400、顶层兜底一律 500」三种写法上，后果是「客户端把 JSON 写坏了」这种明显的 400
+ * 也回 500 并打一条带堆栈的 error 日志（7 个有请求体的端点各自漏包了 try/catch）。
+ * 现在带 status 的错误自己说话，其余才落到 500。
+ */
+export function statusForError(err: unknown): number {
+  return err instanceof ApiError ? err.status : 500;
+}
+
 /** 需要堆栈的场景（顶层请求兜底按 `stack ?? message` 记录）。 */
 export function errorStack(err: unknown): string {
   if (err instanceof Error) return err.stack ?? err.message;
