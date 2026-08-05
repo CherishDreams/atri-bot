@@ -1,7 +1,10 @@
 import type { Logger } from "../core/logger.ts";
 import { errorMessage } from "../core/errors.ts";
 
-/** 传给插件上下文的配置：运行期配置 + 插件自己声明的 `config` 段合并后的结果。 */
+/**
+ * 传给插件上下文的配置：插件可见的运行期配置（`PluginRuntimeConfig` 那份白名单视图）
+ * 与插件自己声明的 `config` 段合并后的结果，同名时插件的键优先。
+ */
 export type PluginContextConfig = Record<string, unknown>;
 
 /** `effect()` 接受的两种副作用形状（其余一律抛错）。 */

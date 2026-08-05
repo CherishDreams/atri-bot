@@ -3,6 +3,7 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PluginInfo, PluginStatus } from "@atri/shared";
 import type { Logger } from "../core/logger.ts";
+import type { AppConfig } from "../config/index.ts";
 import { ApiError, errorMessage } from "../core/errors.ts";
 import { PluginContext, type PluginContextConfig } from "./context.ts";
 
@@ -19,7 +20,7 @@ export interface PluginDefinition {
   name?: string;
   version?: string;
   description?: string;
-  /** 与运行期配置合并后交给 `ctx.config`。 */
+  /** 与插件可见的运行期配置（`PluginRuntimeConfig`）合并后交给 `ctx.config`，插件的键优先。 */
   config?: PluginContextConfig;
   setup?: (ctx: PluginContext) => void | Promise<void>;
   teardown?: () => void | Promise<void>;
@@ -30,12 +31,29 @@ export type PluginFactory = (shared: PluginShared) => PluginDefinition | Promise
 /** 传给插件工厂的共享能力。 */
 export interface PluginShared {
   logger: Logger;
-  config: PluginManagerConfig;
+  config: PluginRuntimeConfig;
 }
 
-/** PluginManager 实际读写的配置键。 */
-export interface PluginManagerConfig {
-  pluginDirs?: string[];
+/**
+ * 插件可见的运行期配置 —— **白名单**，不是「整份 `AppConfig` 的别名」。
+ *
+ * 只有一条键，是刻意的：`AppConfig` 里其余的东西（`auth.adminPassword`、
+ * 源的 `apiKey`、`providers`、`dataDir`、`staticDir`）没有插件用得到的理由，
+ * 却有「磁盘上的任意代码读到口令」这一份风险。要加新键就在下面登记，
+ * 并同步 `test/plugin-config.test.ts` 里那条键集合断言 —— 让它必须经过一次人的判断。
+ */
+export interface PluginRuntimeConfig {
+  pluginDirs: string[];
+}
+
+/**
+ * 把完整配置投影成插件可见的那一份。只有插件需要这一步：`api/`、`core/`、`adapters/`
+ * 都是仓内代码，拿着 `AppConfig` 不会离开进程信任域，而插件是磁盘上用户手写的 JS。
+ */
+export function pluginRuntimeConfig(config: AppConfig): PluginRuntimeConfig {
+  // 数组要拷一份：白名单里的键是可写的引用值，共享同一个数组的话，
+  // 插件一次 `push` 就能改到运行期配置本体（进而改变下一次扫描的目录）。
+  return { pluginDirs: [...config.pluginDirs] };
 }
 
 /** 运行时记录：模块之外由框架持有的那一份状态。 */
@@ -76,10 +94,10 @@ export class PluginManager {
   /** 带自增序号的缓存击穿计数器，保证每次重载都能拿到新代码 */
   #revision = 0;
 
-  config: PluginManagerConfig;
+  config: PluginRuntimeConfig;
   logger: Logger;
 
-  constructor(config: PluginManagerConfig, logger: Logger) {
+  constructor(config: PluginRuntimeConfig, logger: Logger) {
     this.config = config;
     this.logger = logger;
   }
@@ -90,7 +108,7 @@ export class PluginManager {
   }
 
   async loadAll(): Promise<void> {
-    for (const dir of this.config.pluginDirs ?? []) {
+    for (const dir of this.config.pluginDirs) {
       await this.#scanDir(dir);
     }
     const active = [...this.#records.values()].filter((r) => r.status === "active");
