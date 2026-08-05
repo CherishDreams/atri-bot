@@ -237,9 +237,32 @@ Vue 3 + vue-router + Pinia + UnoCSS(presetWind4) + naive-ui，`<script setup lan
 apps/server/openapi.json  -->  pnpm codegen  -->  apps/dashboard/src/api/generated/（入库，不得手改）
 ```
 
-改接口的完整动作：改代码 → 同步改 `openapi.json` → `pnpm codegen` → 提交生成物。
-`apps/server/test/openapi.test.ts` 会比对**真实注册的路由**与规格里的路径，
-所以「加了端点但忘了写进规格」会被它抓住——**不要为了让测试通过去改这个测试**，它自动覆盖新路由。
+**三道检查各管一层，谁也不替谁**（缺了哪一层都会有一种「规格说谎而检查全绿」的形态）：
+
+| 检查                                  | 守住的东西                                                                              | 漏掉它会怎样                           |
+| ------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------- |
+| `test/openapi.test.ts`                | 路径与方法：注册的路由 ↔ 规格里的 path                                                  | 加了端点忘写规格 → 前端 SDK 少一个方法 |
+| `test/openapi-response-shape.test.ts` | **响应体字段**：真实驱动 25 个端点，逐字段比 `type`/`required`/`enum`/状态码            | 字段改了路径没变 → 前端类型骗人        |
+| `test/openapi-request.test.ts`        | **请求侧与鉴权侧**：省略必填必须 400、畸形 JSON 必须 400、匿名访问与规格的 401 双向一致 | 运行时校验被删 / 新路由忘了声明 401    |
+
+红了统一按这句话办：**改 `openapi.json`，然后 `pnpm codegen` 并提交生成物；不要为了让检查变绿去改这三个测试。**
+唯一允许「登记差异」的地方是响应形状文件里的 `EMPTY_OK`（目前只有 `adapters` 一项，理由写在它的注释里）。
+
+### 为什么规格是手写的，不由代码生成
+
+自动生成规格的前提是「schema 存在于运行时代码里」，本仓三条路都要付依赖代价，且都被否掉：
+`fastify` + `@fastify/swagger`（传递依赖 ~70 个包，含 `pino`/`semver`，直接违反下面的依赖极简）、
+`hono` + `@hono/zod-openapi`（~7 包，但 Web Fetch 模型与现有 `node:http` 行为 —— WS 升级鉴权、
+静态目录穿越 403、Cookie 逐属性、SSE 的 `cache-control: no-store` —— 冲突面最大）、
+路由上声明 JSON Schema + `ajv`（5 包，最接近可用，但仍是为一个不对外发布的规格引入运行时依赖）。
+外部对照：AstrBot 有 FastAPI 免费自动 openapi，可它喂给自家 `openapi-ts` 的仍是手写入库的
+`openspec/openapi-v1.yaml` —— 因为它的规格是**对外契约**，要按 scope 精选。本仓的规格只服务
+自己的 dashboard，没有精选需求，但也没有「自动生成就不会说谎」这回事：说谎的是字段，
+上面那三道检查就是为此存在。**别把「改成自动生成」当成这个洞的解法。**
+
+改接口的完整动作：改代码 → 同步改 `openapi.json` → `pnpm codegen` → **把生成物与改动同一个提交**
+（`codegen:check` 用 `git status --porcelain` 判漂移，生成物留在工作树里不提交会被报成「不同步」）。
+`openapi.test.ts` 自动覆盖新增路由，不需要手工登记。
 
 生成物**豁免 oxlint/oxfmt**（两者 `ignorePatterns`）。这不只是为了省事：
 若格式化会改动生成物，「重新生成后无差异」这条检查就永远不成立。

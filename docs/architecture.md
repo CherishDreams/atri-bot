@@ -259,6 +259,15 @@ errors.ts   ProviderError 与上游错误归一
 **否掉了**：那份声明和 `context.ts` 是同一事实的第二处书写，正是本仓反对的模式；
 而服务端现在 `noEmit`，也不再有任何 `.d.ts` 消费者。要类型就读源码，或者在自己的插件里写 JSDoc。
 
+### 已知待决：插件能读到整份运行期配置
+
+`shared.config` 与 `ctx.config` 在运行时拿到的就是 `AppConfig` 本身 —— 里面包含
+`auth.adminPassword` 与源的 `apiKey`。迁移时把 `PluginManagerConfig` 的类型写窄成了
+`{ pluginDirs?: string[] }`（那是 PluginManager 自己读写的那几个键），但**传出去的还是整个对象**，
+所以类型比现实窄。这一件要连安全边界一起决定，不能靠改类型标注假装解决：
+要么把注入给插件的配置收成白名单（行为变更，会影响现有插件），要么把类型如实写成
+`AppConfig` 并在此声明「插件可见全部配置」。留待单独一次改动定夺。
+
 ## 前端
 
 `apps/dashboard` 是 Vue 3 + vue-router + Pinia + UnoCSS + naive-ui 的单页应用：
@@ -384,6 +393,9 @@ src/
   —— WS 升级鉴权、静态目录穿越 403、Cookie 逐属性、SSE 的 `cache-control: no-store` —— 冲突面最大）。
 - `pnpm typecheck` 也检查测试（`test/**/*` 在 `include` 里）。测试因此不能再靠
   「JS 不检查」蒙混，config 字面量要真的符合 `AppConfig`。
+- `erasableSyntaxOnly` **只开在 `apps/server`**，不是全仓统一：这个选项的前提是
+  「没人编译，只靠擦除」。`packages/shared` 与 `apps/dashboard` 是真的被 `tsc` / Vite 编译，
+  `enum` 在那里会被正常降级而不是留下跑不起来的东西，给它们开属于错误的一致化。
 
 ## 关停
 

@@ -318,6 +318,13 @@ pnpm codegen        # openapi-ts -f openapi-ts.config.ts
 所以**改了接口就必须同步提交生成物**。校验用的是 `git status --porcelain`
 而不是 `git diff`：后者看不见未跟踪文件，新增端点时会漏报，而那正是最需要报警的情况。
 
+`codegen:check` 只保证「生成物 = 规格」，**不保证规格说的是真话**。规格与实现之间由三道测试守着：
+`test/openapi.test.ts` 管路径与方法，`test/openapi-response-shape.test.ts` 真实驱动全部端点、
+逐字段比对响应体（`type`/`required`/枚举/状态码），`test/openapi-request.test.ts` 管请求侧与鉴权侧
+（省略必填字段必须 400、畸形 JSON 必须 400、匿名访问与规格声明的 401 双向一致）。
+因此**改任何一个接口字段的提交，都必须同时改 `openapi.json` 并重新 codegen**；
+红了的正确反应是改规格，不是改这三个测试。
+
 生成物不参与 oxlint/oxfmt（见两者配置的 `ignorePatterns`），以保证
 「重新生成后无差异」这条检查是可信的。
 
