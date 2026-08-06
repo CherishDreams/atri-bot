@@ -259,14 +259,39 @@ errors.ts   ProviderError 与上游错误归一
 **否掉了**：那份声明和 `context.ts` 是同一事实的第二处书写，正是本仓反对的模式；
 而服务端现在 `noEmit`，也不再有任何 `.d.ts` 消费者。要类型就读源码，或者在自己的插件里写 JSDoc。
 
-### 已知待决：插件能读到整份运行期配置
+### 插件可见的配置：白名单视图
 
-`shared.config` 与 `ctx.config` 在运行时拿到的就是 `AppConfig` 本身 —— 里面包含
-`auth.adminPassword` 与源的 `apiKey`。迁移时把 `PluginManagerConfig` 的类型写窄成了
-`{ pluginDirs?: string[] }`（那是 PluginManager 自己读写的那几个键），但**传出去的还是整个对象**，
-所以类型比现实窄。这一件要连安全边界一起决定，不能靠改类型标注假装解决：
-要么把注入给插件的配置收成白名单（行为变更，会影响现有插件），要么把类型如实写成
-`AppConfig` 并在此声明「插件可见全部配置」。留待单独一次改动定夺。
+插件是仓库里**唯一**来自磁盘的用户代码，因此它也是唯一的信任边界：`api/`、`core/`、`adapters/`
+拿着整份 `AppConfig` 不会离开本进程，而 `shared.config` / `ctx.config` 是直接交到用户手写的
+`index.js` 手上的东西。所以这两处给的不是 `AppConfig`，而是 `pluginRuntimeConfig()` 投影出来的
+`PluginRuntimeConfig`，目前只有 `pluginDirs` 一条键。
+
+迁移时曾经是反过来的：`app.ts` 把整个 config 交给 `PluginManager`，而 `PluginManagerConfig`
+声明成 `{ pluginDirs?: string[] }`。那是「类型比现实窄」——插件运行时想读什么就能读到什么
+（`auth.adminPassword`、源的 `apiKey` 都在里面），窄标注只会让人误以为边界已经收住了。
+
+三条不显然的决定：
+
+- **白名单，不是黑名单。** 秘密会换名字、会新增（下一版多个 `smtpPassword` 就再漏一次），
+  而「插件需要哪几条键」是个能一次数清的问题。默认拒绝让新增必须经过人的判断，
+  改动点写在 `plugins/manager.ts` 的类型上，并有对应测试。
+- **投影发生在组合根。** `app.ts` 是唯一同时认识「完整配置」与「插件」两边的地方。
+  决定放在那里，插件子系统就不知道自己被挡掉了什么，也不会哪天有人「顺手」把整个对象传进去。
+- **视图里的数组是副本。** 共享同一个数组时，插件一次 `push` 就改到运行期配置本体，
+  进而改变下一次扫描的目录。
+
+`test/plugin-config.test.ts` 钉住这条边界：真起一个 app，fixture 插件把 `shared.config` 的键与
+`ctx.config` 的**整个对象**交回测试，`deepEqual` 连多出来的键一起报错；另有一句断言「口令与
+apiKey 确实存在于交给 app 的配置里」，防止有人清空测试配置后守卫悄悄变成空话。
+
+> 对照 AstrBot：它的「分开管理」做在**对外 HTTP 面**——内部 dashboard API 全量，对外的
+> Open API 由脚本从全量 `openspec/openapi-v1.yaml` 按 `PUBLIC_OPEN_API_SCOPES` 白名单派生、
+> 用 API key 鉴权，并由 `tests/unit/test_openapi_scope_docs.py` 断言每个公开操作都声明了
+> `x-astrbot-scope`。它的**插件层**没有做这道投影：`self.context.config` 就是那份
+> `AstrBotConfig`，插件自己的配置项用 `StarConfigMetadata` 声明后也存在同一个 config 里。
+> 我们抄的是它「派生一个低信任面 + 用测试把关」的形状，收得比它的插件层更紧。
+> 若将来要支持在控制台里编辑某个插件的配置项（AstrBot 的 `plugin_settigns` 那种），
+> 新增的应当是**该插件专属的一段**，而不是把 `AppConfig` 重新交出去。
 
 ## 前端
 

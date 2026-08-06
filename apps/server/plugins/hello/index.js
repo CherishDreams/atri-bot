@@ -5,7 +5,9 @@
  * 也可以默认导出一个工厂函数 `(shared) => 上述对象`。
  *
  * `ctx` 提供：
- *   - logger、config：只读的日志器与配置
+ *   - logger：只读日志器
+ *   - config：插件可见的配置（白名单视图，目前只有 pluginDirs），
+ *     再合并上本插件自己声明的 `config` 段；口令与 provider 的 apiKey 不会到这里
  *   - ctx.effect(fn | {dispose()})：登记副作用，卸载时逆序自动释放
  *   - ctx.subscribe(emitter, event, handler)：订阅并在卸载时自动退订
  *

@@ -248,7 +248,10 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 插件上下文 `ctx` 暴露：
 
-- `logger`、`config`：日志器与配置（只读）
+- `logger`、`config`：日志器与**插件可见的配置**。`config` 是白名单视图，目前只有
+  `pluginDirs` 一条键；口令、provider 的 `apiKey` 这类运行期配置不会交到插件手上
+  （理由见 [插件可见的配置](./docs/architecture.md#插件可见的配置白名单视图)）。
+  插件默认导出里声明的 `config` 段会合并进来，同名时插件的键优先。
 - `ctx.effect(fn | { dispose() }, label?)`：登记副作用，卸载时逆序自动释放，返回提前释放函数
 - `ctx.subscribe(emitter, event, handler)`：订阅 emitter，并在卸载时自动退订
 

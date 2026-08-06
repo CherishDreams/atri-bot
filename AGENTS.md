@@ -79,6 +79,20 @@ plugins/  ─> 只依赖注入给它的 ctx
 新增能力时的落点：入站适配 → `adapters/`；出站模型 → `core/provider/factory.ts` 的 `TYPES` 表；
 业务逻辑 → `core/`；HTTP 表面 → `api/server.ts` + `openapi.json`。
 
+### 信任边界只有一条：插件
+
+`api/` / `core/` / `adapters/` 都是仓内代码，拿到整份 `AppConfig` 不会离开进程信任域；
+**插件是磁盘上用户手写的 `index.js`**，`shared.config` 与 `ctx.config` 是直接交到它手上的东西。
+
+- 交给插件的配置必须经 `plugins/manager.ts` 的 `pluginRuntimeConfig()` 投影，
+  在 `app.ts` 装配处完成，**不要把 `config` 整个传过去**。
+- 那是**白名单**：新增可见键要同时改类型与 `test/plugin-config.test.ts` 里的键集合断言，
+  让「插件能多看到一条」必须经过一次人的判断。不要用黑名单去列「不该看到的键」——
+  秘密会换名字、会新增，黑名单每一次都迟到。
+- 窄的类型标注**不等于**窄的现实。上面那条「构造参数只声明自己读写的键」只解决强度问题；
+  对象真的传出去时，现实由运行时那个对象决定（这里曾经就是这么漏的：类型写的是
+  `{ pluginDirs?: string[] }`，运行时交到插件手上的是整个 `AppConfig`）。
+
 ### 命名上不要混用两个词
 
 **adapter** 是入站接入（QQ、Discord、webhook…），契约是长驻的 `start()`/`stop()`；
@@ -103,6 +117,8 @@ plugins/  ─> 只依赖注入给它的 ctx
   把 `?? undefined` 一路传染下去；后者是把 `noUncheckedIndexedAccess` 的好处整个丢掉。
   `as` 只用在真边界上（`JSON.parse`、`response.json()`、动态 import 的插件模块、
   配置文件读回来的顶层对象），并且必须写清「为什么这里只能是这个形状」。
+  **但这条只适用于仓内代码**：窄标注只是强度问题，不改变运行时那个对象。配置真要交到插件手上时，
+  得在装配处投影出实际可见的那一份（见上面「信任边界只有一条：插件」）。
 - 数组排序/反转用 `toSorted()` / `toReversed()`，不要 `sort()` / `reverse()`
   （`unicorn(no-array-sort)`：后两者原地修改数组）。
 - 包装捕获到的错误时**带上 cause**，否则堆栈里丢了原始错误，排查变成猜：
