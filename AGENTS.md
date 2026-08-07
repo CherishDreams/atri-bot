@@ -81,11 +81,13 @@ plugins/  ─> 只依赖注入给它的 ctx
 
 ### 信任边界只有一条：插件
 
-`api/` / `core/` / `adapters/` 都是仓内代码，拿到整份 `AppConfig` 不会离开进程信任域；
-**插件是磁盘上用户手写的 `index.js`**，`shared.config` 与 `ctx.config` 是直接交到它手上的东西。
+`api/` / `core/` / `adapters/` 都是仓内代码，读配置的是我们自己写的逻辑；
+**插件是磁盘上用户手写的 `index.js`**，`shared.config` 与 `ctx.config` 是框架主动交到它手上的东西。
 
 - 交给插件的配置必须经 `plugins/manager.ts` 的 `pluginRuntimeConfig()` 投影，
   在 `app.ts` 装配处完成，**不要把 `config` 整个传过去**。
+  （这不是沙箱：进程内的任意 JS 总能自己去读 `atri.config.json`；白名单收住的是
+  「框架主动把秘密递到插件手上」这条默认路径。原理写在 architecture.md。）
 - 那是**白名单**：新增可见键要同时改类型与 `test/plugin-config.test.ts` 里的键集合断言，
   让「插件能多看到一条」必须经过一次人的判断。不要用黑名单去列「不该看到的键」——
   秘密会换名字、会新增，黑名单每一次都迟到。

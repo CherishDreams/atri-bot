@@ -47,8 +47,9 @@ export interface PluginRuntimeConfig {
 }
 
 /**
- * 把完整配置投影成插件可见的那一份。只有插件需要这一步：`api/`、`core/`、`adapters/`
- * 都是仓内代码，拿着 `AppConfig` 不会离开进程信任域，而插件是磁盘上用户手写的 JS。
+ * 把完整配置投影成插件可见的那一份。只有插件需要这一步：`api/` / `core/` / `adapters/`
+ * 是仓内代码，读配置的是我们自己写的逻辑；插件是磁盘上用户手写的 JS，而 `ctx.config`
+ * 是框架**主动交出去**的那一份。它仍在同一进程内，所以这不是沙箱，原理见 architecture.md。
  */
 export function pluginRuntimeConfig(config: AppConfig): PluginRuntimeConfig {
   // 数组要拷一份：白名单里的键是可写的引用值，共享同一个数组的话，

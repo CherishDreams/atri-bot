@@ -262,9 +262,9 @@ errors.ts   ProviderError 与上游错误归一
 ### 插件可见的配置：白名单视图
 
 插件是仓库里**唯一**来自磁盘的用户代码，因此它也是唯一的信任边界：`api/`、`core/`、`adapters/`
-拿着整份 `AppConfig` 不会离开本进程，而 `shared.config` / `ctx.config` 是直接交到用户手写的
-`index.js` 手上的东西。所以这两处给的不是 `AppConfig`，而是 `pluginRuntimeConfig()` 投影出来的
-`PluginRuntimeConfig`，目前只有 `pluginDirs` 一条键。
+拿着整份 `AppConfig`，读它的是仓内自己写的逻辑；而 `shared.config` / `ctx.config` 是框架**主动交到
+用户手写的 `index.js` 手上**的那一份。所以这两处给的不是 `AppConfig`，而是 `pluginRuntimeConfig()`
+投影出来的 `PluginRuntimeConfig`，目前只有 `pluginDirs` 一条键。
 
 迁移时曾经是反过来的：`app.ts` 把整个 config 交给 `PluginManager`，而 `PluginManagerConfig`
 声明成 `{ pluginDirs?: string[] }`。那是「类型比现实窄」——插件运行时想读什么就能读到什么
@@ -284,13 +284,38 @@ errors.ts   ProviderError 与上游错误归一
 `ctx.config` 的**整个对象**交回测试，`deepEqual` 连多出来的键一起报错；另有一句断言「口令与
 apiKey 确实存在于交给 app 的配置里」，防止有人清空测试配置后守卫悄悄变成空话。
 
-> 对照 AstrBot：它的「分开管理」做在**对外 HTTP 面**——内部 dashboard API 全量，对外的
-> Open API 由脚本从全量 `openspec/openapi-v1.yaml` 按 `PUBLIC_OPEN_API_SCOPES` 白名单派生、
-> 用 API key 鉴权，并由 `tests/unit/test_openapi_scope_docs.py` 断言每个公开操作都声明了
-> `x-astrbot-scope`。它的**插件层**没有做这道投影：`self.context.config` 就是那份
-> `AstrBotConfig`，插件自己的配置项用 `StarConfigMetadata` 声明后也存在同一个 config 里。
-> 我们抄的是它「派生一个低信任面 + 用测试把关」的形状，收得比它的插件层更紧。
-> 若将来要支持在控制台里编辑某个插件的配置项（AstrBot 的 `plugin_settigns` 那种），
+这不是沙箱。插件是**进程内**的任意 JS，真想读 `atri.config.json` 或 import 仓内模块，拦是拦不住的。
+白名单收住的是「**框架主动把秘密递到插件手上**」这条默认路径 —— 插件由许多人写、由用户自行安装，
+靠作者自觉不去读口令是不成立的；能成立的是框架本来就没给。
+
+> 对照 AstrBot。以下按 **PyPI sdist `astrbot==4.28.2`** 的源码（GitHub 不可达时它是可靠来源），
+> 文件与行号都按那个版本：
+>
+> - 它的「分开管理」做在**对外 HTTP 面**：内部 dashboard API 全量；对外的 Open API 由脚本按
+>   `PUBLIC_OPEN_API_SCOPES` 白名单从全量 `openspec/openapi-v1.yaml` 派生，用 API key 鉴权，
+>   并由 `tests/unit/test_openapi_scope_docs.py` 断言每个公开操作都声明了 `x-astrbot-scope`。
+> - 它的**插件层没有这道投影**：`core_lifecycle.py:240-254` 把整份 `astrbot_config` 直接交给
+>   `StarContext`（那里的注释就写着「初始化提供给插件的上下文」），`star/context.py:597-612`
+>   的 `get_config()` 原样返回，没有字段过滤。
+> - 于是插件能读到 `dashboard` 段（`core/config/default.py:237-263`）里的 `jwt_secret`
+>   ——它由 `os.urandom(32)` 生成后**写回配置文件**（`dashboard/server.py:432-439`）——以及
+>   `totp.secret` 和 `provider_sources` / `provider` 里的 `api_keys`
+>   （`core/provider/manager.py:44-47` 读那两段，`provider/sources/openai_source.py:359`
+>   把 `api_keys` 挂在实例上）。唯一拿不到的是**明文登录口令**：落盘的只有
+>   `pbkdf2_password` 与 md5 哈希，首次启动生成的明文口令挂在 `AstrBotConfig` 的**对象属性**上
+>   （`core/config/astrbot_config.py:113-128`；它是 `dict` 子类，属性不进 dict 所以不会被保存），
+>   打印一次即丢。但 `jwt_secret` 比口令更直接：有它就能自签管理员令牌。
+> - 更深的一层：AstrBot 的插件除了 config 还直接拿到 `provider_manager`（公开属性，
+>   注释写作「模型提供商管理器」）与 `_db` 句柄，
+>   所以在那种形状里「把 config 过滤掉」并不等于收住能力。**我们这条边界之所以成立，
+>   是因为 `ctx` 的表面只有 `logger` / `config` / `effect` / `subscribe`** ——没有 provider、
+>   没有数据库、没有 HTTP 出口。哪天要往 `ctx` 加这三样中的任何一样，白名单就不再是边界了，
+>   那时该谈的是**能力授予**而不是字段遮蔽。
+>
+> 我们抄的是它「派生一个低信任面 + 用测试把关」的形状（边界写在数据里，不写在注释里），
+> 而不是它插件层的宽松度。
+> 若将来要支持在控制台里编辑某个插件的配置项（AstrBot 有这一层：插件用 `StarConfigMetadata`
+> 声明自己的设置项，这一条来自它的文档站，我没在 4.28.2 的源码里逐处核对），
 > 新增的应当是**该插件专属的一段**，而不是把 `AppConfig` 重新交出去。
 
 ## 前端
