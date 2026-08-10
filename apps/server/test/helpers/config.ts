@@ -24,6 +24,8 @@ export interface TestConfigInput {
   providerSources?: AppConfig["providerSources"];
   pluginDirs?: string[];
   adapters?: AppConfig["adapters"];
+  /** 工具开关。默认空 = 全部禁用（工具是能力授予，默认关闭）。 */
+  tools?: AppConfig["tools"];
   /** 覆盖 `auth` 段里的任意键（如测试要验证 `cookieSecure` 开关）。 */
   auth?: Partial<AppConfig["auth"]>;
   /** 默认指向不存在的目录；要测静态托管/SPA 回退时传真实目录。 */
@@ -39,6 +41,7 @@ export function makeTestConfig({
   providerSources = {},
   pluginDirs = [],
   adapters = {},
+  tools = {},
   auth = {},
   staticDir = join(root, "nonexistent"),
   adminPassword = "pw",
@@ -52,6 +55,7 @@ export function makeTestConfig({
     dataDir,
     pluginDirs,
     adapters,
+    tools,
     providers,
     providerSources,
     auth: {

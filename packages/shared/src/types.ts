@@ -110,7 +110,6 @@ export interface AdapterInfo {
 
 /** 插件运行时状态。active=运行中，disabled=已禁用（保留元数据可再启用）。 */
 export type PluginStatus = "active" | "disabled";
-
 export interface PluginInfo {
   id: string;
   name: string;
@@ -124,10 +123,25 @@ export interface PluginInfo {
 }
 
 /**
+ * 一颗可被模型调用的工具，以及它当前的启用状态。
+ *
+ * `enabled` 的默认语义与 `AdapterInfo` **相反**：适配器没写就启用（少听一个端口而已），
+ * 工具是能力授予，必须在 `atri.config.json` 里显式写 `{"enabled": true}` 才生效 ——
+ * 一次升级不该静默给模型新增能力。
+ */
+export interface ToolInfo {
+  id: string;
+  /** 控制台显示名；没有中文名时等于 id。 */
+  name: string;
+  enabled: boolean;
+  /** 给模型看的说明。控制台用它解释这颗工具是干什么的。 */
+  description?: string;
+}
+
+/**
  * 已通过鉴权的账号。目前只有单一管理员，因此只有用户名；
  * 凭证本身从不进入响应体，一律走 HttpOnly Cookie。
- */
-export interface AuthUser {
+ */ export interface AuthUser {
   username: string;
 }
 

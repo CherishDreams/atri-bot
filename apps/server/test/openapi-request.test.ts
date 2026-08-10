@@ -102,6 +102,9 @@ test("规格声明的必填请求字段，实现真的在拒", async (t) => {
   const paths: Record<string, string> = {
     "/sessions/{id}/messages": `/sessions/${sessionId}/messages`,
     "/sessions/{id}/messages/stream": `/sessions/${sessionId}/messages/stream`,
+    // 内置工具由组合根无条件注册，id 是代码里的常量。用假 id 的话，
+    // 省略必填得到的 400 是「未知工具」给的，enabled 校验被删也照样绿。
+    "/tools/{id}/enable": "/tools/current_time/enable",
   };
 
   const cases: { operationId: string; full: Record<string, unknown> }[] = [
@@ -110,6 +113,7 @@ test("规格声明的必填请求字段，实现真的在拒", async (t) => {
     { operationId: "streamMessage", full: { content: "你好" } },
     { operationId: "createProvider", full: { id: "req-probe", source: "stub", model: "m" } },
     { operationId: "createProviderSource", full: { id: "req-probe-src" } },
+    { operationId: "setToolEnabled", full: { enabled: true } },
   ];
 
   for (const { operationId, full } of cases) {
@@ -129,8 +133,8 @@ test("规格声明的必填请求字段，实现真的在拒", async (t) => {
         assert.equal(
           res.status,
           400,
-          `${operationId} 省略了规格里标 required 的 ${drop}，竟然拿到 ${res.status}：` +
-            `要么实现的校验被删了，要么规格写错了必填。`,
+          `${operationId} 省略了规格里标 required 的 ${drop}，竟然拿到 ${res.status}（打到 ${path}）：` +
+            `要么实现的校验被删了，要么规格写错了必填，要么这条路径没有真实资源 id。`,
         );
         assert.deepEqual(Object.keys(json), ["error"], `400 的响应体必须是 { error } 形状`);
         assert.equal(typeof json.error, "string");

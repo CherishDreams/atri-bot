@@ -29,6 +29,10 @@
       "description": "插件管理"
     },
     {
+      "name": "tools",
+      "description": "工具（function calling）与启用开关"
+    },
+    {
       "name": "providers",
       "description": "模型实例配置"
     },
@@ -965,6 +969,90 @@
           }
         }
       }
+    },
+    "/tools": {
+      "get": {
+        "operationId": "listTools",
+        "summary": "列出可用工具及其启用状态",
+        "tags": ["tools"],
+        "responses": {
+          "200": {
+            "description": "工具列表。内置工具恒为已注册，因此数组不为空；未启用项的 enabled 为 false。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["tools"],
+                  "properties": {
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ToolInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/tools/{id}/enable": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ToolId"
+        }
+      ],
+      "post": {
+        "operationId": "setToolEnabled",
+        "summary": "启用 / 禁用工具",
+        "description": "写入 atri.config.json 的 tools 段，立即生效，不需要重启。enabled 必填：工具是能力授予，不接受「省略即启用」这种默认值，所以这里与 POST /plugins/{id}/enable 的宽松写法刻意不同。",
+        "tags": ["tools"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolEnableRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的工具状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["tool"],
+                  "properties": {
+                    "tool": {
+                      "$ref": "#/components/schemas/ToolInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1004,6 +1092,15 @@
           "type": "string"
         },
         "description": "provider source id"
+      },
+      "ToolId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "工具 id"
       }
     },
     "responses": {
@@ -1468,6 +1565,38 @@
           "error": {
             "type": ["string", "null"],
             "description": "加载失败时的可读原因；正常时为 null"
+          }
+        }
+      },
+      "ToolInfo": {
+        "type": "object",
+        "required": ["id", "name", "enabled", "description"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "工具 id，也是交给模型的函数名"
+          },
+          "name": {
+            "type": "string",
+            "description": "控制台显示名；没有中文名时等于 id"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "是否启用。工具默认关闭，必须在 atri.config.json 里显式写 enabled: true（与 adapters 的默认启用刻意相反）"
+          },
+          "description": {
+            "type": "string",
+            "description": "给模型看的说明，控制台用它解释这颗工具做什么"
+          }
+        }
+      },
+      "ToolEnableRequest": {
+        "type": "object",
+        "required": ["enabled"],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "必填。省略会得到 400，而不是「默认启用」"
           }
         }
       }

@@ -237,6 +237,32 @@ export type PluginInfo = {
     error?: string | null;
 };
 
+export type ToolInfo = {
+    /**
+     * 工具 id，也是交给模型的函数名
+     */
+    id: string;
+    /**
+     * 控制台显示名；没有中文名时等于 id
+     */
+    name: string;
+    /**
+     * 是否启用。工具默认关闭，必须在 atri.config.json 里显式写 enabled: true（与 adapters 的默认启用刻意相反）
+     */
+    enabled: boolean;
+    /**
+     * 给模型看的说明，控制台用它解释这颗工具做什么
+     */
+    description: string;
+};
+
+export type ToolEnableRequest = {
+    /**
+     * 必填。省略会得到 400，而不是「默认启用」
+     */
+    enabled: boolean;
+};
+
 /**
  * 会话 id
  */
@@ -256,6 +282,11 @@ export type ProviderId = string;
  * provider source id
  */
 export type ProviderSourceId = string;
+
+/**
+ * 工具 id
+ */
+export type ToolId = string;
 
 export type HealthData = {
     body?: never;
@@ -1090,3 +1121,74 @@ export type ListAdaptersResponses = {
 };
 
 export type ListAdaptersResponse = ListAdaptersResponses[keyof ListAdaptersResponses];
+
+export type ListToolsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tools';
+};
+
+export type ListToolsErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type ListToolsError = ListToolsErrors[keyof ListToolsErrors];
+
+export type ListToolsResponses = {
+    /**
+     * 工具列表。内置工具恒为已注册，因此数组不为空；未启用项的 enabled 为 false。
+     */
+    200: {
+        tools: Array<ToolInfo>;
+    };
+};
+
+export type ListToolsResponse = ListToolsResponses[keyof ListToolsResponses];
+
+export type SetToolEnabledData = {
+    body: ToolEnableRequest;
+    path: {
+        /**
+         * 工具 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/tools/{id}/enable';
+};
+
+export type SetToolEnabledErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
+};
+
+export type SetToolEnabledError = SetToolEnabledErrors[keyof SetToolEnabledErrors];
+
+export type SetToolEnabledResponses = {
+    /**
+     * 更新后的工具状态
+     */
+    200: {
+        tool: ToolInfo;
+    };
+};
+
+export type SetToolEnabledResponse = SetToolEnabledResponses[keyof SetToolEnabledResponses];

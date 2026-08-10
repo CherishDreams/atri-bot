@@ -4,6 +4,9 @@ import { SessionManager } from "./core/session/manager.ts";
 import { ProviderRegistry } from "./core/provider/registry.ts";
 import { createProviders, readDefaultProviderId } from "./core/provider/factory.ts";
 import { ProviderConfigStore } from "./core/provider/store.ts";
+import { ToolRegistry } from "./core/tool/registry.ts";
+import { ToolConfigStore } from "./core/tool/store.ts";
+import { createBuiltinTools } from "./core/tool/builtins.ts";
 import { AuthManager } from "./core/auth/manager.ts";
 import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
 import { AdapterManager } from "./adapters/manager.ts";
@@ -27,6 +30,12 @@ export async function createApp(config: AppConfig) {
 
   // provider 配置的读写入口。启动时读一次，之后每次界面改动都经由它落盘。
   const providerConfig = new ProviderConfigStore(config, logger);
+
+  // 工具：注册表只管存在与执行，启用与否每次现读文件（见 `core/tool/store.ts`），
+  // 所以控制台改完开关不需要重建任何东西 —— 也没有可重建的长驻状态。
+  const tools = new ToolRegistry();
+  for (const tool of createBuiltinTools()) tools.register(tool);
+  const toolConfig = new ToolConfigStore(config, logger);
 
   /**
    * 按当前配置装配 provider。
@@ -86,6 +95,8 @@ export async function createApp(config: AppConfig) {
     reloadProviders: rebuildProviders,
     plugins,
     adapters,
+    tools,
+    toolConfig,
     engine,
   });
 

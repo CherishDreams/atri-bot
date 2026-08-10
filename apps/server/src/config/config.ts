@@ -6,6 +6,7 @@ import type {
   FileConfig,
   ProvidersFileConfig,
   ProviderSourceEntryConfig,
+  ToolToggle,
 } from "./file.ts";
 import { errorMessage } from "../core/errors.ts";
 
@@ -30,6 +31,11 @@ export interface AppConfig {
   dataDir: string;
   pluginDirs: string[];
   adapters: Record<string, AdapterToggle>;
+  /**
+   * 工具开关。**这里只是启动时的那一份快照**，运行期的读写都走
+   * `core/tool/store.ts`（它在控制台改完开关后必须立刻反映新状态，见其类注释）。
+   */
+  tools: Record<string, ToolToggle>;
   providers: ProvidersFileConfig;
   providerSources: Record<string, ProviderSourceEntryConfig>;
   auth: {
@@ -72,6 +78,8 @@ export function loadConfig(): AppConfig {
     pluginDirs: (fileConfig.pluginDirs ?? ["./plugins"]).map((p) => resolve(root, p)),
     // 适配器是可选启用的；纯 agent 部署一个都不开。
     adapters: fileConfig.adapters ?? {},
+    // 工具与适配器相反：默认全部关闭，必须在文件里显式写 enabled: true。
+    tools: fileConfig.tools ?? {},
     // 两层 provider 配置：源（连接）与实例（模型）。测试常直接传这两个字段，
     // 因此缺省为空对象而不是 null。
     providers: fileConfig.providers ?? {},

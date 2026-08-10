@@ -24,6 +24,17 @@ export interface AdapterToggle {
   [key: string]: unknown;
 }
 
+/**
+ * 工具段里的单项。形状与 `AdapterToggle` 一致（同样必须开放：读-改-写要把工具自己的
+ * 配置键原样带回），但**默认语义正好相反** —— 适配器没写就是启用，工具没写就是禁用，
+ * 判据分别是 `=== false` 与 `=== true`（见 `core/tool/store.ts`）。
+ * 不要把两处「统一」成同一个类型或同一个判据：一边是少听一个端口，另一边是能力授予。
+ */
+export interface ToolToggle {
+  enabled?: boolean;
+  [key: string]: unknown;
+}
+
 /** provider 实例（模型）的磁盘条目。字段全可选：校验发生在写入时，不在读取时。 */
 export interface ProviderEntryConfig {
   source?: string;
@@ -71,6 +82,7 @@ export interface FileConfig {
   staticDir?: string;
   pluginDirs?: string[];
   adapters?: Record<string, AdapterToggle>;
+  tools?: Record<string, ToolToggle>;
   providers?: ProvidersFileConfig;
   providerSources?: Record<string, ProviderSourceEntryConfig>;
   auth?: AuthFileConfig;

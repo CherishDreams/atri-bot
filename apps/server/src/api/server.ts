@@ -4,10 +4,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
-import type { ServerFrame } from "@atri/shared";
+import type { ServerFrame, ToolInfo } from "@atri/shared";
 import { API_PREFIX, APP_NAME, WS_PATH } from "@atri/shared";
 import { createProviders } from "../core/provider/factory.ts";
 import type { ProviderEntry } from "../core/provider/store.ts";
+import type { ToolDefinition } from "../core/tool/types.ts";
 import { Router } from "./router.ts";
 import { readJson, sendError, sendJson, sendSse, startSse, type HttpDeps } from "./http.ts";
 import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from "./auth.ts";
@@ -53,6 +54,23 @@ function viewListEntry(entry: ProviderEntry): ProviderEntry {
  */
 function viewProvider(entry: ProviderEntry, defaultId: string | null): ProviderMutationResult {
   return { ...viewListEntry(entry), default: entry.id === defaultId };
+}
+
+/**
+ * 注册表条目 -> 对外视图。
+ *
+ * `enabled` 必须由调用方现问 `ToolConfigStore`，不能从注册表推：注册表只管「存在」，
+ * 启用与否是每次现读文件的结果（见 `core/tool/store.ts` 的类注释）。
+ * `parameters` 刻意不出去 —— 它是给模型的 JSON Schema，控制台不需要，把它带上等于
+ * 让响应形状跟着工具实现走，每加一颗工具都得回头改规格。
+ */
+function viewTool(tool: ToolDefinition, enabled: boolean): ToolInfo {
+  return {
+    id: tool.id,
+    name: tool.name ?? tool.id,
+    enabled,
+    description: tool.description,
+  };
 }
 
 /**
@@ -103,7 +121,7 @@ const CONTENT_TYPES: Record<string, string> = {
  */
 export function createHttpServer(deps: HttpDeps) {
   const { config, logger, sessions, providers, plugins, adapters, engine, auth } = deps;
-  const { providerConfig, reloadProviders } = deps;
+  const { providerConfig, reloadProviders, tools, toolConfig } = deps;
 
   const cookieName = auth.cookieName;
   const router = new Router();
@@ -448,6 +466,31 @@ export function createHttpServer(deps: HttpDeps) {
 
   router.get(`${API_PREFIX}/adapters`, async (_req, res) => {
     sendJson(res, 200, { adapters: adapters.list() });
+  });
+
+  // --- 工具 ---------------------------------------------------------------
+  //
+  // 与 provider 那组不同：这里**不需要重建任何东西**。注册表只回答「这颗工具存在吗」，
+  // 启用与否每次现读文件，所以写完开关下一条消息看到的就已是新状态（`GET /tools` 同理）。
+
+  router.get(`${API_PREFIX}/tools`, async (_req, res) => {
+    sendJson(res, 200, {
+      tools: tools.list().map((tool) => viewTool(tool, toolConfig.isEnabled(tool.id))),
+    });
+  });
+
+  router.post(`${API_PREFIX}/tools/:id/enable`, async (req, res, params) => {
+    // readJson 在 try 之外：畸形 JSON 由顶层分派成 400，与其余写操作一致
+    //（`test/openapi-request.test.ts` 的畸形体用例就是打这条路径的）。
+    const body = await readJson(req);
+    try {
+      const tool = tools.get(params.id);
+      if (!tool) return sendError(res, 404, `未知工具: ${params.id}`);
+      const { enabled } = toolConfig.setEnabled(params.id, body.enabled);
+      sendJson(res, 200, { tool: viewTool(tool, enabled) });
+    } catch (err) {
+      sendError(res, statusForError(err), errorMessage(err));
+    }
   });
 
   const server = createServer(async (req, res) => {

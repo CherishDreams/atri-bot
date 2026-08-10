@@ -1,5 +1,5 @@
 /**
- * openapi.json 的**响应形状**守卫：真实驱动全部 25 个端点，把真实响应体与规格声明逐个对。
+ * openapi.json 的**响应形状**守卫：真实驱动全部 27 个端点，把真实响应体与规格声明逐个对。
  *
  * ## 为什么需要它
  * `openapi.json` 是手写的，而它是前端类型化 SDK 的唯一源头。已有的 `openapi.test.ts`
@@ -89,6 +89,8 @@ const ORDER = [
   "reloadPlugin",
   "setPluginEnabled",
   "listAdapters",
+  "listTools",
+  "setToolEnabled",
   "deleteSession",
   "deleteProvider",
   "unloadPlugin",
@@ -606,6 +608,17 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       return at("/plugins/fixture/unload");
     case "listAdapters":
       return at("/adapters");
+    case "listTools":
+      return at("/tools");
+    case "setToolEnabled": {
+      // 内置工具的 id 是代码里的常量，不需要先创建资源。
+      // 三次写入：先关（证明 enabled=false 这一支的形状）、再开、最后关回原样 ——
+      // 被当作本次响应校验的是「开」，另两次走 `also`，两种布尔值都过校验器。
+      const off = await h.call("POST", "/tools/current_time/enable", { enabled: false });
+      const on = await h.call("POST", "/tools/current_time/enable", { enabled: true });
+      const back = await h.call("POST", "/tools/current_time/enable", { enabled: false });
+      return { ...on, also: [off, back] };
+    }
     default:
       throw new Error(`驱动表里没有 ${id} 的驱动`);
   }

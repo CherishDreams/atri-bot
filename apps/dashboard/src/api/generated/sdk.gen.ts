@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client/index.js';
-import type { AuthStatusData, AuthStatusResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
+import type { AuthStatusData, AuthStatusResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -314,4 +314,28 @@ export const listAdapters = <ThrowOnError extends boolean = false>(options?: Opt
     responseType: 'json',
     url: '/adapters',
     ...options
+});
+
+/**
+ * 列出可用工具及其启用状态
+ */
+export const listTools = <ThrowOnError extends boolean = false>(options?: Options<ListToolsData, ThrowOnError>): RequestResult<ListToolsResponses, ListToolsErrors, ThrowOnError> => (options?.client ?? client).get<ListToolsResponses, ListToolsErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/tools',
+    ...options
+});
+
+/**
+ * 启用 / 禁用工具
+ *
+ * 写入 atri.config.json 的 tools 段，立即生效，不需要重启。enabled 必填：工具是能力授予，不接受「省略即启用」这种默认值，所以这里与 POST /plugins/{id}/enable 的宽松写法刻意不同。
+ */
+export const setToolEnabled = <ThrowOnError extends boolean = false>(options: Options<SetToolEnabledData, ThrowOnError>): RequestResult<SetToolEnabledResponses, SetToolEnabledErrors, ThrowOnError> => (options.client ?? client).post<SetToolEnabledResponses, SetToolEnabledErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/tools/{id}/enable',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });

@@ -7,6 +7,8 @@ import type { AuthManager } from "../core/auth/manager.ts";
 import type { Logger } from "../core/logger.ts";
 import type { ProviderConfigStore } from "../core/provider/store.ts";
 import type { ProviderRegistry } from "../core/provider/registry.ts";
+import type { ToolConfigStore } from "../core/tool/store.ts";
+import type { ToolRegistry } from "../core/tool/registry.ts";
 import type { SessionManager } from "../core/session/manager.ts";
 import type { AdapterManager } from "../adapters/manager.ts";
 import type { PluginManager } from "../plugins/manager.ts";
@@ -29,6 +31,9 @@ export interface HttpDeps {
   reloadProviders: () => ProviderRegistry;
   plugins: PluginManager;
   adapters: AdapterManager;
+  /** 工具注册表与它的开关存储；两者都是只读用途，所以没有 `reloadTools`。 */
+  tools: ToolRegistry;
+  toolConfig: ToolConfigStore;
   engine: AgentEngine;
 }
 
