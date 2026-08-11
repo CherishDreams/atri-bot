@@ -7,6 +7,9 @@
   "adapters": {
     "http": { "enabled": true }
   },
+  "tools": {
+    "current_time": { "enabled": false }
+  },
   "providerSources": {
     "deepseek": {
       "type": "openai",

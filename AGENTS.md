@@ -77,6 +77,7 @@ plugins/  ─> 只依赖注入给它的 ctx
 - 每个模块往里收一层：`index.ts` 薄入口 → `app.ts` 装配 → `core/` 逻辑 → `api/` 传输。
 
 新增能力时的落点：入站适配 → `adapters/`；出站模型 → `core/provider/factory.ts` 的 `TYPES` 表；
+工具能力 → `core/tool/`（注册表不 import 具体工具、也不读配置，内置工具由组合根注册）；
 业务逻辑 → `core/`；HTTP 表面 → `api/server.ts` + `openapi.json`。
 
 ### 信任边界只有一条：插件
@@ -95,11 +96,12 @@ plugins/  ─> 只依赖注入给它的 ctx
   对象真的传出去时，现实由运行时那个对象决定（这里曾经就是这么漏的：类型写的是
   `{ pluginDirs?: string[] }`，运行时交到插件手上的是整个 `AppConfig`）。
 
-### 命名上不要混用两个词
+### 命名上不要混用三个词
 
 **adapter** 是入站接入（QQ、Discord、webhook…），契约是长驻的 `start()`/`stop()`；
-**provider** 是出站模型调用，契约是每请求的 `chat()`。两者形状不同，故意不用同一个词。
-也不要新造「model adapter」之类的混合称呼。
+**provider** 是出站模型调用，契约是每请求的 `chat()`；
+**tool** 是模型请求、本地执行、结果回喂的一次性动作，契约是 `run()`。
+三者形状不同，故意不用同一个词。也不要新造「model adapter」「function tool」之类的混合称呼。
 
 ## 代码风格
 
@@ -260,7 +262,7 @@ apps/server/openapi.json  -->  pnpm codegen  -->  apps/dashboard/src/api/generat
 | 检查                                  | 守住的东西                                                                              | 漏掉它会怎样                           |
 | ------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------- |
 | `test/openapi.test.ts`                | 路径与方法：注册的路由 ↔ 规格里的 path                                                  | 加了端点忘写规格 → 前端 SDK 少一个方法 |
-| `test/openapi-response-shape.test.ts` | **响应体字段**：真实驱动 25 个端点，逐字段比 `type`/`required`/`enum`/状态码            | 字段改了路径没变 → 前端类型骗人        |
+| `test/openapi-response-shape.test.ts` | **响应体字段**：真实驱动 27 个端点，逐字段比 `type`/`required`/`enum`/状态码            | 字段改了路径没变 → 前端类型骗人        |
 | `test/openapi-request.test.ts`        | **请求侧与鉴权侧**：省略必填必须 400、畸形 JSON 必须 400、匿名访问与规格的 401 双向一致 | 运行时校验被删 / 新路由忘了声明 401    |
 
 红了统一按这句话办：**改 `openapi.json`，然后 `pnpm codegen` 并提交生成物；不要为了让检查变绿去改这三个测试。**

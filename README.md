@@ -13,7 +13,7 @@ atri-bot/
 │   │   │   ├── index.ts     # 薄入口：配置 -> 应用 -> 启动 -> 关闭
 │   │   │   ├── app.ts       # 组合根（在一处完成所有装配）
 │   │   │   ├── config/      # 配置加载（默认值 -> 文件 -> 环境变量）
-│   │   │   ├── core/        # 引擎、会话、provider、logger（全部逻辑）
+│   │   │   ├── core/        # 引擎、会话、provider、工具、logger（全部逻辑）
 │   │   │   ├── api/         # HTTP + WebSocket 传输层（无业务逻辑）
 │   │   │   ├── adapters/    # 可选启用的外部接入（webhook、QQ、Discord、CLI…）
 │   │   │   └── plugins/     # 插件加载器
@@ -225,14 +225,27 @@ pnpm start            # 或 node apps/server/src/index.ts
   参见 `apps/server/plugins/hello`。
 - **适配器** —— 实现 `start()`/`stop()` 并注册到 `AdapterManager`；
   在 `config.adapters.<id>.enabled` 中按需启用。纯 agent 部署可以不启用任何一个。
+- **工具（function calling）** —— 内置工具在 `apps/server/src/core/tool/builtins.ts`，
+  由组合根注册进 `ToolRegistry`。启用走 `atri.config.json` 的 `tools` 段，
+  **默认全部关闭**（与适配器的默认启用刻意相反：少听一个端口是部署细节，
+  给模型多一件可做的事是能力授予）：
+
+  ```json
+  { "tools": { "current_time": { "enabled": true } } }
+  ```
+
+  控制台「工具」页写的就是这一段，改完立刻生效、不需要重启。
+  插件注册自己的工具（`ctx.tool()`）还没有做 —— 那需要一次单独的能力授予设计。
+
 - **Provider** —— 模型的出站适配。内置 `openai` 与 `anthropic` 两种实现，
   在 `atri.config.json` 的 `providerSources`/`providers` 段按类型声明，
   或者在控制台的「供应商配置」页里配。引擎从不 import 具体的模型 SDK。
   详见[模型 provider](#模型-provider)。
 
-> 命名上注意区分两端：**adapter** 指入站接入（QQ、Discord、webhook…），
-> 契约是长驻的 `start()`/`stop()`；**provider** 指出站模型调用，
-> 契约是每次请求的 `chat()`。两者是不同形状的接口，故意不用同一个词。
+> 命名上注意区分三端：**adapter** 指入站接入（QQ、Discord、webhook…），契约是长驻的
+> `start()`/`stop()`；**provider** 指出站模型调用，契约是每次请求的 `chat()`；
+> **tool** 指模型请求、本地执行、结果回喂的一次性动作，契约是 `run()`。
+> 三者形状不同，故意不用同一个词，也不要新造「model adapter」「function tool」这类混合称呼。
 
 ### 插件的动态加载
 
@@ -259,28 +272,30 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 基础路径 `/api/v1`：
 
-| 方法         | 路径                                         | 说明                                        |
-| ------------ | -------------------------------------------- | ------------------------------------------- |
-| GET          | `/health`                                    | 存活检查（公开）                            |
-| POST         | `/auth/login`、`/auth/logout`                | 登录 / 登出（公开，见上）                   |
-| GET          | `/auth/me`、`/auth/status`                   | 当前用户 / 是否需要登录                     |
-| GET / POST   | `/sessions`                                  | 列出 / 创建会话                             |
-| GET / DELETE | `/sessions/:id`                              | 读取（含完整消息历史）/ 删除会话            |
-| POST         | `/sessions/:id/messages`                     | 发送用户消息，等完整回复后返回              |
-| POST         | `/sessions/:id/messages/stream`              | 同上，但以 SSE 逐段推送回复增量             |
-| GET          | `/providers`、`/plugins`、`/adapters`        | 供控制台使用的状态                          |
-| POST/DELETE  | `/providers`、`/providers/:id`               | 新增 / 修改 / 删除模型实例                  |
-| GET          | `/provider-sources`                          | 列出 provider source（**明文含 apiKey**）   |
-| POST/DELETE  | `/provider-sources`、`/provider-sources/:id` | 新增 / 修改 / 删除 provider source          |
-| POST         | `/provider-sources/:id/models`               | 按已保存的凭证拉取上游模型列表              |
-| POST         | `/plugins/:id/reload`                        | 重载插件（销毁旧实例并重新求值代码）        |
-| POST         | `/plugins/:id/unload`                        | 卸载插件（释放副作用并移除）                |
-| POST         | `/plugins/:id/enable`                        | 启用 / 禁用插件，body `{ "enabled": true }` |
+| 方法         | 路径                                            | 说明                                                |
+| ------------ | ----------------------------------------------- | --------------------------------------------------- |
+| GET          | `/health`                                       | 存活检查（公开）                                    |
+| POST         | `/auth/login`、`/auth/logout`                   | 登录 / 登出（公开，见上）                           |
+| GET          | `/auth/me`、`/auth/status`                      | 当前用户 / 是否需要登录                             |
+| GET / POST   | `/sessions`                                     | 列出 / 创建会话                                     |
+| GET / DELETE | `/sessions/:id`                                 | 读取（含完整消息历史）/ 删除会话                    |
+| POST         | `/sessions/:id/messages`                        | 发送用户消息，等完整回复后返回                      |
+| POST         | `/sessions/:id/messages/stream`                 | 同上，但以 SSE 逐段推送回复增量                     |
+| GET          | `/providers`、`/plugins`、`/adapters`、`/tools` | 供控制台使用的状态                                  |
+| POST/DELETE  | `/providers`、`/providers/:id`                  | 新增 / 修改 / 删除模型实例                          |
+| GET          | `/provider-sources`                             | 列出 provider source（**明文含 apiKey**）           |
+| POST/DELETE  | `/provider-sources`、`/provider-sources/:id`    | 新增 / 修改 / 删除 provider source                  |
+| POST         | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                      |
+| POST         | `/plugins/:id/reload`                           | 重载插件（销毁旧实例并重新求值代码）                |
+| POST         | `/plugins/:id/unload`                           | 卸载插件（释放副作用并移除）                        |
+| POST         | `/plugins/:id/enable`                           | 启用 / 禁用插件，body `{ "enabled": true }`         |
+| POST         | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填） |
 
 除标注「公开」的路径外，其余接口都需要登录（未登录返回 401）。
 
-写操作全部落在 `atri.config.json` 上（读-改-写，文件权限 `0600`），改完立刻重建
-provider 注册表，因此**不需要重启**。删除仍被引用的 provider source 会被拒绝并列出
+写操作全部落在 `atri.config.json` 上（读-改-写，文件权限 `0600`），改完立刻生效、
+**不需要重启**：provider 靠重建注册表生效，工具靠每次现读文件生效（启用状态不常驻内存，
+见 `docs/architecture.md`）。删除仍被引用的 provider source 会被拒绝并列出
 引用者，除非带上 `?cascade=1`。详细的字段语义见[模型 provider](#模型-provider)。
 
 WebSocket 位于 `/ws`，向客户端推送 `message` / `stream` / `error` / `unauthorized` 帧。

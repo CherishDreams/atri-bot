@@ -46,7 +46,12 @@ await auth.init(); // 必须早于 HTTP 启动：未配置口令时要先落盘
 const sessions = new SessionManager();
 const providers = new ProviderRegistry();
 const providerConfig = new ProviderConfigStore(config, logger);
-const plugins = new PluginManager(config, logger);
+// 工具：注册表只管「存在与执行」，启用与否由 ToolConfigStore 每次现读文件
+const tools = new ToolRegistry();
+for (const tool of createBuiltinTools()) tools.register(tool);
+const toolConfig = new ToolConfigStore(config, logger);
+// 插件看到的是白名单视图，不是整份 AppConfig（见「插件可见的配置」一节）
+const plugins = new PluginManager(pluginRuntimeConfig(config), logger);
 // 引擎只吃三样东西；曾经还注入过 config 与 plugins，但两个字段在全仓没有任何读取点。
 const engine = new AgentEngine({ sessions, providers, logger });
 const adapters = new AdapterManager({ config, engine, logger });
@@ -59,6 +64,8 @@ const http = await createHttpServer({
   reloadProviders: rebuildProviders, // 启动与「配置页改完保存」共用同一个装配函数
   plugins,
   adapters,
+  tools,
+  toolConfig,
   auth,
   engine,
 });
@@ -217,6 +224,39 @@ errors.ts   ProviderError 与上游错误归一
 `GET /providers` 返回**配置里的全部条目**（含被禁用与加载失败的），
 每条带 `loaded` 与失败原因。旧语义只返回注册表里活着的那些，
 于是「我明明配了它却不在列表里」这种最难自查的状况在界面上表现为「凭空消失」。
+
+## 工具（function calling）
+
+`core/tool/` 是模型可以请求执行的**本地动作**。与 `core/provider/` 同一套三层拆分，
+但**没有 `factory.ts`**：内置工具是代码而不是「配置 → 实例」，没有可装配的东西，
+硬造一个 factory 只会得到一个没人读的文件。
+
+```
+types.ts     ToolDefinition（id / name / description / parameters / run）+ JsonSchema
+registry.ts  ToolRegistry：存、取、按 id 执行转发 —— 不 import 具体工具，也不读配置
+store.ts     ToolConfigStore：读写 atri.config.json 的 tools 段
+builtins.ts  createBuiltinTools()：内置实现，只有 app.ts import 它
+```
+
+三条与既有习惯不同的决定：
+
+- **默认关闭。** 判据是 `toggle?.enabled === true`，与 `adapters` 的
+  `?.enabled !== false`（`adapters/manager.ts:55`、`:81`）**正好相反**。理由不是洁癖：
+  适配器没写就启用，最坏结果是少听一个端口；工具没写就启用，最坏结果是**一次版本升级
+  静默给模型新增了几件可做的事**。`atri.config.example.json` 里那条 `false` 就是这个语义的示例。
+- **`enabled` 每次现读文件，不缓存在内存里。** `AppConfig` 是 `loadConfig()` 的一次性快照
+  （`index.ts:9` 之后再没有重读点），而控制台的开关改的就是文件。所以 `GET /tools` 与
+  引擎取启用集都走 `ToolConfigStore.#current()`，那里每次 `readConfigFile()` ——
+  改完不需要重启，也不需要像 provider 那样重建注册表（注册表根本不知道启用状态）。
+  抄 `AdapterManager.list()` 那种「从注入的快照算 enabled」会把这个 bug 一起抄过来。
+- **参数 schema 只是搬运，不做校验。** 仓内没有 JSON Schema 校验器，也不该为了搬一个对象
+  引入 `ajv`（依赖极简）。模型给的 `arguments` 只做 `JSON.parse`，逐键检查写在每颗工具
+  自己的 `run()` 里 —— 与 `readJson()` 刻意返回 `Record<string, unknown>`（让 per-field
+  `typeof` 成为编译期要求）是同一取向。
+
+`ToolRegistry.run()` **从不抛错**：未知工具名、坏 JSON、handler 抛异常，一律变成
+`isError: true` 的结果回喂模型。那是模型的一次可纠正回合（幻觉出一个工具名是常态），
+抛出去会把整轮打成 400/500。provider 层的错误不经过这里，照旧抛。
 
 ## 静态托管
 
