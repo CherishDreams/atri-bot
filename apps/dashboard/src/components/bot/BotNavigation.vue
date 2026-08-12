@@ -35,9 +35,14 @@ const menuOptions: MenuOption[] = [
     icon: icon("provider"),
     label: () => h(RouterLink, { to: { name: "providerConfig" } }, { default: () => "供应商配置" }),
   },
+  {
+    key: "toolsConfig",
+    icon: icon("tool"),
+    label: () => h(RouterLink, { to: { name: "toolsConfig" } }, { default: () => "工具" }),
+  },
 ];
 
-/** 当前高亮项。只认这两个已知路由名，其余情况不高亮，避免误标。 */
+/** 当前高亮项。只认这些已知路由名，其余情况不高亮，避免误标。 */
 const activeKey = computed(() => {
   const name = route.name;
   return typeof name === "string" && menuOptions.some((o) => o.key === name) ? name : null;

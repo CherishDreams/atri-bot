@@ -19,6 +19,7 @@ export const router = createRouter({
           name: "providerConfig",
           component: () => import("@/views/ProviderConfig.vue"),
         },
+        { path: "tools", name: "toolsConfig", component: () => import("@/views/ToolsView.vue") },
       ],
     },
     {

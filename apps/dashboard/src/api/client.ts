@@ -14,11 +14,13 @@ import {
   listProviderSources as listProviderSourcesOp,
   listProviders as listProvidersOp,
   listSessions as listSessionsOp,
+  listTools as listToolsOp,
   login as loginOp,
   logout as logoutOp,
   me as meOp,
   reloadPlugin as reloadPluginOp,
   setPluginEnabled as setPluginEnabledOp,
+  setToolEnabled as setToolEnabledOp,
   streamMessage,
   unloadPlugin as unloadPluginOp,
   updateProvider as updateProviderOp,
@@ -162,6 +164,20 @@ export async function setPluginEnabled(id: string, enabled: boolean) {
   return body(await setPluginEnabledOp({ path: { id }, body: { enabled } }));
 }
 
+// --- 工具（function calling）-------------------------------------------------
+
+export async function listTools() {
+  return body(await listToolsOp());
+}
+
+/**
+ * 启用 / 禁用一颗工具。`enabled` 是必填参数（不是可选补丁）：
+ * 服务端刻意不接受「省略即启用」，UI 也不该有那种调用方式。
+ */
+export async function setToolEnabled(id: string, enabled: boolean) {
+  return body(await setToolEnabledOp({ path: { id }, body: { enabled } }));
+}
+
 // --- 模型 provider -----------------------------------------------------------
 
 export async function listProviders() {
@@ -241,4 +257,5 @@ export type {
   ProviderSourceUpdate,
   ProviderUpdate,
   ProviderInput,
+  ToolInfo,
 } from "./generated/index.js";
