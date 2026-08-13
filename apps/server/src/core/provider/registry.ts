@@ -82,17 +82,26 @@ export class ProviderRegistry {
    * 注意：只有「一个 provider 都没注册」时才会走回声。一旦有 provider，
    * 调用失败必须抛错——把故障伪装成正常回复会让问题永远暴露不出来。
    */
-  async chat({ model, messages, signal }: ChatOptions): Promise<ChatReply> {
+  async chat({ model, messages, tools, signal }: ChatOptions): Promise<ChatReply> {
     const provider = this.#resolveFor(model);
     if (!provider) return echoReply(model, messages);
-    return provider.chat({ model: this.#modelFor(provider, model), messages, signal });
+    return provider.chat({ model: this.#modelFor(provider, model), messages, tools, signal });
   }
 
   /**
    * 流式补全。provider 未实现 `chatStream` 时退化为一次性回调整段文本，
    * 这样引擎无需为「这家支不支持流式」分叉。
+   *
+   * `tools` 在这里必须**逐层透传**：本方法是解构后重组参数的，漏一个键就等于
+   * 上面那一层白给，而且这种丢失是静默的（报文里没有 tools，模型自然不调用）。
    */
-  async chatStream({ model, messages, onDelta, signal }: ChatStreamOptions): Promise<ChatReply> {
+  async chatStream({
+    model,
+    messages,
+    tools,
+    onDelta,
+    signal,
+  }: ChatStreamOptions): Promise<ChatReply> {
     const provider = this.#resolveFor(model);
     if (!provider) {
       const reply = echoReply(model, messages);
@@ -102,11 +111,11 @@ export class ProviderRegistry {
 
     const resolved = this.#modelFor(provider, model);
     if (typeof provider.chatStream !== "function") {
-      const reply = await provider.chat({ model: resolved, messages, signal });
+      const reply = await provider.chat({ model: resolved, messages, tools, signal });
       onDelta?.(reply.content ?? "");
       return reply;
     }
-    return provider.chatStream({ model: resolved, messages, onDelta, signal });
+    return provider.chatStream({ model: resolved, messages, tools, onDelta, signal });
   }
 
   /**

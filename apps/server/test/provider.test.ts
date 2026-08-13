@@ -72,8 +72,14 @@ function streamOf(response: Response): ReadableStream<Uint8Array> {
   return body;
 }
 
-/** 替换全局 fetch，跑完自动还原。 */
-function withFetch(handler: FakeFetch, run: () => Promise<unknown>): Promise<unknown> {
+/**
+ * 替换全局 fetch，跑完自动还原。
+ *
+ * 泛型是为了让 `const reply = await withFetch(...)` 拿回**回调的返回类型**：
+ * 收成 `unknown` 的话，断言处就得写 `as ChatReply`，而这里根本没有需要断言的边界 ——
+ * 类型只是被一个不必要的签名丢掉了。
+ */
+function withFetch<T>(handler: FakeFetch, run: () => Promise<T>): Promise<T> {
   const original = globalThis.fetch;
   // 边界：装进全局的是**测试替身**，它的签名比 `globalThis.fetch` 窄（只覆盖 provider
   // 实际会发出的那一支：完整 URL 字符串 + `#request()` 产出的 init）。运行期两边完全兼容，
@@ -320,14 +326,363 @@ test("Anthropic：相邻同角色消息被合并（上游要求严格交替）",
 });
 
 test("Anthropic：tool 角色转成 user + tool_result 块", () => {
+  // 历史里带上那条 assistant(toolCalls)：真实的一轮就是「助手要求调用 → 结果回喂」，
+  // 而 user 文本紧跟 tool 结果这种输入在真实循环里不会出现（会被合并成一条 user 消息，
+  // 那是 mergeAdjacent 的职责，另有一条用例专门证它）。
   const { body } = splitMessages([
     { role: "user", content: "q" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call_1", name: "current_time", arguments: "{}" }],
+    },
     { role: "tool", toolCallId: "call_1", content: "42" },
   ]);
+  assert.equal(body.length, 3, "user / assistant / user(tool_result) 应当交替");
   const last = body.at(-1);
   if (!last) throw new Error("tool 消息应转成一条 user 消息");
   assert.equal(last.role, "user");
   assert.deepEqual(last.content, [{ type: "tool_result", tool_use_id: "call_1", content: "42" }]);
+});
+
+test("Anthropic：assistant 的 toolCalls 转成 tool_use 块，input 是对象", () => {
+  const { body } = splitMessages([
+    { role: "user", content: "几点了" },
+    {
+      role: "assistant",
+      content: "我查一下",
+      toolCalls: [{ id: "call_9", name: "current_time", arguments: '{"timezone":"UTC"}' }],
+    },
+  ]);
+  const assistant = body[1];
+  if (!assistant) throw new Error("应有那条 assistant 消息");
+  assert.deepEqual(assistant.content, [
+    { type: "text", text: "我查一下" },
+    { type: "tool_use", id: "call_9", name: "current_time", input: { timezone: "UTC" } },
+  ]);
+});
+
+test("Anthropic：并行两次调用的两条结果合并成一条 user 消息", () => {
+  // 这条证的是 mergeAdjacent 的块数组分支。旧实现只在两侧都是 string 时合并，
+  // 于是这里会产出两条相邻的 user 消息，被上游以「roles must alternate」拒掉 ——
+  // 而那恰恰是本函数存在的理由。
+  const { body } = splitMessages([
+    { role: "user", content: "两个都查" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: "a", name: "current_time", arguments: "{}" },
+        { id: "b", name: "current_time", arguments: "{}" },
+      ],
+    },
+    { role: "tool", toolCallId: "a", content: "1" },
+    { role: "tool", toolCallId: "b", content: "2" },
+  ]);
+  assert.equal(body.length, 3, "两条 tool 结果必须并成一条 user 消息");
+  const last = body.at(-1);
+  if (!last) throw new Error("结果消息不见了");
+  assert.equal(last.role, "user");
+  assert.deepEqual(last.content, [
+    { type: "tool_result", tool_use_id: "a", content: "1" },
+    { type: "tool_result", tool_use_id: "b", content: "2" },
+  ]);
+});
+
+test("Anthropic：模型给的坏参数退化成空对象，而不是让整轮失败", () => {
+  const { body } = splitMessages([
+    { role: "user", content: "q" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "bad", name: "current_time", arguments: "{这不是 JSON" }],
+    },
+  ]);
+  const assistant = body[1];
+  const blocks = assistant?.content;
+  if (!Array.isArray(blocks)) throw new Error("assistant 的 toolCalls 应产出内容块数组");
+  // 正文为空 ⇒ 没有 text 块，tool_use 就是第 0 块。
+  assert.equal(blocks.length, 1);
+  assert.deepEqual(blocks[0], { type: "tool_use", id: "bad", name: "current_time", input: {} });
+});
+
+// --- function calling：报文与解析 --------------------------------------------
+
+const probeTool = {
+  name: "current_time",
+  description: "取此刻时间",
+  parameters: { type: "object", properties: { timezone: { type: "string" } } },
+};
+
+test("OpenAI：声明工具时发 tools[]，不声明时整个键都不发", async () => {
+  const provider = new OpenAIProvider({
+    id: "o",
+    baseUrl: "https://x/v1",
+    apiKey: "k",
+    models: ["m"],
+  });
+  const bodies: Record<string, unknown>[] = [];
+
+  await withFetch(
+    async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+    },
+    async () => {
+      await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+      await provider.chat({ messages: [{ role: "user", content: "hi" }], tools: [probeTool] });
+      // 空数组也必须等同于「不发」：否则默认关闭的工具会在报文里留下一个 `tools: []`。
+      await provider.chat({ messages: [{ role: "user", content: "hi" }], tools: [] });
+    },
+  );
+
+  assert.equal(Object.hasOwn(bodies[0] ?? {}, "tools"), false, "没传 tools 时不该有这个键");
+  assert.equal(Object.hasOwn(bodies[2] ?? {}, "tools"), false, "空数组也不该留下 tools 键");
+  assert.deepEqual(bodies[1]?.tools, [
+    {
+      type: "function",
+      function: {
+        name: "current_time",
+        description: "取此刻时间",
+        parameters: probeTool.parameters,
+      },
+    },
+  ]);
+});
+
+test("OpenAI：历史里的 toolCalls 与 tool 结果按规范形状回带", async () => {
+  const provider = new OpenAIProvider({
+    id: "o",
+    baseUrl: "https://x/v1",
+    apiKey: "k",
+    models: ["m"],
+  });
+  let sent: { messages?: Record<string, unknown>[] } = {};
+
+  await withFetch(
+    async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+    },
+    async () =>
+      provider.chat({
+        messages: [
+          { role: "user", content: "几点了" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [{ id: "c1", name: "current_time", arguments: '{"timezone":"UTC"}' }],
+          },
+          { role: "tool", toolCallId: "c1", content: "12:00" },
+        ],
+      }),
+  );
+
+  const [user, assistant, tool] = sent.messages ?? [];
+  assert.deepEqual(assistant, {
+    role: "assistant",
+    // 纯工具调用时正文是 null，不是空串：这一族的规范值就是 null。
+    content: null,
+    tool_calls: [
+      {
+        id: "c1",
+        type: "function",
+        function: { name: "current_time", arguments: '{"timezone":"UTC"}' },
+      },
+    ],
+  });
+  assert.deepEqual(tool, { role: "tool", tool_call_id: "c1", content: "12:00" });
+  assert.deepEqual(user, { role: "user", content: "几点了" });
+});
+
+test("OpenAI：非流式的 message.tool_calls 与 finish_reason 被读出来", async () => {
+  const provider = new OpenAIProvider({
+    id: "o",
+    baseUrl: "https://x/v1",
+    apiKey: "k",
+    models: ["m"],
+  });
+  const reply = await withFetch(
+    async () =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content: null,
+              tool_calls: [{ id: "c1", function: { name: "current_time", arguments: "{}" } }],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      }),
+    () => provider.chat({ messages: [{ role: "user", content: "hi" }] }),
+  );
+  assert.deepEqual(reply, {
+    role: "assistant",
+    content: "",
+    toolCalls: [{ id: "c1", name: "current_time", arguments: "{}" }],
+    stopReason: "tool_calls",
+  });
+});
+
+test("OpenAI：流式的 tool_calls 按 index 累加，arguments 分片不丢", async () => {
+  const provider = new OpenAIProvider({
+    id: "o",
+    baseUrl: "https://x/v1",
+    apiKey: "k",
+    models: ["m"],
+  });
+  const frames = [
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"current_time","arguments":"{\\"time"}}]}}]}\n\n',
+    // 第二个调用从 index 1 起，与 index 0 的分片交错到达。
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"echo","arguments":"{\\"a\\""}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"zone\\":\\"UTC\\"}"}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":":1}"}}]}}]}\n\n',
+    'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+    "data: [DONE]\n\n",
+  ];
+  const deltas: string[] = [];
+
+  const reply = await withFetch(
+    async () => sseResponse(frames),
+    () =>
+      provider.chatStream({
+        messages: [{ role: "user", content: "hi" }],
+        onDelta: (d) => deltas.push(d),
+      }),
+  );
+
+  assert.deepEqual(reply?.toolCalls, [
+    { id: "c1", name: "current_time", arguments: '{"timezone":"UTC"}' },
+    { id: "c2", name: "echo", arguments: '{"a":1}' },
+  ]);
+  assert.equal(reply?.stopReason, "tool_calls");
+  // 工具参数的碎片绝不能当成正文推给前端。
+  assert.deepEqual(deltas, []);
+});
+
+test("Anthropic：tools[] 用 input_schema，空集合不发键", async () => {
+  const provider = new AnthropicProvider({ id: "a", baseUrl: "https://y/v1", apiKey: "k" });
+  const bodies: Record<string, unknown>[] = [];
+  await withFetch(
+    async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse({ content: [{ type: "text", text: "ok" }] });
+    },
+    async () => {
+      await provider.chat({ messages: [{ role: "user", content: "hi" }] });
+      await provider.chat({ messages: [{ role: "user", content: "hi" }], tools: [probeTool] });
+    },
+  );
+  assert.equal(Object.hasOwn(bodies[0] ?? {}, "tools"), false);
+  assert.deepEqual(bodies[1]?.tools, [
+    { name: "current_time", description: "取此刻时间", input_schema: probeTool.parameters },
+  ]);
+});
+
+test("Anthropic：非流式的 tool_use 块转成 toolCalls（input 序列化成串）", async () => {
+  const provider = new AnthropicProvider({ id: "a", baseUrl: "https://y/v1", apiKey: "k" });
+  const reply = await withFetch(
+    async () =>
+      jsonResponse({
+        content: [
+          { type: "text", text: "我查一下" },
+          { type: "tool_use", id: "tu_1", name: "current_time", input: { timezone: "UTC" } },
+        ],
+        stop_reason: "tool_use",
+      }),
+    () => provider.chat({ messages: [{ role: "user", content: "hi" }] }),
+  );
+  assert.equal(reply?.content, "我查一下");
+  assert.deepEqual(reply?.toolCalls, [
+    { id: "tu_1", name: "current_time", arguments: '{"timezone":"UTC"}' },
+  ]);
+  assert.equal(reply?.stopReason, "tool_use");
+});
+
+test("Anthropic：流式的 tool_use 由 start 给身份、input_json_delta 累加参数", async () => {
+  const provider = new AnthropicProvider({ id: "a", baseUrl: "https://y/v1", apiKey: "k" });
+  const frames = [
+    'event: message_start\ndata: {"type":"message_start"}\n\n',
+    'event: content_block_start\ndata: {"index":0,"content_block":{"type":"text","text":""}}\n\n',
+    'event: content_block_delta\ndata: {"index":0,"delta":{"type":"text_delta","text":"我查一下"}}\n\n',
+    'event: content_block_stop\ndata: {"index":0}\n\n',
+    'event: content_block_start\ndata: {"index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"current_time"}}\n\n',
+    'event: content_block_delta\ndata: {"index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"time"}}\n\n',
+    'event: content_block_delta\ndata: {"index":1,"delta":{"type":"input_json_delta","partial_json":"zone\\":\\"UTC\\"}"}}\n\n',
+    'event: content_block_stop\ndata: {"index":1}\n\n',
+    'event: message_delta\ndata: {"delta":{"stop_reason":"tool_use"}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+  ];
+  const streamed: string[] = [];
+
+  const reply = await withFetch(
+    async () => sseResponse(frames),
+    () =>
+      provider.chatStream({
+        messages: [{ role: "user", content: "hi" }],
+        onDelta: (d) => streamed.push(d),
+      }),
+  );
+
+  assert.equal(reply?.content, "我查一下");
+  assert.deepEqual(streamed, ["我查一下"], "只有 text_delta 能推给前端");
+  assert.deepEqual(reply?.toolCalls, [
+    { id: "tu_1", name: "current_time", arguments: '{"timezone":"UTC"}' },
+  ]);
+  assert.equal(reply?.stopReason, "tool_use");
+});
+
+test("注册表把 tools 透传给实例：两条路径各自都要证", async () => {
+  const seen: { tools?: unknown }[] = [];
+  const record = async (options: { tools?: unknown }) => {
+    seen.push(options);
+    return { content: "好" };
+  };
+
+  // 注册表是「解构后重组参数」的，漏一个键就静默失效。而它有两条出口：
+  // 实例自带 chatStream，以及实例只有 chat 时的退化路径。只证其中一条，
+  // 另一条被改坏时测试不会红（本仓的演练抓到过正是这种半覆盖）。
+  const streaming: ProviderImpl = {
+    id: "with-stream",
+    models: ["m"],
+    chat: (options) => record(options),
+    chatStream: (options) => record(options),
+  };
+  const plain: ProviderImpl = {
+    id: "no-stream",
+    models: ["m"],
+    chat: (options) => record(options),
+  };
+
+  const viaStream = new ProviderRegistry();
+  viaStream.register(streaming);
+  await viaStream.chatStream({
+    model: "with-stream",
+    messages: [{ role: "user", content: "hi" }],
+    tools: [probeTool],
+    onDelta: () => {},
+  });
+
+  const viaChat = new ProviderRegistry();
+  viaChat.register(plain);
+  await viaChat.chatStream({
+    model: "no-stream",
+    messages: [{ role: "user", content: "hi" }],
+    tools: [probeTool],
+    onDelta: () => {},
+  });
+  await viaChat.chat({
+    model: "no-stream",
+    messages: [{ role: "user", content: "hi" }],
+    tools: [probeTool],
+  });
+
+  assert.deepEqual(
+    seen.map((s) => s.tools),
+    [[probeTool], [probeTool], [probeTool]],
+    "chatStream / 退化到 chat / 直接 chat 三条路径都必须带上 tools",
+  );
 });
 
 test("Anthropic：非流式从 content blocks 取文本", async () => {

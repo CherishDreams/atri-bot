@@ -258,6 +258,36 @@ builtins.ts  createBuiltinTools()：内置实现，只有 app.ts import 它
 `isError: true` 的结果回喂模型。那是模型的一次可纠正回合（幻觉出一个工具名是常态），
 抛出去会把整轮打成 400/500。provider 层的错误不经过这里，照旧抛。
 
+### 两家的 function calling 报文不一样，所以映射各写一份
+
+|            | OpenAI 兼容                                                                      | Anthropic                                                                                                                     |
+| ---------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 声明       | `tools: [{type:"function", function:{name, description, parameters}}]`           | `tools: [{name, description, input_schema}]`                                                                                  |
+| 调用回来   | `message.tool_calls[]` / 流式 `delta.tool_calls[]`，`arguments` 是**被拆片的串** | `content[]` 里的 `tool_use` 块，`input` **已是对象**；流式时 id/name 在 `content_block_start`、参数按 `input_json_delta` 分片 |
+| 结果回喂   | `role:"tool"` + `tool_call_id`                                                   | `user` 消息里的 `tool_result` 块                                                                                              |
+| 助手那一轮 | 必须原样回带 `tool_calls`，正文为 `null`                                         | 必须回带 `tool_use` 块（与 text 块同消息）                                                                                    |
+
+三处不显然、且都已写成规则的形状：
+
+- **工具集为空时整个 `tools` 键都不发**（两家都是）。默认关闭的工具因此不在报文里留下任何痕迹，
+  「启用前后逐字节相同」才可断言 —— 这是那条语义唯一的硬证明。
+- **流式必须按 `index` / 内容块序号累加 `arguments`**，不能覆盖：一次响应可以并行要求调
+  多个工具，分片交错到达。Anthropic 还要**先看 `delta.type`** 再决定这段是不是文本，
+  否则 `{"time` 这种 JSON 碎片会被当成正文推给前端。
+- **历史有两处会把工具字段抹掉**：`engine.ts` 组装 history 时、以及 `openai.ts` 映射
+  messages 时，两处过去都只留 `role`/`content`，于是第二轮请求变成「有结果没有调用」。
+  两处都得带上工具字段（provider 这一层已修，引擎那一层随多步循环一起改）。
+
+`splitMessages` 的 `mergeAdjacent` 也修了一处既有缺陷：它过去只在**两侧都是纯文本**时合并相邻
+同角色消息。模型一次并行调用两个工具时，回喂的两条 `role:"tool"` 消息是两条相邻 user 消息、
+各自带一个 `tool_result` 块 —— 旧逻辑原样推出去，于是又被上游以
+「messages: roles must alternate」拒掉，而这正是该函数存在的理由。现在块数组也合并
+（两侧都是纯文本时仍拼成串，保持历史里普通消息的既有形状）。
+
+`ToolCall.arguments` 与 Anthropic 的 `input` 之间靠一次序列化对齐：仓内统一用串
+（OpenAI 给的就是串），回喂给 Anthropic 时再解回对象。解不回对象时退化成 `{}` 而**不抛错** ——
+抛出去会把整轮变成 500，而此刻唯一确定的事实是「模型上一轮给了一个我们没法复现的参数串」。
+
 ## 静态托管
 
 `pnpm build` 之后，服务端托管 `apps/dashboard/dist` 并做 SPA 回退：
