@@ -11,7 +11,24 @@ import {
 export interface ToolStoreConfig {
   root?: string;
   tools?: Record<string, ToolToggle>;
+  maxToolSteps?: number;
 }
+
+/**
+ * 单轮允许的工具步数上限。
+ *
+ * **本仓自选的数字，没有上游来源**：典型的「查一下再回答」是 2–3 步，这里留一倍余量。
+ * 上限存在的唯一理由是防失控 —— 默认超时 120s（`provider/store.ts` 的
+ * `DEFAULT_TIMEOUT_MS`）意味着 5 步最坏能把一条 SSE 连接占住约 10 分钟，
+ * 再往高就不如让用户显式调 `maxToolSteps`。
+ *
+ * 导出给 `config/config.ts` 用，是为了让这个数字只写一处：
+ * 解析默认值与非法兜底若各写一份，改一个忘一个就会出现「配置文件里的默认与代码的默认不同」。
+ */
+export const DEFAULT_MAX_TOOL_STEPS = 5;
+/** 夹住配置值的上下界：写成 0 或 1e6 都是笔误，不该变成「立刻停」或「无限跑」。 */
+const MIN_MAX_TOOL_STEPS = 1;
+const MAX_MAX_TOOL_STEPS = 50;
 
 /**
  * 工具开关的存储。所有方法都是同步的：配置是小文件，每次读-改-写的代价
@@ -32,12 +49,12 @@ export interface ToolStoreConfig {
 export class ToolConfigStore {
   #root: string | null;
   #logger: Logger | undefined;
-  #baseline: Record<string, ToolToggle>;
+  #baseline: { tools: Record<string, ToolToggle>; maxToolSteps?: number };
 
   constructor(config: ToolStoreConfig, logger?: Logger) {
     this.#root = config.root ?? null;
     this.#logger = logger;
-    this.#baseline = config.tools ?? {};
+    this.#baseline = { tools: config.tools ?? {}, maxToolSteps: config.maxToolSteps };
   }
 
   /** 配置文件绝对路径；没有 `root` 时为 null（只读模式）。 */
@@ -50,11 +67,22 @@ export class ToolConfigStore {
     return this.#root !== null;
   }
 
-  #current(): Record<string, ToolToggle> {
+  /**
+   * 当前生效的 `{tools, maxToolSteps}`。
+   *
+   * 两个键各自独立判「文件里有没有写过」：`maxToolSteps` 是**顶层键**，
+   * 不能塞进 `tools` 段 —— 那一段的键是工具 id，`{"tools":{"maxSteps":…}}`
+   * 会和一个真的叫 `maxSteps` 的工具撞名。
+   */
+  #current(): { tools: Record<string, ToolToggle>; maxToolSteps?: number } {
     if (!this.#root) return { ...this.#baseline };
     const file = readConfigFile(this.#root);
-    if (!Object.hasOwn(file, "tools")) return { ...this.#baseline };
-    return file.tools ?? {};
+    return {
+      tools: Object.hasOwn(file, "tools") ? (file.tools ?? {}) : { ...this.#baseline.tools },
+      maxToolSteps: Object.hasOwn(file, "maxToolSteps")
+        ? file.maxToolSteps
+        : this.#baseline.maxToolSteps,
+    };
   }
 
   /**
@@ -65,14 +93,36 @@ export class ToolConfigStore {
    * 别把两处判据「统一」掉。
    */
   isEnabled(id: string): boolean {
-    return this.#current()[id]?.enabled === true;
+    return this.#current().tools[id]?.enabled === true;
   }
 
   /** 配置里声明为启用的 id（顺序不保证，交给 `ToolRegistry.pick()` 按注册顺序排）。 */
   enabledIds(): string[] {
-    return Object.entries(this.#current())
+    return Object.entries(this.#current().tools)
       .filter(([, toggle]) => toggle?.enabled === true)
       .map(([id]) => id);
+  }
+
+  /**
+   * 单轮允许的工具步数。非法值退回默认而不是抛错：
+   * 这个数字写歪了不该让服务起不来，也不该被静默当成「没限制」。
+   */
+  maxSteps(): number {
+    const raw = this.#current().maxToolSteps;
+    if (typeof raw !== "number" || !Number.isInteger(raw)) {
+      if (raw !== undefined) {
+        this.#logger?.warn(
+          `maxToolSteps 不是整数（${String(raw)}），退回 ${DEFAULT_MAX_TOOL_STEPS}`,
+        );
+      }
+      return DEFAULT_MAX_TOOL_STEPS;
+    }
+    if (raw < MIN_MAX_TOOL_STEPS || raw > MAX_MAX_TOOL_STEPS) {
+      const clamped = Math.min(MAX_MAX_TOOL_STEPS, Math.max(MIN_MAX_TOOL_STEPS, raw));
+      this.#logger?.warn(`maxToolSteps=${raw} 超出可用范围，按 ${clamped} 执行`);
+      return clamped;
+    }
+    return raw;
   }
 
   /**
@@ -96,7 +146,7 @@ export class ToolConfigStore {
         const fromFile = config.tools ?? {};
         const tools = Object.hasOwn(config, "tools")
           ? fromFile
-          : { ...this.#baseline, ...fromFile };
+          : { ...this.#baseline.tools, ...fromFile };
         // 展开保留工具自己段落里的其余键（`ToolToggle` 是开放类型，见 config/file.ts）。
         tools[id] = { ...tools[id], enabled };
         config.tools = tools;

@@ -99,13 +99,14 @@ pnpm dev
 
 更常见的做法是通过环境变量显式指定（优先级高于配置文件）：
 
-| 变量                  | 默认值                | 说明                                                        |
-| --------------------- | --------------------- | ----------------------------------------------------------- |
-| `ATRI_ADMIN_USER`     | `admin`               | 管理员用户名                                                |
-| `ATRI_ADMIN_PASSWORD` | 无（自动生成）        | 管理员口令                                                  |
-| `ATRI_COOKIE_NAME`    | `atri_session`        | 会话 Cookie 名                                              |
-| `ATRI_COOKIE_SECURE`  | 关                    | 加 `Secure` 属性，仅 HTTPS 有效；本仓默认明文 HTTP 故默认关 |
-| `ATRI_STATIC_DIR`     | `apps/dashboard/dist` | 控制台构建产物目录                                          |
+| 变量                  | 默认值                | 说明                                                               |
+| --------------------- | --------------------- | ------------------------------------------------------------------ |
+| `ATRI_ADMIN_USER`     | `admin`               | 管理员用户名                                                       |
+| `ATRI_ADMIN_PASSWORD` | 无（自动生成）        | 管理员口令                                                         |
+| `ATRI_COOKIE_NAME`    | `atri_session`        | 会话 Cookie 名                                                     |
+| `ATRI_COOKIE_SECURE`  | 关                    | 加 `Secure` 属性，仅 HTTPS 有效；本仓默认明文 HTTP 故默认关        |
+| `ATRI_STATIC_DIR`     | `apps/dashboard/dist` | 控制台构建产物目录                                                 |
+| `ATRI_MAX_TOOL_STEPS` | `5`                   | 单轮允许的工具步数（夹到 `[1, 50]`）。改文件不用重启，改这里要重启 |
 
 ### 认证接口
 
@@ -235,6 +236,9 @@ pnpm start            # 或 node apps/server/src/index.ts
   ```
 
   控制台「工具」页写的就是这一段，改完立刻生效、不需要重启。
+  启用后引擎会真的执行它：模型要求调用 → 本地执行 → 结果回喂 → 模型再答，
+  一条消息里最多循环 `maxToolSteps` 步（默认 5）。会话历史里因此会出现
+  `role: "tool"` 的消息，控制台以紧凑条块显示调用与结果。
   插件注册自己的工具（`ctx.tool()`）还没有做 —— 那需要一次单独的能力授予设计。
 
 - **Provider** —— 模型的出站适配。内置 `openai` 与 `anthropic` 两种实现，

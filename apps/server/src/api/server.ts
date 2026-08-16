@@ -261,6 +261,12 @@ export function createHttpServer(deps: HttpDeps) {
         onDelta: (delta) => {
           if (!res.writableEnded) sendSse(res, { delta, done: false });
         },
+        // 中间消息（要求执行工具的助手消息、工具结果）也推给前端：不推的话，
+        // 一轮里跑了三步的对话在界面上只剩最后那段字，中间「模型查了什么」全看不见。
+        // 用的仍是 StreamChunk 已有的 `message` 字段，不新增帧类型、也不起 SSE 事件名。
+        onMessage: (message) => {
+          if (!res.writableEnded) sendSse(res, { message, done: false });
+        },
       });
       if (!res.writableEnded) sendSse(res, { delta: "", done: true, message: reply });
     } catch (err) {

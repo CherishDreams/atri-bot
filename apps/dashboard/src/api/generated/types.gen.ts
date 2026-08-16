@@ -39,6 +39,10 @@ export type Message = {
     sessionId: string;
     role: Role;
     content: string;
+    /**
+     * 仅当 role === "assistant" 且模型在这一轮要求执行工具时存在
+     */
+    toolCalls?: Array<ToolCall>;
     toolCallId?: string;
     createdAt: string;
 };
@@ -235,6 +239,21 @@ export type PluginInfo = {
      * 加载失败时的可读原因；正常时为 null
      */
     error?: string | null;
+};
+
+export type ToolCall = {
+    /**
+     * 配对的键：结果消息靠它指回这次调用
+     */
+    id: string;
+    /**
+     * 工具 id
+     */
+    name: string;
+    /**
+     * 模型产出的原始 JSON 参数串。刻意不在服务端解析成对象：那是模型给的自由文本，界面按原样显示更诚实
+     */
+    arguments: string;
 };
 
 export type ToolInfo = {

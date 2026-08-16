@@ -10,6 +10,7 @@
   "tools": {
     "current_time": { "enabled": false }
   },
+  "maxToolSteps": 5,
   "providerSources": {
     "deepseek": {
       "type": "openai",

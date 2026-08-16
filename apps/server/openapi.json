@@ -1233,6 +1233,13 @@
           "content": {
             "type": "string"
           },
+          "toolCalls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolCall"
+            },
+            "description": "仅当 role === \"assistant\" 且模型在这一轮要求执行工具时存在"
+          },
           "toolCallId": {
             "type": "string"
           },
@@ -1565,6 +1572,24 @@
           "error": {
             "type": ["string", "null"],
             "description": "加载失败时的可读原因；正常时为 null"
+          }
+        }
+      },
+      "ToolCall": {
+        "type": "object",
+        "required": ["id", "name", "arguments"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "配对的键：结果消息靠它指回这次调用"
+          },
+          "name": {
+            "type": "string",
+            "description": "工具 id"
+          },
+          "arguments": {
+            "type": "string",
+            "description": "模型产出的原始 JSON 参数串。刻意不在服务端解析成对象：那是模型给的自由文本，界面按原样显示更诚实"
           }
         }
       },

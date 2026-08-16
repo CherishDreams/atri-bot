@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import { DEFAULT_AUTH_COOKIE_NAME } from "@atri/shared";
 import type { AppConfig } from "../../src/config/index.ts";
+// 默认值从 store 取，不在测试里重抄一遍数字：否则「代码默认 5、测试默认 6」这种漂移
+// 会让用例证的不再是生产行为。
+import { DEFAULT_MAX_TOOL_STEPS } from "../../src/core/tool/store.ts";
 
 /**
  * 起 app 用的 config 工厂。
@@ -26,6 +29,8 @@ export interface TestConfigInput {
   adapters?: AppConfig["adapters"];
   /** 工具开关。默认空 = 全部禁用（工具是能力授予，默认关闭）。 */
   tools?: AppConfig["tools"];
+  /** 默认 5；测试要证「撞上限」这类行为时显式传，别改默认值。 */
+  maxToolSteps?: number;
   /** 覆盖 `auth` 段里的任意键（如测试要验证 `cookieSecure` 开关）。 */
   auth?: Partial<AppConfig["auth"]>;
   /** 默认指向不存在的目录；要测静态托管/SPA 回退时传真实目录。 */
@@ -42,6 +47,7 @@ export function makeTestConfig({
   pluginDirs = [],
   adapters = {},
   tools = {},
+  maxToolSteps = DEFAULT_MAX_TOOL_STEPS,
   auth = {},
   staticDir = join(root, "nonexistent"),
   adminPassword = "pw",
@@ -56,6 +62,7 @@ export function makeTestConfig({
     pluginDirs,
     adapters,
     tools,
+    maxToolSteps,
     providers,
     providerSources,
     auth: {

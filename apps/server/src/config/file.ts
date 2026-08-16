@@ -83,6 +83,11 @@ export interface FileConfig {
   pluginDirs?: string[];
   adapters?: Record<string, AdapterToggle>;
   tools?: Record<string, ToolToggle>;
+  /**
+   * 单轮允许的工具步数。**顶层键**而不是 `tools` 段里的一条：那一段的键是工具 id，
+   * 放进去会和一颗真叫 `maxSteps` 的工具撞名。
+   */
+  maxToolSteps?: number;
   providers?: ProvidersFileConfig;
   providerSources?: Record<string, ProviderSourceEntryConfig>;
   auth?: AuthFileConfig;

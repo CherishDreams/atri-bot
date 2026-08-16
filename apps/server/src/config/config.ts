@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_AUTH_COOKIE_NAME, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT } from "@atri/shared";
+import { DEFAULT_MAX_TOOL_STEPS } from "../core/tool/store.ts";
 import type {
   AdapterToggle,
   FileConfig,
@@ -36,6 +37,8 @@ export interface AppConfig {
    * `core/tool/store.ts`（它在控制台改完开关后必须立刻反映新状态，见其类注释）。
    */
   tools: Record<string, ToolToggle>;
+  /** 单轮工具步数上限。校验与夹取在 `ToolConfigStore.maxSteps()`，不在这里。 */
+  maxToolSteps: number;
   providers: ProvidersFileConfig;
   providerSources: Record<string, ProviderSourceEntryConfig>;
   auth: {
@@ -80,6 +83,10 @@ export function loadConfig(): AppConfig {
     adapters: fileConfig.adapters ?? {},
     // 工具与适配器相反：默认全部关闭，必须在文件里显式写 enabled: true。
     tools: fileConfig.tools ?? {},
+    // 默认值取自 store 导出的那一个常量，不在这里重抄一遍数字。
+    maxToolSteps: Number(
+      env.ATRI_MAX_TOOL_STEPS ?? fileConfig.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS,
+    ),
     // 两层 provider 配置：源（连接）与实例（模型）。测试常直接传这两个字段，
     // 因此缺省为空对象而不是 null。
     providers: fileConfig.providers ?? {},

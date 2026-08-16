@@ -81,7 +81,7 @@ export async function createApp(config: AppConfig) {
   // 插件是磁盘上用户手写的代码，`ctx.config` / `shared.config` 会直接交到它手上，
   // 所以在这里就投影成白名单视图（理由见 `plugins/manager.ts` 的 `PluginRuntimeConfig`）。
   const plugins = new PluginManager(pluginRuntimeConfig(config), logger);
-  const engine = new AgentEngine({ sessions, providers, logger });
+  const engine = new AgentEngine({ sessions, providers, tools, toolConfig, logger });
 
   const adapters = new AdapterManager({ config, engine, logger });
 

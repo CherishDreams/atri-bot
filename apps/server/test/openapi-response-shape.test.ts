@@ -33,6 +33,8 @@ import type { AdapterInfo } from "@atri/shared";
 import { AdapterManager } from "../src/adapters/manager.ts";
 import { AgentEngine } from "../src/core/agent/engine.ts";
 import { ProviderRegistry } from "../src/core/provider/registry.ts";
+import { ToolConfigStore } from "../src/core/tool/store.ts";
+import { ToolRegistry } from "../src/core/tool/registry.ts";
 import { SessionManager } from "../src/core/session/manager.ts";
 import { createLogger } from "../src/core/logger.ts";
 import { createApp } from "../src/app.ts";
@@ -451,6 +453,10 @@ test("GET /adapters 的元素形状（经进程内 AdapterManager 核对）", ()
   const engine = new AgentEngine({
     sessions: new SessionManager(),
     providers: new ProviderRegistry(),
+    // 引擎现在真的会读这两样（选本轮工具、执行调用），所以给真的空注册表与空开关，
+    // 而不是 `undefined as never` —— 后者会把「这里没接线」伪装成类型正确。
+    tools: new ToolRegistry(),
+    toolConfig: new ToolConfigStore({ tools: {} }, logger),
     logger,
   });
   const manager = new AdapterManager({ config: { adapters: {} }, engine, logger });

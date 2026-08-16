@@ -52,8 +52,10 @@ for (const tool of createBuiltinTools()) tools.register(tool);
 const toolConfig = new ToolConfigStore(config, logger);
 // 插件看到的是白名单视图，不是整份 AppConfig（见「插件可见的配置」一节）
 const plugins = new PluginManager(pluginRuntimeConfig(config), logger);
-// 引擎只吃三样东西；曾经还注入过 config 与 plugins，但两个字段在全仓没有任何读取点。
-const engine = new AgentEngine({ sessions, providers, logger });
+// 引擎吃五样：会话、provider、工具注册表、工具开关存储、日志器。
+// 曾经这里还注入过 config 与 plugins，两个字段全仓没有任何读取点，于是被删掉；
+// tools / toolConfig 是**先有读取点**（选本轮工具、执行调用）才加进来的。
+const engine = new AgentEngine({ sessions, providers, tools, toolConfig, logger });
 const adapters = new AdapterManager({ config, engine, logger });
 const http = await createHttpServer({
   config,
@@ -287,6 +289,34 @@ builtins.ts  createBuiltinTools()：内置实现，只有 app.ts import 它
 `ToolCall.arguments` 与 Anthropic 的 `input` 之间靠一次序列化对齐：仓内统一用串
 （OpenAI 给的就是串），回喂给 Anthropic 时再解回对象。解不回对象时退化成 `{}` 而**不抛错** ——
 抛出去会把整轮变成 500，而此刻唯一确定的事实是「模型上一轮给了一个我们没法复现的参数串」。
+
+### 循环：终止条件、上限，以及「未授权就不执行」
+
+`#runLoop` 取代了原来的单次 `#runTurn`：每轮把回复落库，若它带着 `toolCalls` 就执行、
+把结果推进历史、再问一次。`handleMessage` 的公开契约没变（仍返回最终那条助手消息），
+所以两个端点与适配器都不用改。
+
+- **终止只看 `toolCalls` 是否为空**，不看 `finish_reason` / `stop_reason`。
+  兼容网关在这两个字段上的一致性太差（`provider/openai.ts` 早就在处理「网关把 error
+  塞进 200 流」），而「有没有调用」是我们自己能数的事实。`stopReason` 仍然读出来放进
+  `ChatReply`，但只作诊断。
+- **只执行本轮真的声明过的工具。** 模型可以在没有任何工具被声明时硬吐一个 `tool_calls`
+  （兼容网关与自训模型都会），那时引擎回一条「未授权执行」的结果而不执行它 ——
+  否则就是「配置里关掉的开关被模型远程打开」。拒绝结果照样回喂，让模型有机会改用正常回答。
+- **步数上限 `maxToolSteps`，默认 5。** 这个数字是本仓自选的，没有上游来源
+  （理由与推导写在 `core/tool/store.ts` 的常量注释里，那里也是它唯一的定义处，
+  `config.ts` 与测试 helper 都从它取）。非法值夹到 `[1, 50]` 并记一条 warn：
+  这个数字写歪了不该让服务起不来，也不该被静默当成「没限制」。
+  它是**顶层配置键**，不放进 `tools` 段 —— 那一段的键是工具 id。
+- **一次运行内工具集固定**：循环开始前解析一次 `enabledIds()`，中途翻开关影响下一条消息，
+  不影响在途这条。与 `ProviderRegistry.clear()` 的注释是同一条不变量。
+- **中间消息有两条出口，语义不同。** WS 广播（`engine.subscribe`）看到全部四条消息；
+  SSE 只额外看到**中间**那两条（用户消息是调用方自己发的，最终回复就是返回值）。
+  这样「没启用工具时一帧都不多发」是可断言的。SSE 用的是 `StreamChunk` 已有的
+  `message` 字段，没有新帧类型、也没有起 `event:` 名。
+- **历史要做配对修复。** 被客户端断开或撞上限打断的那一轮，会留下「带 `toolCalls`
+  但没有对应结果」的助手消息，两家上游都拒绝这种历史；`SessionManager.appendMessage`
+  不做角色校验，所以兜底放在 `#historyFor`：那种助手消息退化成纯文本再发出去。
 
 ## 静态托管
 
