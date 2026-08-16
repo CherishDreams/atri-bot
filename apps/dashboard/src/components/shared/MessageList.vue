@@ -29,6 +29,7 @@ defineProps<{
     :key="m.id"
     :role="m.role"
     :content="m.content"
+    :tool-calls="m.toolCalls"
     :pending="m.id === streamingId && !m.content"
   />
 </template>

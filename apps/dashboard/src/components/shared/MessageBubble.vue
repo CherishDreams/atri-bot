@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Role } from "@/api/generated/index.js";
+import type { Role, ToolCall } from "@/api/generated/index.js";
 import MarkdownView from "./MarkdownView.vue";
 
 /**
@@ -15,16 +15,22 @@ const props = defineProps<{
   content: string;
   /** 这条还是没有内容的流式草稿 —— 显示占位而不是一个空气泡。 */
   pending?: boolean;
+  /** 助手在这一轮要求执行的工具调用（`role === "assistant"` 时才可能有）。 */
+  toolCalls?: ToolCall[];
 }>();
 
 const isUser = computed(() => props.role === "user");
+const isTool = computed(() => props.role === "tool");
 
 /**
- * 线协议里的 role 是英文（`user` / `assistant`），直接显示会在整片中文界面里
- * 露出两个英文单词。`system` / `tool` 目前没有对应的气泡分支，落到原始值，
- * 将来接上时在这里补名字即可。
+ * 线协议里的 role 是英文（`user` / `assistant` / `tool`），直接显示会在整片中文界面里
+ * 露出英文单词。`system` 目前没有对应的气泡分支，落到原始值，将来接上时在这里补名字即可。
  */
-const ROLE_LABELS: Partial<Record<Role, string>> = { user: "用户", assistant: "助手" };
+const ROLE_LABELS: Partial<Record<Role, string>> = {
+  user: "用户",
+  assistant: "助手",
+  tool: "工具结果",
+};
 const label = computed(() => ROLE_LABELS[props.role] ?? props.role);
 </script>
 
@@ -33,7 +39,7 @@ const label = computed(() => ROLE_LABELS[props.role] ?? props.role);
     <span class="mb-1 text-xs text-ink-faint">{{ label }}</span>
 
     <!--
-      三条分支必须留在同一条 v-if / v-else-if / v-else 链上：
+      四条分支必须留在同一条 v-if / v-else-if / v-else 链上：
       拆成两个独立 v-if 会让有内容的助手消息渲染两遍。
 
       send() 会先往 log 里 push 一条空 content 的助手草稿。以前这里既渲染那个
@@ -49,20 +55,41 @@ const label = computed(() => ROLE_LABELS[props.role] ?? props.role);
       正在输入…
     </div>
     <!--
-      助手气泡底色必须是 surface：MarkdownView 里的行内代码与代码块用 raised，
-      气泡也是 raised 的话代码记号就完全看不见。
+      工具结果**不走 MarkdownView**：它常常是一大坨 JSON，渲染成 markdown 既慢又难读
+      （还会把结果里的 `*`、`_` 当强调符号排错版）。等宽 + 封顶滚动，读得清也撑不爆页面。
     -->
-    <markdown-view
-      v-else-if="!isUser"
-      :content="content"
-      class="max-w-[85%] rounded-lg border-1 border-line bg-surface px-3 py-2 text-sm text-ink"
-    />
+    <pre
+      v-else-if="isTool"
+      class="m-0 max-h-40 max-w-[85%] overflow-auto rounded-lg border-1 border-line bg-raised px-3 py-2 font-mono text-xs whitespace-pre-wrap text-ink-muted"
+      >{{ content }}</pre>
     <!-- 用户侧保持纯文本 + pre-wrap：把输入里的 * 与 _ 当强调符号解析会排错版。 -->
     <div
-      v-else
+      v-else-if="isUser"
       class="max-w-[85%] rounded-lg bg-primary-soft px-3 py-2 text-sm break-words whitespace-pre-wrap text-ink"
     >
       {{ content }}
+    </div>
+    <!--
+      助手侧：正文仍是 markdown（底色必须是 surface —— 行内代码用 raised，
+      气泡也是 raised 的话代码记号就完全看不见），工具调用另挂一条紧凑条块。
+      纯工具调用那一轮的正文是空的，此时只画条块，不留一个空气泡。
+    -->
+    <div v-else class="flex max-w-[85%] flex-col gap-2">
+      <markdown-view
+        v-if="content"
+        :content="content"
+        class="rounded-lg border-1 border-line bg-surface px-3 py-2 text-sm text-ink"
+      />
+      <div
+        v-for="call in toolCalls ?? []"
+        :key="call.id"
+        class="rounded-lg border-1 border-line px-2.5 py-1.5"
+      >
+        <span class="text-xs font-medium text-ink">调用工具 {{ call.name }}</span>
+        <pre
+          class="m-0 mt-0.5 overflow-auto font-mono text-xs break-all whitespace-pre-wrap text-ink-muted"
+          >{{ call.arguments || "{}" }}</pre>
+      </div>
     </div>
   </div>
 </template>
