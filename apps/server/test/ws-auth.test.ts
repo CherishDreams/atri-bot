@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { createApp } from "../src/app.ts";
+import { createApp } from "#app.ts";
 import { DEFAULT_AUTH_COOKIE_NAME, API_PREFIX, WS_PATH } from "@atri/shared";
 import { makeTestConfig } from "./helpers/config.ts";
 

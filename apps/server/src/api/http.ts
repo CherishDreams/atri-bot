@@ -1,17 +1,17 @@
 /** JSON HTTP 处理的辅助函数。 */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { ApiError } from "../core/errors.ts";
-import type { AppConfig } from "../config/index.ts";
-import type { AgentEngine } from "../core/agent/engine.ts";
-import type { AuthManager } from "../core/auth/manager.ts";
-import type { Logger } from "../core/logger.ts";
-import type { ProviderConfigStore } from "../core/provider/store.ts";
-import type { ProviderRegistry } from "../core/provider/registry.ts";
-import type { ToolConfigStore } from "../core/tool/store.ts";
-import type { ToolRegistry } from "../core/tool/registry.ts";
-import type { SessionManager } from "../core/session/manager.ts";
-import type { AdapterManager } from "../adapters/manager.ts";
-import type { PluginManager } from "../plugins/manager.ts";
+import { ApiError } from "#core/errors.ts";
+import type { AppConfig } from "#config/index.ts";
+import type { AgentEngine } from "#core/agent/engine.ts";
+import type { AuthManager } from "#core/auth/manager.ts";
+import type { Logger } from "#core/logger.ts";
+import type { ProviderConfigStore } from "#core/provider/store.ts";
+import type { ProviderRegistry } from "#core/provider/registry.ts";
+import type { ToolConfigStore } from "#core/tool/store.ts";
+import type { ToolRegistry } from "#core/tool/registry.ts";
+import type { SessionManager } from "#core/session/manager.ts";
+import type { AdapterManager } from "#adapters/manager.ts";
+import type { PluginManager } from "#plugins/manager.ts";
 
 /**
  * `createHttpServer` 的依赖，由组合根 `app.ts` 注入。

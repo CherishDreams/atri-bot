@@ -13,13 +13,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolCall } from "@atri/shared";
-import { ToolRegistry } from "../src/core/tool/registry.ts";
-import { ToolConfigStore } from "../src/core/tool/store.ts";
-import { createBuiltinTools } from "../src/core/tool/builtins.ts";
-import type { ToolDefinition } from "../src/core/tool/types.ts";
-import { ApiError } from "../src/core/errors.ts";
-import { configFilePath } from "../src/config/file.ts";
-import type { FileConfig } from "../src/config/file.ts";
+import { ToolRegistry } from "#core/tool/registry.ts";
+import { ToolConfigStore } from "#core/tool/store.ts";
+import { createBuiltinTools } from "#core/tool/builtins.ts";
+import type { ToolDefinition } from "#core/tool/types.ts";
+import { ApiError } from "#core/errors.ts";
+import { configFilePath } from "#config/file.ts";
+import type { FileConfig } from "#config/file.ts";
 
 /** 一次调用的最小构造；`arguments` 故意收 string，因为那就是模型产出的形状。 */
 function call(name: string, args: string): ToolCall {

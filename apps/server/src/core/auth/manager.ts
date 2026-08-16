@@ -1,8 +1,8 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AuthUser, LoginResponse } from "@atri/shared";
-import type { Logger } from "../logger.ts";
-import { errorMessage } from "../errors.ts";
-import { configFilePath, updateConfigFile } from "../../config/file.ts";
+import type { Logger } from "#core/logger.ts";
+import { errorMessage } from "#core/errors.ts";
+import { configFilePath, updateConfigFile } from "#config/file.ts";
 
 /** 绝对有效期：无论是否活跃，登录满 15 天后一律失效。 */
 export const ABSOLUTE_TTL_MS = 15 * 24 * 60 * 60 * 1000;

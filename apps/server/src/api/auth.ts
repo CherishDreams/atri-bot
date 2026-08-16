@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { LoginResponse } from "@atri/shared";
-import type { AuthManager } from "../core/auth/manager.ts";
+import type { AuthManager } from "#core/auth/manager.ts";
 import { sendError } from "./http.ts";
 
 /** Cookie 的最大存活秒数，与 AuthManager 的 15 天绝对有效期保持一致。 */

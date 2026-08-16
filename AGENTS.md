@@ -115,6 +115,16 @@ plugins/  ─> 只依赖注入给它的 ctx
   shared 不会（它先 `tsc` 出 `dist`，那边只认 `.js`）。另外服务端只允许**可擦除**的 TS 语法
   （`erasableSyntaxOnly: true`）：`enum`、有运行时语义的 `namespace`、构造函数参数属性
   都会被类型检查直接拒绝 —— 它们不是风格偏好，是「运行时跑不起来」的分界线。
+- **跨目录 import 用 `#` 别名，同目录仍写 `./x.ts`**。别名表在 `apps/server/package.json` 的
+  `imports: { "#*": "./src/*" }`，于是 `#core/errors.ts` 就是 `src/core/errors.ts`。
+  两个看起来更自然的选择都被实测否掉：`tsconfig.json` 的 `paths`（`@/*`）**只骗得过 `tsc`** ——
+  Node 不读 tsconfig，擦除又不改写说明符，结果是「typecheck 全绿、运行时 `ERR_MODULE_NOT_FOUND`」；
+  带斜杠的键 `"#/*"` **Node 能解析、`tsc` 不能**（整树 TS2307）。`imports` 的解析由 Node 自己完成，
+  所以它是**服从**上面那条判据（说明符必须由 Node 能解析），而不是绕开它。
+  两个边界别越过：`packages/shared` **不得**加 `imports`（它的 `exports` 与 `files` 都指 `dist/`，
+  再配一份指向 `src/` 的映射会让 dashboard 走 `dist`、shared 内部走 `src`，同一常量解析出两份副本）；
+  `fileURLToPath(new URL("../openapi.json", import.meta.url))` 这类**URL 解析**不归别名管，
+  也永远不能写成 `#` —— `#` 在 URL 里是片段分隔符，会静默得到错路径而不报错。
 - 类型标注不许「替测试降强度」：各模块的构造参数声明**自己实际读写的那几个配置键**
   （`ProviderStoreConfig { root?: string }` 这种），而不是收一个 `Partial<AppConfig>` 或
   拿 `as unknown as AppConfig` 糊过去。前者让 `config.root` 之类必然存在的读取也变成可选、

@@ -14,10 +14,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createApp } from "../src/app.ts";
-import { AnthropicProvider } from "../src/core/provider/anthropic.ts";
-import { OpenAIProvider, normalizeModels } from "../src/core/provider/openai.ts";
-import { ProviderError } from "../src/core/provider/errors.ts";
+import { createApp } from "#app.ts";
+import { AnthropicProvider } from "#core/provider/anthropic.ts";
+import { OpenAIProvider, normalizeModels } from "#core/provider/openai.ts";
+import { ProviderError } from "#core/provider/errors.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**

@@ -12,15 +12,15 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message, ServerFrame } from "@atri/shared";
-import { AgentEngine } from "../src/core/agent/engine.ts";
-import { ProviderRegistry } from "../src/core/provider/registry.ts";
-import { SessionManager } from "../src/core/session/manager.ts";
-import { ToolRegistry } from "../src/core/tool/registry.ts";
-import { ToolConfigStore } from "../src/core/tool/store.ts";
-import type { ChatOptions, ChatReply, ProviderImpl } from "../src/core/provider/types.ts";
-import type { ToolDefinition } from "../src/core/tool/types.ts";
-import type { Logger } from "../src/core/logger.ts";
-import { configFilePath } from "../src/config/file.ts";
+import { AgentEngine } from "#core/agent/engine.ts";
+import { ProviderRegistry } from "#core/provider/registry.ts";
+import { SessionManager } from "#core/session/manager.ts";
+import { ToolRegistry } from "#core/tool/registry.ts";
+import { ToolConfigStore } from "#core/tool/store.ts";
+import type { ChatOptions, ChatReply, ProviderImpl } from "#core/provider/types.ts";
+import type { ToolDefinition } from "#core/tool/types.ts";
+import type { Logger } from "#core/logger.ts";
+import { configFilePath } from "#config/file.ts";
 
 /** 记下每次收到的 options，并**按次序**吐出预置的回复。 */
 function scriptedProvider(replies: ChatReply[]): ProviderImpl & { seen: ChatOptions[] } {

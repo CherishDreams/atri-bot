@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { Logger } from "../src/core/logger.ts";
-import { parseSse, parseSseJson } from "../src/core/provider/sse.ts";
-import { AnthropicProvider, splitMessages } from "../src/core/provider/anthropic.ts";
-import { OpenAIProvider } from "../src/core/provider/openai.ts";
-import { ProviderError } from "../src/core/provider/errors.ts";
-import { createProviders, readDefaultProviderId } from "../src/core/provider/factory.ts";
-import { ProviderRegistry } from "../src/core/provider/registry.ts";
-import type { ProviderImpl, ProviderOptions } from "../src/core/provider/types.ts";
+import type { Logger } from "#core/logger.ts";
+import { parseSse, parseSseJson } from "#core/provider/sse.ts";
+import { AnthropicProvider, splitMessages } from "#core/provider/anthropic.ts";
+import { OpenAIProvider } from "#core/provider/openai.ts";
+import { ProviderError } from "#core/provider/errors.ts";
+import { createProviders, readDefaultProviderId } from "#core/provider/factory.ts";
+import { ProviderRegistry } from "#core/provider/registry.ts";
+import type { ProviderImpl, ProviderOptions } from "#core/provider/types.ts";
 
 /**
  * provider 真实发出的那份 request init：`openai.ts` / `anthropic.ts` 的 `#request()`

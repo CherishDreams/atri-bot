@@ -10,7 +10,7 @@
  */
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { errorMessage } from "../core/errors.ts";
+import { errorMessage } from "#core/errors.ts";
 
 /** 配置文件名。与 loadConfig() 读取的是同一个。 */
 export const CONFIG_FILE_NAME = "atri.config.json";

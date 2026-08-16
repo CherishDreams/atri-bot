@@ -12,9 +12,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolInfo } from "@atri/shared";
-import { createApp } from "../src/app.ts";
-import { configFilePath } from "../src/config/file.ts";
-import type { FileConfig } from "../src/config/file.ts";
+import { createApp } from "#app.ts";
+import { configFilePath } from "#config/file.ts";
+import type { FileConfig } from "#config/file.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 async function startApp(t: TestContext, preset?: FileConfig) {

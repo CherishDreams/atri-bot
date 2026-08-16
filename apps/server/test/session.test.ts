@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Message, Session, SessionDetail } from "@atri/shared";
-import { SessionManager } from "../src/core/session/manager.ts";
+import { SessionManager } from "#core/session/manager.ts";
 
 /**
  * 负例视图：`appendMessage()` 的签名要求完整 `Message`，而「对未知会话追加消息」这条用例

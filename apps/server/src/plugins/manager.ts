@@ -2,9 +2,9 @@ import { readdir, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PluginInfo, PluginStatus } from "@atri/shared";
-import type { Logger } from "../core/logger.ts";
-import type { AppConfig } from "../config/index.ts";
-import { ApiError, errorMessage } from "../core/errors.ts";
+import type { Logger } from "#core/logger.ts";
+import type { AppConfig } from "#config/index.ts";
+import { ApiError, errorMessage } from "#core/errors.ts";
 import { PluginContext, type PluginContextConfig } from "./context.ts";
 
 /**

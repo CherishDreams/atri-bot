@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ABSOLUTE_TTL_MS, IDLE_TTL_MS, AuthManager } from "../src/core/auth/manager.ts";
-import type { LoginResult } from "../src/core/auth/manager.ts";
-import type { Logger } from "../src/core/logger.ts";
+import { ABSOLUTE_TTL_MS, IDLE_TTL_MS, AuthManager } from "#core/auth/manager.ts";
+import type { LoginResult } from "#core/auth/manager.ts";
+import type { Logger } from "#core/logger.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**

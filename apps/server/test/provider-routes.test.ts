@@ -16,11 +16,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createApp } from "../src/app.ts";
-import { configFilePath } from "../src/config/file.ts";
-import type { FileConfig } from "../src/config/file.ts";
-import type { SourceEntry } from "../src/core/provider/store.ts";
-import type { ProviderListItem, ProviderMutationResult } from "../src/api/server.ts";
+import { createApp } from "#app.ts";
+import { configFilePath } from "#config/file.ts";
+import type { FileConfig } from "#config/file.ts";
+import type { SourceEntry } from "#core/provider/store.ts";
+import type { ProviderListItem, ProviderMutationResult } from "#api/server.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 import type { Session } from "@atri/shared";
 

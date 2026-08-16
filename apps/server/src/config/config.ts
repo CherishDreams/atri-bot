@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_AUTH_COOKIE_NAME, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT } from "@atri/shared";
-import { DEFAULT_MAX_TOOL_STEPS } from "../core/tool/store.ts";
+import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
 import type {
   AdapterToggle,
   FileConfig,
@@ -9,7 +9,7 @@ import type {
   ProviderSourceEntryConfig,
   ToolToggle,
 } from "./file.ts";
-import { errorMessage } from "../core/errors.ts";
+import { errorMessage } from "#core/errors.ts";
 
 /**
  * `loadConfig()` 的产物：每个键都有值（内置默认 → 配置文件 → 环境变量，后者覆盖前者）。

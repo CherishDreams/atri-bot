@@ -17,7 +17,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createApp } from "../src/app.ts";
+import { createApp } from "#app.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 const SPEC = JSON.parse(

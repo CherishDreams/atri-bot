@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PluginManager } from "../src/plugins/manager.ts";
-import type { PluginView } from "../src/plugins/manager.ts";
-import type { Logger } from "../src/core/logger.ts";
+import { PluginManager } from "#plugins/manager.ts";
+import type { PluginView } from "#plugins/manager.ts";
+import type { Logger } from "#core/logger.ts";
 
 /**
  * 插件 fixture 与用例之间的探针都挂在 `globalThis` 上（见各用例里写进磁盘的 `index.js`）。

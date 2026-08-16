@@ -7,8 +7,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message, Session, SessionDetail } from "@atri/shared";
-import { createApp } from "../src/app.ts";
-import type { AppConfig } from "../src/config/index.ts";
+import { createApp } from "#app.ts";
+import type { AppConfig } from "#config/index.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**

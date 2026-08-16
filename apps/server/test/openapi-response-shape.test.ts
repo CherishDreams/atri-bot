@@ -30,14 +30,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AdapterInfo } from "@atri/shared";
-import { AdapterManager } from "../src/adapters/manager.ts";
-import { AgentEngine } from "../src/core/agent/engine.ts";
-import { ProviderRegistry } from "../src/core/provider/registry.ts";
-import { ToolConfigStore } from "../src/core/tool/store.ts";
-import { ToolRegistry } from "../src/core/tool/registry.ts";
-import { SessionManager } from "../src/core/session/manager.ts";
-import { createLogger } from "../src/core/logger.ts";
-import { createApp } from "../src/app.ts";
+import { AdapterManager } from "#adapters/manager.ts";
+import { AgentEngine } from "#core/agent/engine.ts";
+import { ProviderRegistry } from "#core/provider/registry.ts";
+import { ToolConfigStore } from "#core/tool/store.ts";
+import { ToolRegistry } from "#core/tool/registry.ts";
+import { SessionManager } from "#core/session/manager.ts";
+import { createLogger } from "#core/logger.ts";
+import { createApp } from "#app.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 const SPEC = JSON.parse(

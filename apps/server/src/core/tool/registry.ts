@@ -1,5 +1,5 @@
 import type { ToolCall, ToolResult } from "@atri/shared";
-import { errorMessage } from "../errors.ts";
+import { errorMessage } from "#core/errors.ts";
 import type { ToolDefinition } from "./types.ts";
 
 /**

@@ -6,13 +6,13 @@ import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
 import type { ServerFrame, ToolInfo } from "@atri/shared";
 import { API_PREFIX, APP_NAME, WS_PATH } from "@atri/shared";
-import { createProviders } from "../core/provider/factory.ts";
-import type { ProviderEntry } from "../core/provider/store.ts";
-import type { ToolDefinition } from "../core/tool/types.ts";
+import { createProviders } from "#core/provider/factory.ts";
+import type { ProviderEntry } from "#core/provider/store.ts";
+import type { ToolDefinition } from "#core/tool/types.ts";
 import { Router } from "./router.ts";
 import { readJson, sendError, sendJson, sendSse, startSse, type HttpDeps } from "./http.ts";
 import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from "./auth.ts";
-import { errorMessage, errorStack, statusForError } from "../core/errors.ts";
+import { errorMessage, errorStack, statusForError } from "#core/errors.ts";
 
 /**
  * provider 实例在 `GET /providers` 里的元素：磁盘条目 + 这一条路由额外补上的运行时标注。

@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PluginManager, pluginRuntimeConfig } from "../src/plugins/manager.ts";
-import { createApp } from "../src/app.ts";
-import type { AppConfig } from "../src/config/index.ts";
-import type { Logger } from "../src/core/logger.ts";
+import { PluginManager, pluginRuntimeConfig } from "#plugins/manager.ts";
+import { createApp } from "#app.ts";
+import type { AppConfig } from "#config/index.ts";
+import type { Logger } from "#core/logger.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**

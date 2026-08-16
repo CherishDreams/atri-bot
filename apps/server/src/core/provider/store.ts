@@ -24,15 +24,15 @@
  * 只改这两个键，文件里其余内容原样保留。文件损坏时**拒绝写入**而不是当成
  * 空配置覆盖——那会把用户其它配置一起丢掉。
  */
-import type { Logger } from "../logger.ts";
+import type { Logger } from "#core/logger.ts";
 import type {
   FileConfig,
   ProviderEntryConfig,
   ProvidersFileConfig,
   ProviderSourceEntryConfig,
-} from "../../config/file.ts";
-import { configFilePath, readConfigFile, updateConfigFile } from "../../config/file.ts";
-import { ApiError, errorMessage } from "../errors.ts";
+} from "#config/file.ts";
+import { configFilePath, readConfigFile, updateConfigFile } from "#config/file.ts";
+import { ApiError, errorMessage } from "#core/errors.ts";
 
 /** 认得的 provider 实现类型。与 factory.ts 的 TYPES 保持同步。 */
 export const PROVIDER_TYPES: readonly string[] = ["openai", "anthropic"];

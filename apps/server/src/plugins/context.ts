@@ -1,5 +1,5 @@
-import type { Logger } from "../core/logger.ts";
-import { errorMessage } from "../core/errors.ts";
+import type { Logger } from "#core/logger.ts";
+import { errorMessage } from "#core/errors.ts";
 
 /**
  * 传给插件上下文的配置：插件可见的运行期配置（`PluginRuntimeConfig` 那份白名单视图）

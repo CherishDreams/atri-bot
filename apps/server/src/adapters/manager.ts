@@ -1,8 +1,8 @@
 import type { AdapterInfo } from "@atri/shared";
-import { errorMessage } from "../core/errors.ts";
-import type { AgentEngine } from "../core/agent/engine.ts";
-import type { Logger } from "../core/logger.ts";
-import type { AdapterToggle } from "../config/file.ts";
+import { errorMessage } from "#core/errors.ts";
+import type { AgentEngine } from "#core/agent/engine.ts";
+import type { Logger } from "#core/logger.ts";
+import type { AdapterToggle } from "#config/file.ts";
 
 /** 一个接入端的最小契约：长驻的 `start()`/`stop()`（与每请求的 provider 刻意不同词）。 */
 export interface Adapter {

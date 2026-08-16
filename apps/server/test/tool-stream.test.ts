@@ -14,8 +14,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApp } from "../src/app.ts";
-import { configFilePath } from "../src/config/file.ts";
+import { createApp } from "#app.ts";
+import { configFilePath } from "#config/file.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /** 上游收到的一次请求（只留这条链要断言的字段）。 */

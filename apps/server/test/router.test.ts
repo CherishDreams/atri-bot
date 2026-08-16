@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Router } from "../src/api/router.ts";
+import { Router } from "#api/router.ts";
 
 test("匹配静态路由", () => {
   const r = new Router().get("/api/v1/health", () => {});

@@ -12,20 +12,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Logger } from "../src/core/logger.ts";
-import type {
-  FileConfig,
-  ProviderEntryConfig,
-  ProviderSourceEntryConfig,
-} from "../src/config/file.ts";
+import type { Logger } from "#core/logger.ts";
+import type { FileConfig, ProviderEntryConfig, ProviderSourceEntryConfig } from "#config/file.ts";
 import {
   MAX_TIMEOUT_MS,
   MIN_TIMEOUT_MS,
   ProviderConfigError,
   ProviderConfigStore,
-} from "../src/core/provider/store.ts";
-import type { WriteInput } from "../src/core/provider/store.ts";
-import { configFilePath } from "../src/config/file.ts";
+} from "#core/provider/store.ts";
+import type { WriteInput } from "#core/provider/store.ts";
+import { configFilePath } from "#config/file.ts";
 
 /** 这些用例断言的是返回值与落盘内容，不看日志（store 只在删掉默认项时 warn 一条）。 */
 const quietLogger: Logger = {

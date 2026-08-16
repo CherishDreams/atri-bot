@@ -1,10 +1,10 @@
-import type { Logger } from "../logger.ts";
+import type { Logger } from "#core/logger.ts";
 import type {
   ProviderEntryConfig,
   ProvidersFileConfig,
   ProviderSourceEntryConfig,
-} from "../../config/file.ts";
-import { errorMessage } from "../errors.ts";
+} from "#config/file.ts";
+import { errorMessage } from "#core/errors.ts";
 import { OpenAIProvider } from "./openai.ts";
 import { AnthropicProvider } from "./anthropic.ts";
 import type { ProviderConstructor, ProviderImpl, ProviderOptions } from "./types.ts";

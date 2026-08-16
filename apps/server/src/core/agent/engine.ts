@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Message, ServerFrame, SessionDetail } from "@atri/shared";
-import type { Logger } from "../logger.ts";
-import type { ProviderRegistry } from "../provider/registry.ts";
-import type { ChatMessage, ChatTool } from "../provider/types.ts";
-import type { SessionManager } from "../session/manager.ts";
-import type { ToolConfigStore } from "../tool/store.ts";
-import type { ToolRegistry } from "../tool/registry.ts";
-import type { ToolDefinition } from "../tool/types.ts";
+import type { Logger } from "#core/logger.ts";
+import type { ProviderRegistry } from "#core/provider/registry.ts";
+import type { ChatMessage, ChatTool } from "#core/provider/types.ts";
+import type { SessionManager } from "#core/session/manager.ts";
+import type { ToolConfigStore } from "#core/tool/store.ts";
+import type { ToolRegistry } from "#core/tool/registry.ts";
+import type { ToolDefinition } from "#core/tool/types.ts";
 
 /**
  * 引擎实际依赖的东西，与 `docs/architecture.md` 的装配示例一致。

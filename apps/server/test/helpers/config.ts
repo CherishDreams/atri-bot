@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { DEFAULT_AUTH_COOKIE_NAME } from "@atri/shared";
-import type { AppConfig } from "../../src/config/index.ts";
+import type { AppConfig } from "#config/index.ts";
 // 默认值从 store 取，不在测试里重抄一遍数字：否则「代码默认 5、测试默认 6」这种漂移
 // 会让用例证的不再是生产行为。
-import { DEFAULT_MAX_TOOL_STEPS } from "../../src/core/tool/store.ts";
+import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
 
 /**
  * 起 app 用的 config 工厂。

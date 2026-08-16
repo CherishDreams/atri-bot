@@ -1,5 +1,5 @@
 import type { Role, ToolCall } from "@atri/shared";
-import type { JsonSchema } from "../tool/types.ts";
+import type { JsonSchema } from "#core/tool/types.ts";
 
 /**
  * 引擎与厂商之间「一轮对话」的单元。

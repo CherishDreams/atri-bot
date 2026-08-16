@@ -1,11 +1,6 @@
-import type { Logger } from "../logger.ts";
-import { ApiError, errorMessage } from "../errors.ts";
-import {
-  configFilePath,
-  readConfigFile,
-  updateConfigFile,
-  type ToolToggle,
-} from "../../config/file.ts";
+import type { Logger } from "#core/logger.ts";
+import { ApiError, errorMessage } from "#core/errors.ts";
+import { configFilePath, readConfigFile, updateConfigFile, type ToolToggle } from "#config/file.ts";
 
 /** ToolConfigStore 实际读写的配置键。 */
 export interface ToolStoreConfig {

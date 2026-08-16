@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { createApp } from "../src/app.ts";
+import { createApp } from "#app.ts";
 import type { LoginResponse } from "@atri/shared";
 import { makeTestConfig } from "./helpers/config.ts";
 

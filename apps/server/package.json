@@ -4,6 +4,9 @@
   "private": true,
   "description": "atri-bot 服务端 —— agent 引擎、适配器、插件与 HTTP/WS API",
   "type": "module",
+  "imports": {
+    "#*": "./src/*"
+  },
   "scripts": {
     "dev": "node --watch src/index.ts",
     "start": "node src/index.ts",
