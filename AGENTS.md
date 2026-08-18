@@ -115,8 +115,11 @@ plugins/  ─> 只依赖注入给它的 ctx
   shared 不会（它先 `tsc` 出 `dist`，那边只认 `.js`）。另外服务端只允许**可擦除**的 TS 语法
   （`erasableSyntaxOnly: true`）：`enum`、有运行时语义的 `namespace`、构造函数参数属性
   都会被类型检查直接拒绝 —— 它们不是风格偏好，是「运行时跑不起来」的分界线。
-- **跨目录 import 用 `#` 别名，同目录仍写 `./x.ts`**。别名表在 `apps/server/package.json` 的
-  `imports: { "#*": "./src/*" }`，于是 `#core/errors.ts` 就是 `src/core/errors.ts`。
+- **需要向上跳（`../`）的 import 用 `#` 别名，同目录与向下进子目录仍写 `./x.ts`**。别名表在
+  `apps/server/package.json` 的 `imports: { "#*": "./src/*" }`，于是 `#core/errors.ts` 就是
+  `src/core/errors.ts`。向下不改（`app.ts` 的 `./core/logger.ts` 照旧）不是因为省事，而是因为
+  **`#` 只覆盖 `src/`**：`test/` 自己的 `./helpers/config.ts` 没有对应别名（`#helpers/...` 会指到
+  `src/helpers`），与其两边形状不一样，不如把别名限定在「向上跳」这一种真正会绕晕人的方向上。
   两个看起来更自然的选择都被实测否掉：`tsconfig.json` 的 `paths`（`@/*`）**只骗得过 `tsc`** ——
   Node 不读 tsconfig，擦除又不改写说明符，结果是「typecheck 全绿、运行时 `ERR_MODULE_NOT_FOUND`」；
   带斜杠的键 `"#/*"` **Node 能解析、`tsc` 不能**（整树 TS2307）。`imports` 的解析由 Node 自己完成，

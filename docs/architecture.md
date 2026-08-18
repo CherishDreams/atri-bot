@@ -39,8 +39,12 @@ plugins/  ─> 仅依赖注入给它的 ctx，不 import core/ 之外的具体�
 
 服务端没有编译步骤：`dev`/`start`/`test` 都是 `node` 直接执行 `.ts` 源码，靠 Node 22.18+ 默认开启的
 类型擦除。于是**每条 import 说明符都必须能被 Node 自己解析** —— 擦除只删类型，不改写说明符，
-而 Node 从不读 `tsconfig.json`。同目录写 `./x.ts`，跨目录写 `#core/errors.ts`
-（`apps/server/package.json` 的 `imports: { "#*": "./src/*" }`，映射由 Node 的解析器完成）。
+而 Node 从不读 `tsconfig.json`。同目录与向下进子目录写 `./x.ts`，**需要向上跳的**写
+`#core/errors.ts`（`apps/server/package.json` 的 `imports: { "#*": "./src/*" }`，映射由 Node 的解析器完成）。
+别名只覆盖 `src/` —— `#*` 的目标就是 `./src/*`，所以 `test/` 自己的 `./helpers/config.ts` 没有对应别名
+（`#helpers/...` 会指到 `src/helpers`），`app.ts` 的 `./core/logger.ts` 也照旧写相对。
+把别名限定在「向上跳」这一种方向，是因为它才是真正会绕晕人的那种：读一条 `../../config/file.ts`
+要先算发起文件在哪、再算跳几层，而 `#config/file.ts` 直接就是答案。向下没这个负担。
 
 三个替代，前两行的形状是本轮实测出来的，第三行是依赖代价：
 
