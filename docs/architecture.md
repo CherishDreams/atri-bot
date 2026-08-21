@@ -264,8 +264,14 @@ errors.ts   ProviderError 与上游错误归一
 types.ts     ToolDefinition（id / name / description / parameters / run）+ JsonSchema
 registry.ts  ToolRegistry：存、取、按 id 执行转发 —— 不 import 具体工具，也不读配置
 store.ts     ToolConfigStore：读写 atri.config.json 的 tools 段
-builtins.ts  createBuiltinTools()：内置实现，只有 app.ts import 它
+builtins.ts  createBuiltinTools()：内置工具的清单，只有 app.ts import 它
+builtins/    一颗工具一个文件（`currentTime.ts`），只导出自己那颗的 ToolDefinition
 ```
+
+清单**直接 import 实现文件**，中间不放 `builtins/index.ts` 这类 re-export 层 ——
+和 `factory.ts` 直接 import `./openai.ts` 是同一个理由：装配点只能有一处。多一处出口，
+「写了工具文件但忘了登记进清单」就没人能发现：注册表只认注入进来的东西，
+`openapi` 那三道检查也不看这里。
 
 三条与既有习惯不同的决定：
 

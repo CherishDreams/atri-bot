@@ -80,6 +80,12 @@ plugins/  ─> 只依赖注入给它的 ctx
 工具能力 → `core/tool/`（注册表不 import 具体工具、也不读配置，内置工具由组合根注册）；
 业务逻辑 → `core/`；HTTP 表面 → `api/server.ts` + `openapi.json`。
 
+**内置工具一颗一个文件**：`core/tool/builtins/<id>.ts` 只导出自己那颗的 `ToolDefinition`，
+`core/tool/builtins.ts` 逐颗 import 并组成清单 —— 对照 `provider/` 那边
+（`openai.ts` / `anthropic.ts` 各一份实现，`factory.ts` 负责挑）。**不要**加
+`builtins/index.ts` 这类 re-export 中间层：清单是唯一的装配点，多一处出口就会变成
+「改了工具文件但忘了登记」，而登记与否没有任何检查在守（注册表按注入的东西说话）。
+
 ### 信任边界只有一条：插件
 
 `api/` / `core/` / `adapters/` 都是仓内代码，读配置的是我们自己写的逻辑；
