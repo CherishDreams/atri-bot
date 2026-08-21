@@ -77,7 +77,9 @@ plugins/  ─> 只依赖注入给它的 ctx
 - 每个模块往里收一层：`index.ts` 薄入口 → `app.ts` 装配 → `core/` 逻辑 → `api/` 传输。
 
 新增能力时的落点：入站适配 → `adapters/`；出站模型 → `core/provider/factory.ts` 的 `TYPES` 表；
-工具能力 → `core/tool/`（注册表不 import 具体工具、也不读配置，内置工具由组合根注册）；
+工具能力 → `core/tool/`（注册表不 import 具体工具、也不读配置，内置工具由组合根注册；
+工具需要别层的数据时**由组合根注入访问器**，不要在 `core/tool/` 里 import 那一层 ——
+`list_plugins` 收 `() => plugins.list()` 就是这个形状，分层规则没有检查守着）；
 业务逻辑 → `core/`；HTTP 表面 → `api/server.ts` + `openapi.json`。
 
 **内置工具一颗一个文件**：`core/tool/builtins/<id>.ts` 只导出自己那颗的 `ToolDefinition`，

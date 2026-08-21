@@ -31,10 +31,20 @@ export async function createApp(config: AppConfig) {
   // provider 配置的读写入口。启动时读一次，之后每次界面改动都经由它落盘。
   const providerConfig = new ProviderConfigStore(config, logger);
 
+  // 插件是磁盘上用户手写的代码，`ctx.config` / `shared.config` 会直接交到它手上，
+  // 所以在这里就投影成白名单视图（理由见 `plugins/manager.ts` 的 `PluginRuntimeConfig`）。
+  // 构造提前到工具之前：`list_plugins` 那颗工具要从这里拿实时视图（构造只是存两个字段，
+  // 真正的扫描仍在下面 `plugins.loadAll()` 那一步）。
+  const plugins = new PluginManager(pluginRuntimeConfig(config), logger);
+
   // 工具：注册表只管存在与执行，启用与否每次现读文件（见 `core/tool/store.ts`），
   // 所以控制台改完开关不需要重建任何东西 —— 也没有可重建的长驻状态。
   const tools = new ToolRegistry();
-  for (const tool of createBuiltinTools()) tools.register(tool);
+  // 传 getter 而不是 `plugins.list()` 的结果：此刻还没 `loadAll()`，而且插件能在运行期
+  // 增删与启停，快照会让这颗工具继续说出装配那一刻的事实。
+  for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) {
+    tools.register(tool);
+  }
   const toolConfig = new ToolConfigStore(config, logger);
 
   /**
@@ -78,9 +88,6 @@ export async function createApp(config: AppConfig) {
 
   rebuildProviders();
 
-  // 插件是磁盘上用户手写的代码，`ctx.config` / `shared.config` 会直接交到它手上，
-  // 所以在这里就投影成白名单视图（理由见 `plugins/manager.ts` 的 `PluginRuntimeConfig`）。
-  const plugins = new PluginManager(pluginRuntimeConfig(config), logger);
   const engine = new AgentEngine({ sessions, providers, tools, toolConfig, logger });
 
   const adapters = new AdapterManager({ config, engine, logger });

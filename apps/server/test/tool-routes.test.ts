@@ -69,11 +69,19 @@ test("GET /tools 列出内置工具，且默认全部关闭", async (t) => {
   const res = await call(origin, cookie, "GET", "/tools");
   assert.equal(res.status, 200);
   const list = toolsOf(res.json);
-  assert.equal(list.length, 1, "本轮只内置 current_time；多了说明有人加了工具却没同步这条断言");
+  // 加一颗工具就必须同步这条断言 —— 它存在的理由正是「清单变了，而端点视图没人复查」。
+  // 注册顺序就是 `createBuiltinTools()` 的数组顺序，所以下面两条 map 是成对的。
+  assert.deepEqual(
+    list.map((tool) => tool.id),
+    ["current_time", "list_plugins"],
+  );
+  assert.deepEqual(
+    list.map((tool) => tool.enabled),
+    [false, false],
+    "工具是能力授予，默认必须关闭",
+  );
   const tool = list[0] as ToolInfo;
-  assert.equal(tool.id, "current_time");
   assert.equal(tool.name, "当前时间");
-  assert.equal(tool.enabled, false, "工具是能力授予，默认必须关闭");
   assert.equal(typeof tool.description, "string");
   // 视图不能漏出参数 schema：那是给模型的，不是给控制台的。
   assert.deepEqual(Object.keys(tool).toSorted(), ["description", "enabled", "id", "name"]);

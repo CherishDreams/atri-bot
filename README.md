@@ -227,7 +227,9 @@ pnpm start            # 或 node apps/server/src/index.ts
 - **适配器** —— 实现 `start()`/`stop()` 并注册到 `AdapterManager`；
   在 `config.adapters.<id>.enabled` 中按需启用。纯 agent 部署可以不启用任何一个。
 - **工具（function calling）** —— 内置工具一颗一个文件（`apps/server/src/core/tool/builtins/`），
-  在 `builtins.ts` 的清单里登记后由组合根注册进 `ToolRegistry`。启用走 `atri.config.json` 的 `tools` 段，
+  在 `builtins.ts` 的清单里登记后由组合根注册进 `ToolRegistry`。目前有两颗：`current_time`
+  （报此刻的日期与时钟，可传 IANA 时区）与 `list_plugins`（列已安装的插件及其加载结果）。
+  启用走 `atri.config.json` 的 `tools` 段，
   **默认全部关闭**（与适配器的默认启用刻意相反：少听一个端口是部署细节，
   给模型多一件可做的事是能力授予）：
 

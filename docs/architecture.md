@@ -293,6 +293,24 @@ builtins/    一颗工具一个文件（`currentTime.ts`），只导出自己那
 `isError: true` 的结果回喂模型。那是模型的一次可纠正回合（幻觉出一个工具名是常态），
 抛出去会把整轮打成 400/500。provider 层的错误不经过这里，照旧抛。
 
+### 工具怎么拿到别层的数据
+
+`list_plugins` 要读插件清单，而数据源 `PluginManager.list()` 在 `plugins/` 下 ——
+`core/` 不得 import `plugins/`，所以数据只能由组合根递进来
+（`app.ts` 传 `{ listPlugins: () => plugins.list() }`）。两个具体选择：
+
+- **收 getter 而不是数组。** 注册发生在 `plugins.loadAll()` 之前，插件又能在运行期被加载、
+  重载、启停；传快照等于把工具冻在装配那一刻，之后一直报「当前没有安装任何插件」。
+- **在 core 里重新声明窄形状 `PluginSummary`，而不是复用 `PluginView`。** import 那个类型
+  本身就构成对 `plugins/` 的依赖；按「这颗工具实际读的四五个键」声明之后，`PluginView`
+  作为超集可以直接赋值，不需要 `as`（`as` 只该出现在真边界上）。
+  这条分层约束**没有任何检查守着**：oxlint 不解析模块路径，`tsc` 不看目录，只有 review 在看。
+
+还有一条安全边界：工具结果会整段发给第三方 provider，所以 `list_plugins` 只报「上次加载失败」
+这个事实，不外传 `error` 原文 —— 那串里可能带着 `resolve()` 之后的绝对路径
+（`plugins/manager.ts:151` 抛的是 `插件缺少 id: ${dir}`）。失败原因是给操作者看的，
+控制台插件页已经在显示它。
+
 ### 两家的 function calling 报文不一样，所以映射各写一份
 
 |            | OpenAI 兼容                                                                      | Anthropic                                                                                                                     |
