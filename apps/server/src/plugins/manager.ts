@@ -160,6 +160,9 @@ export class PluginManager {
       id,
       logger: this.logger,
       config: { ...this.config, ...plugin.config },
+      // 传的是闭包而不是 `this.#peers()` 的结果：`load()` 是在 `loadAll()` 的循环里逐个
+      // await 的，此刻后面的插件还没进 `#records`，快照会让先加载的那个永远看不见后加载的。
+      plugins: () => this.#peers(),
     });
 
     try {
@@ -266,6 +269,30 @@ export class PluginManager {
       enabled: rec.status === "active",
       error: rec.error,
     };
+  }
+
+  /**
+   * 交给插件的同伴视图（`ctx.plugins()`）—— **投影**，不是复用 `#view()`。
+   *
+   * 刻意少两个键：
+   *
+   * - `dir`：别的插件的磁盘路径。插件之间需要知道的是「有没有它、它开着吗」，
+   *   不是它落在哪个目录。
+   * - `error`：里面可能有 `resolve()` 之后的绝对路径（`load()` 抛的
+   *   `插件缺少 id: ${dir}` 就是这种）。
+   *
+   * 这两个键是给操作者的，走 `list()` → `GET /plugins`。少给而不是「给了也没关系」：
+   * 插件是磁盘上用户手写的代码，一条新暴露的键要经过一次人的判断才出去 ——
+   * 与 `pluginRuntimeConfig()` 那份配置白名单同一个规矩，测试里用键集合钉住。
+   */
+  #peers(): PluginInfo[] {
+    return [...this.#records.values()].map((rec) => ({
+      id: rec.meta.id,
+      name: rec.meta.name,
+      version: rec.meta.version,
+      ...(rec.meta.description === undefined ? {} : { description: rec.meta.description }),
+      enabled: rec.status === "active",
+    }));
   }
 
   async unloadAll(): Promise<void> {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { PluginInfo } from "@atri/shared";
 import { PluginManager } from "#plugins/manager.ts";
 import type { PluginView } from "#plugins/manager.ts";
 import type { Logger } from "#core/logger.ts";
@@ -22,6 +23,8 @@ declare global {
   var __p3_loads: number | undefined;
   /** p3 用它报告 effect 被释放了几次。 */
   var __p3_disposed: number | undefined;
+  /** p6a 把 `ctx.plugins` 这个访问器交给用例，好在**加载之后**再调用它。 */
+  var __p6_peers: (() => PluginInfo[]) | undefined;
 }
 
 /** 建一个临时插件目录，写入给定源码的 index.js。 */
@@ -151,4 +154,62 @@ test("工厂形式的插件也被支持", async () => {
   const info = await mgr.load(dir);
   assert.equal(info.id, "p5");
   await rm(dir, { recursive: true, force: true });
+});
+
+test("ctx.plugins() 是实时投影，且不含 dir 与 error", async () => {
+  const dirA = await makePlugin(`
+    export default {
+      id: "p6a",
+      name: "会看同伴",
+      version: "1.0.0",
+      description: "把 ctx.plugins 交给用例",
+      setup(ctx) {
+        globalThis.__p6_peers = () => ctx.plugins();
+      },
+    };
+  `);
+  const dirB = await makePlugin(`
+    export default { id: "p6b", name: "后到的", version: "0.1.0", setup() {} };
+  `);
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger());
+  await mgr.load(dirA);
+
+  const peers = globalThis.__p6_peers;
+  assert.ok(peers, "p6a 的 fixture 必须挂上同伴视图探针");
+
+  // 先加载的那个能看见后加载的那个 —— 这条证的是「注入的是闭包而不是快照」：
+  // 数组快照会停在 p6a 出生那一刻，永远只看得见它自己。
+  assert.deepEqual(
+    peers().map((p) => p.id),
+    ["p6a"],
+  );
+  await mgr.load(dirB);
+  assert.deepEqual(
+    peers().map((p) => p.id),
+    ["p6a", "p6b"],
+    "运行期新加载的插件必须立刻可见",
+  );
+
+  const late = peers().find((p) => p.id === "p6b");
+  assert.equal(late?.name, "后到的");
+  assert.equal(late?.version, "0.1.0");
+  assert.equal(late?.enabled, true);
+  // `enabled` 投影自运行期 status（`#peers()`），所以禁用会立刻反映到同伴视图上。
+  await mgr.setEnabled("p6b", false);
+  assert.equal(peers().find((p) => p.id === "p6b")?.enabled, false);
+
+  // 投影的边界。这是「新增一条可见键必须经过一次人的判断」的可执行形式：同伴的磁盘路径
+  // 与加载失败原因不交给插件 —— 后者可能带着 `resolve()` 之后的绝对路径。
+  for (const p of peers()) {
+    assert.ok(!("dir" in p), "不该把别的插件的目录交给插件");
+    assert.ok(!("error" in p), "不该把加载失败原因交给插件");
+  }
+  // 键是逐个拼出来的而不是 `...meta`：没声明 description 的那个连这个键都不该有。
+  assert.equal(peers().find((p) => p.id === "p6a")?.description, "把 ctx.plugins 交给用例");
+  assert.ok(!("description" in (peers().find((p) => p.id === "p6b") ?? {})));
+
+  await mgr.unloadAll();
+  delete globalThis.__p6_peers;
+  await rm(dirA, { recursive: true, force: true });
+  await rm(dirB, { recursive: true, force: true });
 });

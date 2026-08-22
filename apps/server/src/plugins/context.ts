@@ -1,4 +1,5 @@
 import type { Logger } from "#core/logger.ts";
+import type { PluginInfo } from "@atri/shared";
 import { errorMessage } from "#core/errors.ts";
 
 /**
@@ -20,6 +21,14 @@ export interface PluginContextDeps {
   id: string;
   logger: Logger;
   config: PluginContextConfig;
+  /**
+   * 同伴插件的只读视图，由 `PluginManager` 在创建上下文时注入。
+   *
+   * **收函数而不是数组**：`loadAll()` 按 `pluginDirs` 的顺序逐个 `await`，所以插件 A 的
+   * `setup()` 跑起来时插件 B 可能还没加载；`reload()` 与启用/禁用又会在运行期改变这份事实。
+   * 传快照等于让每个插件都停留在「自己出生那一刻」看到的插件表上。
+   */
+  plugins: () => PluginInfo[];
 }
 
 interface Registration {
@@ -42,20 +51,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class PluginContext {
   #disposables: Registration[] = [];
   #disposed = false;
+  #peers: () => PluginInfo[];
 
   id: string;
   logger: Logger;
   config: PluginContextConfig;
 
-  constructor({ id, logger, config }: PluginContextDeps) {
+  constructor({ id, logger, config, plugins }: PluginContextDeps) {
     this.id = id;
     this.logger = logger;
     this.config = config;
+    this.#peers = plugins;
   }
 
   /** 是否已卸载。卸载后调用 effect 会直接报错，避免泄漏。 */
   get disposed(): boolean {
     return this.#disposed;
+  }
+
+  /**
+   * 此刻已加载的插件（**含调用者自己**），按加载顺序。
+   *
+   * 返回的是投影过的 `PluginInfo`：只有 `id` / `name` / `version` / `description` / `enabled`。
+   * 不给 `dir`（别的插件的磁盘路径）也不给 `error`（里面可能带 `resolve()` 之后的绝对路径），
+   * 这两条由 `test/plugins.test.ts` 的键集合断言钉住 —— 想多给一个键必须经过一次人的判断，
+   * 与 `pluginRuntimeConfig()` 那份配置白名单是同一个规矩。
+   */
+  plugins(): PluginInfo[] {
+    return this.#peers();
   }
 
   /**

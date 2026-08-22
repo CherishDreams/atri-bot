@@ -398,6 +398,23 @@ builtins/    一颗工具一个文件（`currentTime.ts`），只导出自己那
 
 这使「重载」成为一次干净的销毁+重建，而不是在旧状态上打补丁。
 
+### 插件之间能互相看到什么
+
+`ctx.plugins()` 返回 `PluginInfo[]`，逐项由 `PluginManager.#peers()` **逐键拼出来**（不是
+`...rec.meta`）：`id` / `name` / `version` / `description?` / `enabled`。少掉的两条是刻意的 ——
+`dir` 是同伴插件的磁盘路径，`error` 里可能带着 `resolve()` 之后的绝对路径（`load()` 抛的
+`插件缺少 id: ${dir}` 就是这种）。那两个键是给操作者看的，走 `list()` → `GET /plugins`。
+
+为什么不复用给控制台的那份 `#view()`：它带着上面两个键。视图与「交给插件的形状」分家之后，
+多给一个键必须在 `#peers()` 里显式写一行，而 `test/plugins.test.ts` 里那句「不该有 dir / error」
+会当场红 —— 与下面的配置白名单是同一个套路：**扩大插件的可见面要经过一次人的判断**，
+而不是靠 `...` 悄悄漏出去。
+
+`plugins` 是**函数**而不是数组（`plugins: () => this.#peers()`）：`loadAll()` 按 `pluginDirs`
+的顺序逐个 `await`，先加载的那个在自己的 `setup()` 里看同伴时，后面的还没进 `#records`；
+`reload()` 与 `setEnabled()` 又会持续改变这份事实。传快照等于让每个插件都停留在
+出生那一刻看到的插件表上。这与 `list_plugins` 那棵内置工具收访问器而不是数组是同一个理由。
+
 ### 插件的语言与类型入口
 
 插件目录里的入口**仍然叫 `index.js`**，且继续可以是纯 JavaScript —— 服务端按运行时

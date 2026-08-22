@@ -10,6 +10,9 @@
  *     再合并上本插件自己声明的 `config` 段；口令与 provider 的 apiKey 不会到这里
  *   - ctx.effect(fn | {dispose()})：登记副作用，卸载时逆序自动释放
  *   - ctx.subscribe(emitter, event, handler)：订阅并在卸载时自动退订
+ *   - ctx.plugins()：此刻已加载的插件（含你自己），每项只有 id / name / version /
+ *     description / enabled。拿不到同伴的目录，也拿不到它们的加载失败原因；
+ *     每次要就用现调用，别把结果存下来 —— 插件能在运行期被加载、重载与启停
  *
  * 把每个 ctx 字段都当作稳定 API —— 这是插件唯一能拿到的表面。
  */

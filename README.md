@@ -273,6 +273,10 @@ pnpm start            # 或 node apps/server/src/index.ts
   插件默认导出里声明的 `config` 段会合并进来，同名时插件的键优先。
 - `ctx.effect(fn | { dispose() }, label?)`：登记副作用，卸载时逆序自动释放，返回提前释放函数
 - `ctx.subscribe(emitter, event, handler)`：订阅 emitter，并在卸载时自动退订
+- `ctx.plugins()`：**实时**列出此刻已加载的插件（含你自己），每项只有
+  `id` / `name` / `version` / `description` / `enabled` 五个键。拿不到同伴的目录，
+  也拿不到它们的加载失败原因（那里面可能有绝对路径）；要每次读现值而不是存下来，
+  因为插件是在运行期被加载、重载与启停的
 
 ## API
 
