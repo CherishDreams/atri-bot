@@ -31,6 +31,11 @@ atri.config.json
 data/
 *.sqlite
 *.sqlite-journal
+# WAL 模式的两个边车文件（会话库用 WAL；`data/` 已经盖住默认 dataDir，
+# 这两行是给 `ATRI_DATA_DIR` 指到别处时兜底）。`-journal` 那行保留：文件系统不支持
+# WAL 时 SQLite 会退回 delete journal，名字不一样。
+*.sqlite-wal
+*.sqlite-shm
 *.db
 
 # 编辑器 / 操作系统

@@ -25,7 +25,8 @@ export async function createApp(config: AppConfig) {
   // 必须早于 HTTP 服务启动：未配置口令时要先把随机口令写进配置文件。
   await auth.init();
 
-  const sessions = new SessionManager();
+  // 会话与消息落在 `config.dataDir` 下的 sqlite（建库与 schema 升级见 `core/session/db.ts`）。
+  const sessions = new SessionManager(config, logger);
   const providers = new ProviderRegistry();
 
   // provider 配置的读写入口。启动时读一次，之后每次界面改动都经由它落盘。
@@ -124,6 +125,9 @@ export async function createApp(config: AppConfig) {
       await adapters.stopAll();
       await http.close();
       await plugins.unloadAll();
+      // 库排在最后关：`http.close()` 先掐掉在途的 SSE 与 WS，那一刻之后不应再有新的写库请求；
+      // 插件的 teardown 理论上也可能触发写（今天 ctx 里没有会话句柄，排在后面才对未来也成立）。
+      sessions.close();
     },
   };
 }

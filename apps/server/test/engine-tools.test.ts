@@ -6,7 +6,7 @@
  * 这里只证「循环本身的次序与终止」。
  */
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -61,24 +61,27 @@ const timeTool = {
   run: async () => "结果文本",
 };
 
-async function harness({
-  replies,
-  tools = [timeTool],
-  enabled = {},
-  maxToolSteps,
-  logLines,
-}: {
-  replies: ChatReply[];
-  tools?: ToolDefinition[];
-  enabled?: Record<string, { enabled: boolean }>;
-  maxToolSteps?: number;
-  logLines?: string[];
-}) {
+async function harness(
+  t: TestContext,
+  {
+    replies,
+    tools = [timeTool],
+    enabled = {},
+    maxToolSteps,
+    logLines,
+  }: {
+    replies: ChatReply[];
+    tools?: ToolDefinition[];
+    enabled?: Record<string, { enabled: boolean }>;
+    maxToolSteps?: number;
+    logLines?: string[];
+  },
+) {
   const root = await mkdtemp(join(tmpdir(), "atri-engine-"));
   const registry = new ToolRegistry();
   for (const tool of tools) registry.register(tool);
   const toolConfig = new ToolConfigStore({ root, tools: enabled, maxToolSteps });
-  const sessions = new SessionManager();
+  const sessions = new SessionManager({ dataDir: join(root, "data") });
   const providers = new ProviderRegistry();
   const provider = scriptedProvider(replies);
   providers.register(provider);
@@ -92,12 +95,18 @@ async function harness({
   const session = await engine.sessions.create({ title: "测试" });
   const frames: ServerFrame[] = [];
   engine.subscribe((frame) => frames.push(frame));
-  return { root, engine, provider, sessions, frames, session };
+  // 清理收在这一处（用例里不再有 `t.after`）：句柄先关、再删目录。本仓不留「内存版存储」
+  // 这条第二路径，所以这里的会话存储是真库，漏掉 close 就是把库文件一直占着。
+  t.after(() => {
+    sessions.close();
+    return rm(root, { recursive: true, force: true });
+  });
+  return { engine, provider, sessions, frames, session };
 }
 
 test("已注册但本轮未授权的工具，模型硬要调用也不会被执行", async (t) => {
   let executed = 0;
-  const h = await harness({
+  const h = await harness(t, {
     tools: [
       {
         ...timeTool,
@@ -113,8 +122,6 @@ test("已注册但本轮未授权的工具，模型硬要调用也不会被执�
       { content: "那我直接回答" },
     ],
   });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
-
   const reply = await h.engine.handleMessage({ sessionId: h.session.id, content: "查" });
 
   assert.equal(executed, 0, "未授权的工具一次都不该被执行");
@@ -124,14 +131,13 @@ test("已注册但本轮未授权的工具，模型硬要调用也不会被执�
 });
 
 test("两步收敛：落库次序、广播帧与 onMessage 各自只覆盖中间消息", async (t) => {
-  const h = await harness({
+  const h = await harness(t, {
     replies: [
       { content: "", toolCalls: [{ id: "c1", name: "probe", arguments: "{}" }] },
       { content: "最终回答" },
     ],
     enabled: { probe: { enabled: true } },
   });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
 
   const seen: Message[] = [];
   const reply = await h.engine.handleMessage({
@@ -162,14 +168,13 @@ test("两步收敛：落库次序、广播帧与 onMessage 各自只覆盖中间
 });
 
 test("回喂的那一次请求里，必须同时有 assistant.tool_calls 与工具结果", async (t) => {
-  const h = await harness({
+  const h = await harness(t, {
     replies: [
       { content: "", toolCalls: [{ id: "c1", name: "probe", arguments: "{}" }] },
       { content: "好" },
     ],
     enabled: { probe: { enabled: true } },
   });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
 
   await h.engine.handleMessage({ sessionId: h.session.id, content: "查一下" });
 
@@ -184,8 +189,7 @@ test("回喂的那一次请求里，必须同时有 assistant.tool_calls 与工�
 });
 
 test("没有启用任何工具时，发给上游的 options 里不带 tools 键", async (t) => {
-  const h = await harness({ replies: [{ content: "嗨" }], enabled: {} });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
+  const h = await harness(t, { replies: [{ content: "嗨" }], enabled: {} });
 
   await h.engine.handleMessage({ sessionId: h.session.id, content: "你好" });
 
@@ -197,12 +201,11 @@ test("没有启用任何工具时，发给上游的 options 里不带 tools 键"
 
 test("配置里启用了一颗没注册的工具：warn 一条，且不会因为「有 enabled」就发空 tools", async (t) => {
   const lines: string[] = [];
-  const h = await harness({
+  const h = await harness(t, {
     replies: [{ content: "嗨" }],
     enabled: { 不存在的工具: { enabled: true } },
     logLines: lines,
   });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
 
   await h.engine.handleMessage({ sessionId: h.session.id, content: "你好" });
 
@@ -214,7 +217,7 @@ test("配置里启用了一颗没注册的工具：warn 一条，且不会因为
 });
 
 test("工具执行失败是回喂的一条结果，而不是把整轮打成错误", async (t) => {
-  const h = await harness({
+  const h = await harness(t, {
     tools: [
       {
         ...timeTool,
@@ -229,8 +232,6 @@ test("工具执行失败是回喂的一条结果，而不是把整轮打成错�
     ],
     enabled: { probe: { enabled: true } },
   });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
-
   const reply = await h.engine.handleMessage({ sessionId: h.session.id, content: "查" });
 
   assert.equal(reply.content, "那我用别的方式回答");
@@ -241,12 +242,11 @@ test("工具执行失败是回喂的一条结果，而不是把整轮打成错�
 
 test("撞上限时抛错，但已经跑过的步骤都已落库", async (t) => {
   const loop = { content: "", toolCalls: [{ id: "c", name: "probe", arguments: "{}" }] };
-  const h = await harness({
+  const h = await harness(t, {
     replies: [loop, loop, loop, { content: "终于" }],
     enabled: { probe: { enabled: true } },
     maxToolSteps: 2,
   });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
 
   await assert.rejects(
     () => h.engine.handleMessage({ sessionId: h.session.id, content: "无限查" }),
@@ -259,14 +259,13 @@ test("撞上限时抛错，但已经跑过的步骤都已落库", async (t) => {
 
 test("客户端断开后不再发起下一步", async (t) => {
   const controller = new AbortController();
-  const h = await harness({
+  const h = await harness(t, {
     replies: [
       { content: "", toolCalls: [{ id: "c1", name: "probe", arguments: "{}" }] },
       { content: "不该被走到" },
     ],
     enabled: { probe: { enabled: true } },
   });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
 
   await assert.rejects(async () => {
     // 第一次回复之后、循环进入第二步之前把信号掐掉。
@@ -285,8 +284,7 @@ test("客户端断开后不再发起下一步", async (t) => {
 });
 
 test("上一轮留下的半截工具调用，发往上游前会被修掉", async (t) => {
-  const h = await harness({ replies: [{ content: "接着答" }], enabled: {} });
-  t.after(() => rm(h.root, { recursive: true, force: true }));
+  const h = await harness(t, { replies: [{ content: "接着答" }], enabled: {} });
 
   // 手工造一条「要求调用但没有结果」的助手消息（真实成因：上一轮被断开或撞上限）。
   h.sessions.appendMessage(h.session.id, {
@@ -308,7 +306,6 @@ test("上一轮留下的半截工具调用，发往上游前会被修掉", async
 
 test("工具集在一次运行内固定：中途改配置文件不影响在途那条消息", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "atri-engine-pin-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
   writeFileSync(
     configFilePath(root),
     JSON.stringify({ tools: { probe: { enabled: true } } }),
@@ -318,7 +315,12 @@ test("工具集在一次运行内固定：中途改配置文件不影响在途�
   const registry = new ToolRegistry();
   registry.register(timeTool);
   const toolConfig = new ToolConfigStore({ root });
-  const sessions = new SessionManager();
+  const sessions = new SessionManager({ dataDir: join(root, "data") });
+  // 清理与 `harness()` 同一处置：句柄先关，再删临时目录。
+  t.after(() => {
+    sessions.close();
+    return rm(root, { recursive: true, force: true });
+  });
   const providers = new ProviderRegistry();
   const provider = scriptedProvider([
     { content: "", toolCalls: [{ id: "c1", name: "probe", arguments: "{}" }] },

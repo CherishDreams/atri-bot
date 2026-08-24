@@ -446,12 +446,20 @@ test("每个端点的真实响应与规格逐字段一致", async (t) => {
 });
 
 /** `GET /adapters` 恒空：没有适配器实现，`register()` 无调用方。 */
-test("GET /adapters 的元素形状（经进程内 AdapterManager 核对）", () => {
+test("GET /adapters 的元素形状（经进程内 AdapterManager 核对）", (t) => {
   // 真实协作者而不是桩：AdapterManager 只把 engine 存起来（没有任何读取点），
   // 传 `undefined as never` 能过编译但会把「它其实没被用」这件事藏起来。
   const logger = createLogger("error");
+  // 引擎要一个真的 SessionManager —— 本仓不留「内存版存储」这条第二路径，所以给它一座
+  // 临时目录里的库。这里既不发消息也不读会话，库只是被创建出来，但句柄仍须关掉。
+  const root = mkdtempSync(join(tmpdir(), "atri-shape-adapters-"));
+  const sessions = new SessionManager({ dataDir: join(root, "data") });
+  t.after(() => {
+    sessions.close();
+    rmSync(root, { recursive: true, force: true });
+  });
   const engine = new AgentEngine({
-    sessions: new SessionManager(),
+    sessions,
     providers: new ProviderRegistry(),
     // 引擎现在真的会读这两样（选本轮工具、执行调用），所以给真的空注册表与空开关，
     // 而不是 `undefined as never` —— 后者会把「这里没接线」伪装成类型正确。

@@ -64,18 +64,22 @@ function routeOperations(app: AppWithRoutes): string[] {
 
 test("openapi.json 覆盖了所有真实注册的 API 路由，且没有多写的路径", async (t) => {
   // 这里**必须**带上 `root`（`AppConfig` 的必填键，`createApp` 要求完整配置），
-  // 而这条用例刻意不写 `root` 是有原因的：provider 存储由此进入只读模式。
-  // 换成一个空的临时目录后行为等价，理由是全程不发生任何写入——
-  // `adminPassword` 已给定，所以 `auth.init()` 不落盘；`pluginDirs: []`；没有适配器；
-  // 而且这里只调 `app.routes()`（HTTP 服务根本没 listen），一次请求都不发。
-  // 唯一会被读到的地方是 `ProviderConfigStore.#current()`：它读不到 `<root>/atri.config.json`
-  // 就退回构造时注入的 baseline，而 baseline 与只读模式下用的是同一份 `{providers,
-  // providerSources}`（都来自这里传进去的空对象），所以两条路径给出同一个结果。
+  // 而它给的是一个空的临时目录：provider 存储由此进入「读不到文件」的形态。
+  // 与本用例的断言仍然等价，理由是**一次请求都不发**：这里只调 `app.routes()`
+  //（HTTP 服务根本没 listen），所以 `adminPassword` 已给定 → `auth.init()` 不落盘；
+  // `pluginDirs: []`；没有适配器；会话与消息表里一行数据都不会被写。
+  // 需要注意「不写数据」不等于「不碰磁盘」：`createApp` 装配 `SessionManager` 时就会开库，
+  // 因此 `<root>/data/sessions.sqlite` 会被**创建出来**（连同 WAL 边车），由下面的 `t.after`
+  // 连同目录一起删掉。
+  // `ProviderConfigStore.#current()` 读不到 `<root>/atri.config.json` 就退回构造时注入的
+  // baseline，而 baseline 与只读模式下用的是同一份 `{providers, providerSources}`
+  //（都来自这里传进去的空对象），所以两条路径给出同一个结果。
   const root = mkdtempSync(join(tmpdir(), "atri-openapi-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   // 共享 fixture 的默认值与本用例迁移前手抄的那份逐项相同（host / port 0 / logLevel /
-  // pluginDirs / adapters / providers / cookieName / cookieSecure）；`dataDir` 与 `staticDir`
-  // 全程没人读（见上一条注释：不发生任何写入，也不发请求），所以取 fixture 的默认值。
+  // pluginDirs / adapters / providers / cookieName / cookieSecure）；`dataDir` 现在有人读了
+  //（上面那条注释：装配时就开库建文件），`staticDir` 仍然没人读（HTTP 没 listen、不发请求），
+  // 两者都取 fixture 的默认值即可。
   const config = makeTestConfig({ root, adminPassword: "test-password" });
 
   const app = await createApp(config);

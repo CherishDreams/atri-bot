@@ -208,7 +208,7 @@ export function createHttpServer(deps: HttpDeps) {
     }
     // 与流式端点一致：会话不存在是 404。以前它被下面的 catch 一并算成 400，
     // 于是「发消息给一个已经被删掉的会话」和「content 写错了」共用同一个状态码。
-    if (!sessions.get(params.id)) return sendError(res, 404, "会话不存在");
+    if (!sessions.has(params.id)) return sendError(res, 404, "会话不存在");
     try {
       const reply = await engine.handleMessage({
         sessionId: params.id,
@@ -241,7 +241,7 @@ export function createHttpServer(deps: HttpDeps) {
 
     // 会话不存在要在开流之前判断：一旦发出 200 响应头，就只能靠事件报错，
     // 客户端拿不到「404」这种明确语义了。
-    if (!sessions.get(params.id)) return sendError(res, 404, "会话不存在");
+    if (!sessions.has(params.id)) return sendError(res, 404, "会话不存在");
 
     startSse(res);
 

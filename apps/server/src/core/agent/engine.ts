@@ -91,11 +91,15 @@ export class AgentEngine {
     onMessage,
     signal,
   }: HandleMessageOptions): Promise<Message> {
+    // 顺序是有意义的，而且是为了兼容库化后的读取语义：**先追加、再读历史**。
+    // 内存版的 `getWithMessages` 返回 Map 里那份活对象，先读后追加也看得见这条用户消息；
+    // 库化后每次读都是一份独立快照，反过来写就会把刚刚那条用户消息漏在上下文外面
+    // ——模型会回答一个看不见自己问题的那一轮。（这条不是洁癖：改动前它真的漏了，
+    // 由 `engine-tools.test.ts` 的「回喂的那一次请求里必须同时有 tool_calls 与工具结果」抓到。）
+    const userMessage = this.#newMessage(sessionId, { role: "user", content });
+    this.sessions.appendMessage(sessionId, userMessage);
     const session = this.sessions.getWithMessages(sessionId);
     if (!session) throw new Error(`未知会话: ${sessionId}`);
-
-    const userMessage = this.#newMessage(session.id, { role: "user", content });
-    this.sessions.appendMessage(session.id, userMessage);
     this.#emit({ type: "message", message: userMessage });
 
     return this.#runLoop({ session, model, onDelta, onMessage, signal });
@@ -129,6 +133,10 @@ export class AgentEngine {
     const declared = this.#declaredTools();
     const allowed = new Set(declared.map((tool) => tool.name));
     const history = this.#historyFor(session);
+    // `session` 是 `handleMessage` 里**追加用户消息之后**读到的快照，且这一轮之内不再回读存储：
+    // 之后每一步都往上面这份 `history` 本地追加。换成持久化存储后这条顺序是正确性的一部分
+    //（先读后写会让这轮的上游请求看不见用户刚说的那句），详见 `session/manager.ts` 的
+    // `getWithMessages`。
     const cap = this.toolConfig.maxSteps();
 
     for (let step = 0; ; step++) {
