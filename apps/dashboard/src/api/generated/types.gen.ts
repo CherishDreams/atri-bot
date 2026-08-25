@@ -52,9 +52,15 @@ export type Session = {
     title: string;
     createdAt: string;
     updatedAt: string;
-    messageCount?: number;
+    /**
+     * 消息条数，由服务端的相关子查询算出（列表因此不必搬运内容也能显示条数）。恒有。
+     */
+    messageCount: number;
 };
 
+/**
+ * 会话摘要 + 一页消息（服务端按插入序旧→新给出，默认最新 100 条）。更早的历史不是不存在，而是在这一页之外 —— 用响应顶层的 `nextCursor` 往前翻。
+ */
 export type SessionDetail = Session & {
     messages: Array<Message>;
 };
@@ -283,6 +289,16 @@ export type ToolEnableRequest = {
 };
 
 /**
+ * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。
+ */
+export type PageLimit = number;
+
+/**
+ * 不透明游标（上一次响应的 `nextCursor`），编码的是插入序行号，**不是**时间戳也不是页码。给出时只返回比它更早的条目；缺省即从最新处开始。空串与解不出正整数的值都是 400。
+ */
+export type BeforeCursor = string;
+
+/**
  * 会话 id
  */
 export type SessionId = string;
@@ -418,11 +434,24 @@ export type AuthStatusResponse = AuthStatusResponses[keyof AuthStatusResponses];
 export type ListSessionsData = {
     body?: never;
     path?: never;
-    query?: never;
+    query?: {
+        /**
+         * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。
+         */
+        limit?: number;
+        /**
+         * 不透明游标（上一次响应的 `nextCursor`），编码的是插入序行号，**不是**时间戳也不是页码。给出时只返回比它更早的条目；缺省即从最新处开始。空串与解不出正整数的值都是 400。
+         */
+        before?: string;
+    };
     url: '/sessions';
 };
 
 export type ListSessionsErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
     /**
      * 未登录或会话已失效
      */
@@ -433,10 +462,14 @@ export type ListSessionsError = ListSessionsErrors[keyof ListSessionsErrors];
 
 export type ListSessionsResponses = {
     /**
-     * 会话列表
+     * 会话列表（一页）
      */
     200: {
         sessions: Array<Session>;
+        /**
+         * 取更早条目的游标；`null` 表示已经到了最早。语义是「拿它当 `before` 再要一次」，所以它指向**本页最旧那一条**，而不是被丢弃的那一条（后者会静默漏一条）。
+         */
+        nextCursor: string | null;
     };
 };
 
@@ -452,6 +485,10 @@ export type CreateSessionData = {
 };
 
 export type CreateSessionErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
     /**
      * 未登录或会话已失效
      */
@@ -483,7 +520,16 @@ export type DeleteSessionData = {
          */
         id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。
+         */
+        limit?: number;
+        /**
+         * 不透明游标（上一次响应的 `nextCursor`），编码的是插入序行号，**不是**时间戳也不是页码。给出时只返回比它更早的条目；缺省即从最新处开始。空串与解不出正整数的值都是 400。
+         */
+        before?: string;
+    };
     url: '/sessions/{id}';
 };
 
@@ -519,11 +565,24 @@ export type GetSessionData = {
          */
         id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。
+         */
+        limit?: number;
+        /**
+         * 不透明游标（上一次响应的 `nextCursor`），编码的是插入序行号，**不是**时间戳也不是页码。给出时只返回比它更早的条目；缺省即从最新处开始。空串与解不出正整数的值都是 400。
+         */
+        before?: string;
+    };
     url: '/sessions/{id}';
 };
 
 export type GetSessionErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
     /**
      * 未登录或会话已失效
      */
@@ -538,10 +597,14 @@ export type GetSessionError = GetSessionErrors[keyof GetSessionErrors];
 
 export type GetSessionResponses = {
     /**
-     * 会话详情
+     * 会话详情（含一页消息）
      */
     200: {
         session: SessionDetail;
+        /**
+         * 取更早条目的游标；`null` 表示已经到了最早。语义是「拿它当 `before` 再要一次」，所以它指向**本页最旧那一条**，而不是被丢弃的那一条（后者会静默漏一条）。
+         */
+        nextCursor: string | null;
     };
 };
 
@@ -572,6 +635,10 @@ export type SendMessageErrors = {
      * 资源不存在
      */
     404: ApiError;
+    /**
+     * 该会话有一次对话正在进行（同会话串行，见 `AgentEngine.handleMessage` 的会话锁）
+     */
+    409: ApiError;
     /**
      * 请求体超过 1 MB 上限
      */
@@ -616,6 +683,10 @@ export type StreamMessageErrors = {
      * 资源不存在
      */
     404: ApiError;
+    /**
+     * 该会话有一次对话正在进行（同会话串行，见 `AgentEngine.handleMessage` 的会话锁）
+     */
+    409: ApiError;
     /**
      * 请求体超过 1 MB 上限
      */

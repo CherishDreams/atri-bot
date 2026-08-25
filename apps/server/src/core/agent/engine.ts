@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Message, ServerFrame, SessionDetail } from "@atri/shared";
+import { ApiError } from "#core/errors.ts";
 import type { Logger } from "#core/logger.ts";
 import type { ProviderRegistry } from "#core/provider/registry.ts";
 import type { ChatMessage, ChatTool } from "#core/provider/types.ts";
@@ -25,6 +26,15 @@ export interface EngineDeps {
   toolConfig: ToolConfigStore;
   logger: Logger;
 }
+
+/**
+ * 「这个会话正忙」的对外文案。
+ *
+ * 导出的理由：两个出口要说同一句话 —— 非流式端点拿到的是 `handleMessage` 抛出的 409，
+ * 流式端点拿到的是 `api/server.ts` 在开流前的预检。同一个意思两种写法迟早走散，
+ * 所以句子只留一份。
+ */
+export const SESSION_BUSY_MESSAGE = "这个会话有一次对话还没结束，请等它完成后再发下一条";
 
 export interface HandleMessageOptions {
   sessionId: string;
@@ -61,6 +71,22 @@ export class AgentEngine {
   /** 出站事件的订阅者。公开是既有形状（`subscribe` 返回的退订函数也引用它）。 */
   listeners = new Set<(frame: ServerFrame) => void>();
 
+  /**
+   * 正在处理消息的会话 id。
+   *
+   * 挡的是「一轮对话的读-改-写」被另一个请求插队：`handleMessage` 会先读全量历史、
+   * 再 await 上游几十秒、然后逐步 append。同会话两个请求各自拿到的快照都不含对方，
+   * 交错落库后会出现「A 的助手消息与它的工具结果之间插进 B 的消息」这种历史。
+   *
+   * 三条边界要说清：
+   * - 这是**进程内**的 Set，多进程各自有各自的（与「一个数据目录只跑一个实例」一致，
+   *   见 README 的生产部署一节）。
+   * - 锁加在引擎而不是存储层：SQLite 只能给「两条 INSERT 串行」，而缺的是「一整轮的
+   *   读-改-写串行」；放存储层还会迫使 `appendMessage` 变 async，波及引擎与六个 handler。
+   * - 释放写在 `finally`，所以**上游报错与客户端断开都不会把会话永久锁死**。
+   */
+  #running = new Set<string>();
+
   constructor({ sessions, providers, tools, toolConfig, logger }: EngineDeps) {
     this.sessions = sessions;
     this.providers = providers;
@@ -73,6 +99,18 @@ export class AgentEngine {
   subscribe(fn: (frame: ServerFrame) => void): () => boolean {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /**
+   * 这个会话此刻有没有一轮对话在跑。
+   *
+   * 只给流式端点做**预检**：`api/server.ts` 在写 SSE 响应头之前问一次，好回一个标准的
+   * 409 JSON。权威判定仍然在 `handleMessage` 里，两者之间必然留一个窗口 —— 真撞上时的表现是
+   * 「流已经开了，409 只能作为 error 帧出去」。这修不掉：响应头一发出就没法再改状态码
+   *（与「未知会话要在开流前 404」是同一条约束）。
+   */
+  isBusy(sessionId: string): boolean {
+    return this.#running.has(sessionId);
   }
 
   #emit(frame: ServerFrame): void {
@@ -91,18 +129,31 @@ export class AgentEngine {
     onMessage,
     signal,
   }: HandleMessageOptions): Promise<Message> {
-    // 顺序是有意义的，而且是为了兼容库化后的读取语义：**先追加、再读历史**。
-    // 内存版的 `getWithMessages` 返回 Map 里那份活对象，先读后追加也看得见这条用户消息；
-    // 库化后每次读都是一份独立快照，反过来写就会把刚刚那条用户消息漏在上下文外面
-    // ——模型会回答一个看不见自己问题的那一轮。（这条不是洁癖：改动前它真的漏了，
-    // 由 `engine-tools.test.ts` 的「回喂的那一次请求里必须同时有 tool_calls 与工具结果」抓到。）
-    const userMessage = this.#newMessage(sessionId, { role: "user", content });
-    this.sessions.appendMessage(sessionId, userMessage);
-    const session = this.sessions.getWithMessages(sessionId);
-    if (!session) throw new Error(`未知会话: ${sessionId}`);
-    this.#emit({ type: "message", message: userMessage });
+    // 同一个会话只允许一轮对话在跑（为什么加在引擎而不是存储层，见 `#running` 的注释）。
+    // 非流式端点直接吃这个 409；流式端点靠 `isBusy()` 在开流前预检。
+    if (this.#running.has(sessionId)) {
+      throw new ApiError(SESSION_BUSY_MESSAGE, 409);
+    }
+    this.#running.add(sessionId);
+    try {
+      // 顺序是有意义的，而且是为了兼容库化后的读取语义：**先追加、再读历史**。
+      // 内存版的 `getWithMessages` 返回 Map 里那份活对象，先读后追加也看得见这条用户消息；
+      // 库化后每次读都是一份独立快照，反过来写就会把刚刚那条用户消息漏在上下文外面
+      // ——模型会回答一个看不见自己问题的那一轮。（这条不是洁癖：改动前它真的漏了，
+      // 由 `engine-tools.test.ts` 的「回喂的那一次请求里必须同时有 tool_calls 与工具结果」抓到。）
+      const userMessage = this.#newMessage(sessionId, { role: "user", content });
+      this.sessions.appendMessage(sessionId, userMessage);
+      const session = this.sessions.getWithMessages(sessionId);
+      if (!session) throw new Error(`未知会话: ${sessionId}`);
+      this.#emit({ type: "message", message: userMessage });
 
-    return this.#runLoop({ session, model, onDelta, onMessage, signal });
+      const reply = await this.#runLoop({ session, model, onDelta, onMessage, signal });
+      return reply;
+    } finally {
+      // 写在 finally 是这条锁的全部要点：上游报错、工具抛错、客户端断开、撞步数上限
+      // 都在这条链上，任何一处漏了释放，那个会话就**永久**发不出消息了。
+      this.#running.delete(sessionId);
+    }
   }
 
   /**

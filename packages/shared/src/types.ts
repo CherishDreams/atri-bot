@@ -34,14 +34,19 @@ export interface Session {
   title: string;
   createdAt: string;
   updatedAt: string;
-  /** 消息条数。服务端在会话摘要里附带，用于列表预览而不必搬运内容。 */
-  messageCount?: number;
+  /**
+   * 消息条数。服务端在会话摘要里附带（SQL 计数），用于列表预览而不必搬运内容。
+   *
+   * 转成必填是库化之后才成立的：内存版靠 `messages.length` 算、类型上留了「可能没有」的余地；
+   * 现在两条读路径都带 `message_count` 子查询，`create()` 也恒给 0，所以它**总在场**。
+   */
+  messageCount: number;
 }
 
 /**
- * 会话详情：摘要字段 + 完整消息历史。
- * 直接打开 /chat/:id 或刷新页面时靠它恢复对话，
- * 因此会话列表接口刻意只回摘要，不把全部内容搬过来。
+ * 会话详情：摘要字段 + **一页**消息历史（默认最新 100 条，仍按插入序旧→新）。
+ * 直接打开 /chat/:id 或刷新页面时靠它恢复最近那一页，更早的靠响应里的 `nextCursor` 往前翻；
+ * 会话列表接口刻意只回摘要，不把全部内容搬过来。
  */
 export interface SessionDetail extends Session {
   messages: Message[];

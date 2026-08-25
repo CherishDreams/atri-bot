@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message, ServerFrame } from "@atri/shared";
 import { AgentEngine } from "#core/agent/engine.ts";
+import { ApiError } from "#core/errors.ts";
 import { ProviderRegistry } from "#core/provider/registry.ts";
 import { SessionManager } from "#core/session/manager.ts";
 import { ToolRegistry } from "#core/tool/registry.ts";
@@ -104,6 +105,19 @@ async function harness(
   return { engine, provider, sessions, frames, session };
 }
 
+/**
+ * 取会话的**全部**历史。
+ *
+ * `getDetail` 现在是分页视图（HTTP 的形状，默认最新 100 条），而引擎测试要问的是
+ *「库里到底存了什么」，所以走引擎那条全量读。取不到就是 fixture 坏了 —— 直接抛，
+ * 不让它退化成空数组把断言喂绿。
+ */
+function historyOf(sessions: SessionManager, sessionId: string): Message[] {
+  const detail = sessions.getWithMessages(sessionId);
+  if (!detail) throw new Error(`会话不见了: ${sessionId}`);
+  return detail.messages;
+}
+
 test("已注册但本轮未授权的工具，模型硬要调用也不会被执行", async (t) => {
   let executed = 0;
   const h = await harness(t, {
@@ -126,7 +140,7 @@ test("已注册但本轮未授权的工具，模型硬要调用也不会被执�
 
   assert.equal(executed, 0, "未授权的工具一次都不该被执行");
   assert.equal(reply.content, "那我直接回答");
-  const toolMessage = h.sessions.getDetail(h.session.id)?.messages[2];
+  const toolMessage = historyOf(h.sessions, h.session.id)[2];
   assert.match(toolMessage?.content ?? "", /未授权执行/, "拒绝的理由要回喂给模型，而不是静默丢掉");
 });
 
@@ -146,14 +160,14 @@ test("两步收敛：落库次序、广播帧与 onMessage 各自只覆盖中间
     onMessage: (m) => seen.push(m),
   });
 
-  const detail = h.sessions.getDetail(h.session.id);
+  const messages = historyOf(h.sessions, h.session.id);
   assert.deepEqual(
-    detail?.messages.map((m) => m.role),
+    messages.map((m) => m.role),
     ["user", "assistant", "tool", "assistant"],
     "次序必须是 用户 → 助手(调用) → 工具结果 → 助手(回答)",
   );
-  assert.equal(detail?.messages[1]?.toolCalls?.[0]?.id, "c1");
-  assert.equal(detail?.messages[2]?.toolCallId, "c1");
+  assert.equal(messages[1]?.toolCalls?.[0]?.id, "c1");
+  assert.equal(messages[2]?.toolCallId, "c1");
   assert.equal(reply.content, "最终回答");
 
   // 广播：4 条消息都推（WS 侧要看到全过程）；onMessage 只给中间那两条（SSE 不重复发）。
@@ -235,7 +249,7 @@ test("工具执行失败是回喂的一条结果，而不是把整轮打成错�
   const reply = await h.engine.handleMessage({ sessionId: h.session.id, content: "查" });
 
   assert.equal(reply.content, "那我用别的方式回答");
-  const toolMessage = h.sessions.getDetail(h.session.id)?.messages[2];
+  const toolMessage = historyOf(h.sessions, h.session.id)[2];
   assert.equal(toolMessage?.role, "tool");
   assert.match(toolMessage?.content ?? "", /执行失败：内部炸了/);
 });
@@ -254,7 +268,7 @@ test("撞上限时抛错，但已经跑过的步骤都已落库", async (t) => {
   );
   // user + (assistant + tool) × 2：抛错不该把已经发生的那两步抹掉，
   // 否则用户看到的是「我发了一句然后什么都没发生」。
-  assert.equal(h.sessions.getDetail(h.session.id)?.messages.length, 5);
+  assert.equal(historyOf(h.sessions, h.session.id).length, 5);
 });
 
 test("客户端断开后不再发起下一步", async (t) => {
@@ -352,4 +366,101 @@ test("工具集在一次运行内固定：中途改配置文件不影响在途�
 
   assert.ok(provider.seen[0]?.tools?.length, "第一步应带工具");
   assert.ok(provider.seen[1]?.tools?.length, "第二步仍应带同一份工具集");
+});
+
+/**
+ * 一个手动放行的一轮：`mark()` 由被包装的 `chat()` 在进入时调用，`entered` 让测试知道
+ * 「锁确实已经被第一轮占住了」，`go()` 才让它继续走完。
+ *
+ * 少了 `await entered` 这一步，第二次请求可能跑在拿锁之前，那条 409 断言就成了假绿。
+ */
+function heldGate() {
+  let mark!: () => void;
+  const entered = new Promise<void>((resolve) => (mark = resolve));
+  let go!: () => void;
+  const hold = new Promise<void>((resolve) => (go = resolve));
+  return { entered, mark, hold, go };
+}
+
+test("同一会话的一次对话没结束时第二次被拒（409），且库里不留半轮", async (t) => {
+  const gate = heldGate();
+  const h = await harness(t, {
+    replies: [{ content: "第一响应" }, { content: "第二响应" }],
+  });
+  const original = h.provider.chat.bind(h.provider);
+  h.provider.chat = async (options) => {
+    gate.mark();
+    await gate.hold;
+    return original(options);
+  };
+
+  const first = h.engine.handleMessage({ sessionId: h.session.id, content: "一" });
+  await gate.entered;
+
+  await assert.rejects(
+    () => h.engine.handleMessage({ sessionId: h.session.id, content: "二" }),
+    (err: unknown) => err instanceof ApiError && err.status === 409,
+    "冲突必须是带 409 的 ApiError，端点才有东西可说话",
+  );
+
+  gate.go();
+  await first;
+  h.provider.chat = original;
+
+  // 被拒的那一次**什么都不该留下**：锁在 append 之前，所以「二」这条用户消息没进库。
+  // 反过来的话，用户会看到一条自己发过、而模型从没读到的消息。
+  assert.deepEqual(
+    historyOf(h.sessions, h.session.id).map((m) => m.content),
+    ["一", "第一响应"],
+  );
+
+  // 一轮结束后必须能再发 —— 忘记在 finally 里释放是最容易犯的错。
+  const third = await h.engine.handleMessage({ sessionId: h.session.id, content: "三" });
+  assert.equal(third.content, "第二响应");
+  assert.equal(h.engine.isBusy(h.session.id), false);
+});
+
+test("上游报错也释放锁：一次失败不会把会话永久锁死", async (t) => {
+  const h = await harness(t, { replies: [{ content: "好了" }] });
+  h.provider.chat = async () => {
+    throw new Error("上游炸了");
+  };
+
+  await assert.rejects(
+    () => h.engine.handleMessage({ sessionId: h.session.id, content: "一" }),
+    /上游炸了/,
+  );
+  assert.equal(h.engine.isBusy(h.session.id), false, "抛错路径也必须走 finally");
+
+  // 换一个必定成功的上游再发一次：能过，就说明会话没被锁住。
+  h.provider.chat = async () => ({ content: "补上的回复" });
+  const reply = await h.engine.handleMessage({ sessionId: h.session.id, content: "二" });
+  assert.equal(reply.content, "补上的回复");
+  // 失败那一轮的半成品语义不变：用户那条留下了，伪造的回复没有。
+  assert.deepEqual(
+    historyOf(h.sessions, h.session.id).map((m) => m.role),
+    ["user", "user", "assistant"],
+  );
+});
+
+test("锁的粒度是会话，不是整个引擎", async (t) => {
+  const gate = heldGate();
+  const h = await harness(t, { replies: [{ content: "甲答" }, { content: "乙答" }] });
+  const other = h.sessions.create({ title: "另一个会话" });
+  const original = h.provider.chat.bind(h.provider);
+  h.provider.chat = async (options) => {
+    gate.mark();
+    await gate.hold;
+    return original(options);
+  };
+
+  const first = h.engine.handleMessage({ sessionId: h.session.id, content: "甲" });
+  await gate.entered;
+  // 别的会话不该因为有人正在问另一个会话而吃 409。
+  const second = h.engine.handleMessage({ sessionId: other.id, content: "乙" });
+  gate.go();
+
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.content, "甲答");
+  assert.equal(b.content, "乙答");
 });

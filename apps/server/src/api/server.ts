@@ -9,10 +9,12 @@ import { API_PREFIX, APP_NAME, WS_PATH } from "@atri/shared";
 import { createProviders } from "#core/provider/factory.ts";
 import type { ProviderEntry } from "#core/provider/store.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
+import type { PageOptions } from "#core/session/manager.ts";
 import { Router } from "./router.ts";
 import { readJson, sendError, sendJson, sendSse, startSse, type HttpDeps } from "./http.ts";
 import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from "./auth.ts";
-import { errorMessage, errorStack, statusForError } from "#core/errors.ts";
+import { errorMessage, errorStack, statusForError, ApiError } from "#core/errors.ts";
+import { SESSION_BUSY_MESSAGE } from "#core/agent/engine.ts";
 
 /**
  * provider 实例在 `GET /providers` 里的元素：磁盘条目 + 这一条路由额外补上的运行时标注。
@@ -178,8 +180,12 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   // --- 会话 ---------------------------------------------------------------
-  router.get(`${API_PREFIX}/sessions`, async (_req, res) => {
-    sendJson(res, 200, { sessions: sessions.list() });
+  // 两个列表接口都是**游标分页**：默认给最新的一页，`nextCursor` 非 null 就还能往前翻。
+  // 判据（默认值、上限、非法值 400）全在 `core/session/manager.ts`，这里只做搬运 ——
+  // 范围在这里再判一次就会变成两处数字，而规格只有一处能写对。
+  router.get(`${API_PREFIX}/sessions`, async (req, res) => {
+    const page = sessions.list(pageOptions(searchOf(req)));
+    sendJson(res, 200, page);
   });
 
   router.post(`${API_PREFIX}/sessions`, async (req, res) => {
@@ -188,9 +194,9 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   router.get(`${API_PREFIX}/sessions/:id`, async (req, res, params) => {
-    const session = sessions.getDetail(params.id);
-    if (!session) return sendError(res, 404, "会话不存在");
-    sendJson(res, 200, { session });
+    const page = sessions.getDetail(params.id, pageOptions(searchOf(req)));
+    if (!page) return sendError(res, 404, "会话不存在");
+    sendJson(res, 200, { session: page.detail, nextCursor: page.nextCursor });
   });
 
   router.delete(`${API_PREFIX}/sessions/:id`, async (_req, res, params) => {
@@ -217,7 +223,10 @@ export function createHttpServer(deps: HttpDeps) {
       });
       sendJson(res, 200, { message: reply });
     } catch (err) {
-      sendError(res, 400, errorMessage(err));
+      // 带 status 的错误自己说话 —— 409「这个会话有一次对话还没结束」就是新加的那一种。
+      // 不直接套 `statusForError`：那会把「已达单轮工具调用步数上限」（`engine.ts:137` 抛的
+      // 一条普通 Error）从 400 升成 500，那是明显的行为退化。
+      sendError(res, err instanceof ApiError ? err.status : 400, errorMessage(err));
     }
   });
 
@@ -242,6 +251,11 @@ export function createHttpServer(deps: HttpDeps) {
     // 会话不存在要在开流之前判断：一旦发出 200 响应头，就只能靠事件报错，
     // 客户端拿不到「404」这种明确语义了。
     if (!sessions.has(params.id)) return sendError(res, 404, "会话不存在");
+
+    // 「这个会话正忙」同样要在开流之前预检，理由与上一行完全一样。
+    // 这只是**预检**：权威判定在 `engine.handleMessage` 里，两者之间必然留一个窗口，
+    // 真撞上时那句 409 只能以 error 帧出去（`engine.isBusy` 的注释记录了这件事）。
+    if (engine.isBusy(params.id)) return sendError(res, 409, SESSION_BUSY_MESSAGE);
 
     startSse(res);
 
@@ -639,6 +653,21 @@ function baseUrlOf(req: IncomingMessage): string {
 /** 从查询串里取 `cascade` 之类的开关。 */
 function searchOf(req: IncomingMessage): URLSearchParams {
   return new URL(requestUrl(req), baseUrlOf(req)).searchParams;
+}
+
+/**
+ * query 里的 `limit` / `before` → 存储层的分页入参。
+ *
+ * 这里只做**无损**的字符串转换：`Number("abc")` 得到 NaN，而 NaN 不是整数，
+ * 于是「非法」与「没传」在 `SessionManager.#page()` 那里分得开（前者 400、后者走默认页）。
+ * 范围与游标形状都留给存储层判 —— 这里再判一遍就会有两份数字，而规格只写得对一处。
+ */
+function pageOptions(search: URLSearchParams): PageOptions {
+  const rawLimit = search.get("limit");
+  return {
+    limit: rawLimit === null ? undefined : Number(rawLimit),
+    before: search.get("before"),
+  };
 }
 
 /**

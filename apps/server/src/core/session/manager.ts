@@ -32,6 +32,63 @@ const SQL_SESSION_WITH_COUNT = `SELECT s.seq, s.id, s.title, s.created_at, s.upd
          (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count
        FROM sessions s`;
 
+/** 一页默认给多少条（`GET /sessions` 与 `GET /sessions/:id` 共用）。 */
+export const DEFAULT_PAGE_SIZE = 100;
+
+/**
+ * 一页的上限。
+ *
+ * 与 `ToolConfigStore.maxSteps()` 的「夹到区间 + warn」**刻意相反**：那是配置文件里用户
+ * 手写的数字，写歪了不该让服务起不来；这是**请求参数**，静默夹取等于「你要 500 条我只给
+ * 100 条且不说」，而 400 让调用方立刻看见自己写错了。非法值不夹取也不忽略 —— 后者会让
+ * 「前端拼错了参数」表现为「只回了 100 条」，与正确行为无法区分。
+ */
+export const MAX_PAGE_SIZE = 500;
+
+/** 分页入参。两个都可缺省；非法值都是 400，不是「当没传」。 */
+export interface PageOptions {
+  /** 一页条数，默认 100、上限 500。 */
+  limit?: number | undefined;
+  /** 不透明游标（上一次响应的 `nextCursor`）。给出时只返回**比它更早**的条目。 */
+  before?: string | null | undefined;
+}
+
+export interface SessionPage {
+  /** 按创建序（旧→新）的一页会话。 */
+  sessions: Session[];
+  /** 取更早条目的游标；`null` 表示已经到最早。 */
+  nextCursor: string | null;
+}
+
+export interface MessagePage {
+  detail: SessionDetail;
+  nextCursor: string | null;
+}
+
+/**
+ * 游标 = base64url(`seq` 的十进制)。
+ *
+ * 不透明而不是裸数字：裸 seq 会把「内部用 `INTEGER PRIMARY KEY` 排序」这件事写进 API 契约，
+ * 将来加第二个排序键就是一次破坏性变更，而不透明串只是服务端自己换编解码。
+ * 用 base64**url** 而不是标准 base64：游标要过 query string，而 `+` 会被解成空格、`=` 填充
+ * 也要命 —— 那是一条只在真机发作的坏路径。
+ */
+function encodeCursor(seq: number): string {
+  return Buffer.from(String(seq), "utf8").toString("base64url");
+}
+
+/** @throws ApiError 400 —— 形状不对、非正整数、超出安全整数范围都是同一句错。 */
+function decodeCursor(raw: string): number {
+  // 边界收窄：`Buffer.from(..., "base64url")` 对非法字符是**忽略**而不是抛，
+  // 所以解出来的串可以是任何东西，判据只能落在「必须是纯数字」上。
+  const text = Buffer.from(raw, "base64url").toString("utf8");
+  const seq = Number(text);
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(seq) || seq <= 0) {
+    throw new ApiError("before 不是合法的游标", 400);
+  }
+  return seq;
+}
+
 /**
  * 会话与消息的存储。库化自本仓最初的内存 `Map` 实现（`db.ts` 是它的连接层）。
  *
@@ -105,14 +162,35 @@ export class SessionManager {
   }
 
   /**
-   * 会话详情：公开字段 + 消息历史。
+   * 会话详情：公开字段 + **一页**消息历史（默认最新 100 条）。
    * 前端刷新或直接打开 /chat/:id 时靠它把对话恢复出来；`get()` 保持不含消息
    * （列表接口只需要元数据，也不该把全部内容搬过来）。
+   *
+   * 返回的数组仍是**插入序（旧→新）**：截断而不改序。dashboard 至今不做二次排序，
+   * 所以「把 DESC 直接吐出去」会让界面整个反序，而那条既有事实不会报错、只会静默失效。
    */
-  getDetail(id: string): SessionDetail | null {
+  getDetail(id: string, opts: PageOptions = {}): MessagePage | null {
+    // 先校验分页参数再看资源存不存在：请求形状不对就是 400，与那个会话在不在**无关**。
+    // 反过来写会让「未知 id + 非法 limit」回 404，等于用状态码泄露资源存在性，
+    // 也让调用方要等到改对 id 之后才发现自己参数拼错。
+    const page = this.#page(opts);
     const row = this.#getOne(SQL_SESSION_WITH_COUNT + " WHERE s.id = ? LIMIT 1", id);
     if (!row) return null;
-    return { ...this.#toSession(row), messages: this.#messagesOf(id) };
+    const rows = this.#allNamed(
+      `SELECT seq, id, session_id, role, content, tool_calls, tool_call_id, created_at
+         FROM messages
+        WHERE session_id = :sid AND (:before IS NULL OR seq < :before)
+        ORDER BY seq DESC LIMIT :limit`,
+      // 多取一条只用来回答「还有更早的吗」，它不进响应（见 `#pageOf`）。
+      // `:before IS NULL` 这种写法在 (session_id, seq) 索引上仍是有序扫描；
+      // 混合匿名与编号参数（`?` 与 `?1`）会报 `column index out of range`，实测，所以全用命名参数。
+      { sid: id, before: page.beforeSeq, limit: page.limit + 1 },
+    ) as RawMessageRow[];
+    const { items, nextCursor } = this.#pageOf(rows, page.limit);
+    return {
+      detail: { ...this.#toSession(row), messages: items.map((r) => this.#toMessage(r)) },
+      nextCursor,
+    };
   }
 
   /**
@@ -133,14 +211,25 @@ export class SessionManager {
    * 早先说过的话 —— 那是上下文窗口的策略，不是存储的关切。
    */
   getWithMessages(id: string): SessionDetail | null {
-    return this.getDetail(id);
+    return this.#detailOf(id);
   }
 
-  list(): Session[] {
-    // `ORDER BY s.seq` 就是创建序（与内存版的 Map 插入序一致，包括「删掉再建排到末尾」）。
-    // 会话列表刻意不改排序 —— dashboard 不做二次排序，改成 updatedAt 倒序会静默改变用户可见顺序。
-    const rows = this.#all(SQL_SESSION_WITH_COUNT + " ORDER BY s.seq") as SessionRowWithCount[];
-    return rows.map((row) => this.#toSession(row));
+  /**
+   * 会话列表：一页摘要（默认最新 100 个），按**创建序**（旧→新）。
+   *
+   * `ORDER BY s.seq` 就是创建序（与内存版的 Map 插入序一致，包括「删掉再建排到末尾」）。
+   * 刻意不改排序 —— dashboard 不做二次排序，改成 updatedAt 倒序会静默改变用户可见的顺序；
+   * 分页只截断（默认页取最新的一批），截断与改序是两件事。
+   */
+  list(opts: PageOptions = {}): SessionPage {
+    const page = this.#page(opts);
+    const rows = this.#allNamed(
+      SQL_SESSION_WITH_COUNT +
+        " WHERE (:before IS NULL OR s.seq < :before) ORDER BY s.seq DESC LIMIT :limit",
+      { before: page.beforeSeq, limit: page.limit + 1 },
+    ) as SessionRowWithCount[];
+    const { items, nextCursor } = this.#pageOf(rows, page.limit);
+    return { sessions: items.map((row) => this.#toSession(row)), nextCursor };
   }
 
   /**
@@ -206,6 +295,57 @@ export class SessionManager {
       this.#run("DELETE FROM messages WHERE session_id = ?", id);
       return this.#run("DELETE FROM sessions WHERE id = ?", id).changes > 0;
     });
+  }
+
+  /** 不分页的详情：摘要 + 全部历史。只服务 `getWithMessages`（引擎要完整上下文）。 */
+  #detailOf(id: string): SessionDetail | null {
+    const row = this.#getOne(SQL_SESSION_WITH_COUNT + " WHERE s.id = ? LIMIT 1", id);
+    if (!row) return null;
+    return { ...this.#toSession(row), messages: this.#messagesOf(id) };
+  }
+
+  /**
+   * 校验并归一分页入参。
+   *
+   * `limit` 走的是 `Number(query)` 的结果，所以 `abc` → NaN、`""` → 0、`50.5` → 非整数，
+   * 全都落进同一条 400 —— 判据是「是不是 1..MAX 的整数」，不是「能不能解析」。
+   * `before` 空串也判 400：只有**不传**才表示「从最新处开始」。
+   */
+  #page({ limit = DEFAULT_PAGE_SIZE, before }: PageOptions): {
+    limit: number;
+    beforeSeq: number | null;
+  } {
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+      throw new ApiError(`limit 必须是 1 到 ${MAX_PAGE_SIZE} 之间的整数`, 400);
+    }
+    return {
+      limit,
+      beforeSeq: before === undefined || before === null ? null : decodeCursor(before),
+    };
+  }
+
+  /**
+   * 把「按 seq 倒序多取一条 → 判有没有更早 → 翻回插入序 → 出游标」收成一处，
+   * 会话列表与消息历史共用同一段逻辑（它们只是两个不同的游标空间）。
+   *
+   * `rows` 必须是 `ORDER BY seq DESC LIMIT limit+1` 取来的。
+   */
+  #pageOf<T extends { seq: number }>(
+    rows: T[],
+    limit: number,
+  ): { items: T[]; nextCursor: string | null } {
+    const hasMore = rows.length > limit;
+    const kept = hasMore ? rows.slice(0, limit) : rows;
+    const oldest = kept.at(-1);
+    return {
+      // 游标取**响应里最旧那一行**的 seq，不是被丢掉那一行的：下一页的条件是 `seq < cursor`，
+      // 取被丢掉那行会把它自己排除掉、**静默漏一条**。那个 bug 在 UI 上表现为「中间少一句」，
+      // 不报错也不重复 —— 只有「逐页拼接 == 全量」那条断言抓得住，所以先写那条测试。
+      nextCursor: hasMore && oldest !== undefined ? encodeCursor(oldest.seq) : null,
+      // 倒序取、正序给。用 `toReversed()` 而不是 `reverse()`：后者原地改（AGENTS.md 的
+      // unicorn/no-array-reverse），而这里的数组还要交出去。
+      items: kept.toReversed(),
+    };
   }
 
   #messagesOf(sessionId: string): Message[] {
@@ -276,6 +416,14 @@ export class SessionManager {
     return this.#handle()
       .prepare(sql)
       .all(...params);
+  }
+
+  /**
+   * 命名参数版。分页那两条查询必须用它：同一个 `:before` 要在 SQL 里出现两次
+   *（判空 + 比较），而混用匿名 `?` 与编号 `?1` 会报 `column index out of range`（实测）。
+   */
+  #allNamed(sql: string, params: Record<string, string | number | null>): unknown[] {
+    return this.#handle().prepare(sql).all(params);
   }
 
   /** 把两条及以上语句包成一个原子单元；任一步失败就整批回滚。 */

@@ -76,6 +76,8 @@ export const authStatus = <ThrowOnError extends boolean = false>(options?: Optio
 
 /**
  * 列出会话（仅摘要，不含消息）
+ *
+ * 游标分页：默认给最新 100 个，**返回数组仍按创建序（旧→新）**。分页只截断、不改序 —— 控制台不做二次排序，改成 updatedAt 倒序会静默改变用户可见的顺序。
  */
 export const listSessions = <ThrowOnError extends boolean = false>(options?: Options<ListSessionsData, ThrowOnError>): RequestResult<ListSessionsResponses, ListSessionsErrors, ThrowOnError> => (options?.client ?? client).get<ListSessionsResponses, ListSessionsErrors, ThrowOnError>({
     responseType: 'json',
@@ -106,7 +108,9 @@ export const deleteSession = <ThrowOnError extends boolean = false>(options: Opt
 });
 
 /**
- * 读取会话详情（含完整消息历史）
+ * 读取会话详情（一页消息）
+ *
+ * 摘要 + **一页**消息（默认最新 100 条，按插入序旧→新）。更早的历史用响应里的 `nextCursor` 当 `before` 继续往前取；`nextCursor` 为 `null` 就是到顶了。
  */
 export const getSession = <ThrowOnError extends boolean = false>(options: Options<GetSessionData, ThrowOnError>): RequestResult<GetSessionResponses, GetSessionErrors, ThrowOnError> => (options.client ?? client).get<GetSessionResponses, GetSessionErrors, ThrowOnError>({
     responseType: 'json',

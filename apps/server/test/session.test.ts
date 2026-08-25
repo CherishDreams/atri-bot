@@ -73,7 +73,7 @@ interface CreateLoose {
 function known(manager: SessionManager) {
   return {
     create: (input?: { title?: string }): Session => manager.create(input),
-    list: (): Session[] => manager.list(),
+    list: (): Session[] => manager.list().sessions,
     appendMessage: (sessionId: string, message: Message): Message =>
       manager.appendMessage(sessionId, message),
     get(id: string): Session & { messages?: undefined } {
@@ -82,9 +82,11 @@ function known(manager: SessionManager) {
       return session;
     },
     getDetail(id: string): SessionDetail {
-      const detail = manager.getDetail(id);
-      if (!detail) throw new Error(`会话详情不见了: ${id}`);
-      return detail;
+      // 拆掉分页的包装（默认页 = 最新 100 条，这些用例最多 2 条，永远取满）。
+      // 分页语义由下面的用例**直接**调 `manager.getDetail(id, opts)` 来测。
+      const page = manager.getDetail(id);
+      if (!page) throw new Error(`会话详情不见了: ${id}`);
+      return page.detail;
     },
   };
 }
@@ -170,7 +172,7 @@ test("消息顺序是插入序而不是 created_at，且重启后仍如此", (t)
 
   const again = open();
   assert.deepEqual(
-    again.getDetail(s.id)?.messages.map((m) => m.id),
+    again.getDetail(s.id)?.detail.messages.map((m) => m.id),
     ids,
   );
 });
@@ -205,7 +207,7 @@ test("toolCalls 原样往返，读回的行是普通对象", (t) => {
   manager.appendMessage(s.id, plain);
   manager.close();
 
-  const [first, second] = open().getDetail(s.id)?.messages ?? [];
+  const [first, second] = open().getDetail(s.id)?.detail.messages ?? [];
   assert.ok(first);
   assert.ok(second);
   // `deepStrictEqual` 一条同时钉住三件事，下一个人别把它当「只是在测转义」删掉：
@@ -234,7 +236,7 @@ test("被中断的一轮原样留在库里：不清理、不标记", (t) => {
   });
   manager.close();
 
-  const messages = open().getDetail(s.id)?.messages ?? [];
+  const messages = open().getDetail(s.id)?.detail.messages ?? [];
   // 这条测的是「某件事**没有**发生」：孤儿调用必须原样可读。配对修复属于 core
   //（`engine.ts:229-241` 的 `#historyFor`），存储层不替它清理、也不加 incomplete 标记 ——
   // 而上游打断留下的半截一轮是运行期的事实，不是脏数据。
@@ -293,7 +295,158 @@ test("create 拒绝非字符串 title：STRICT 表挡不住，只有显式校验
   for (const bad of [123, true, null, ["a"], { a: 1 }]) {
     assert.throws(() => loose.create({ title: bad }), /title 必须是字符串/);
   }
-  assert.equal(manager.list().length, 2, "被拒绝的 create 不该留下半成品会话");
+  assert.equal(manager.list().sessions.length, 2, "被拒绝的 create 不该留下半成品会话");
+});
+
+/**
+ * 造 N 条消息，返回它们的 id（插入序）。
+ *
+ * id 补零到三位，这样「逐页拼接等于全量」比对的是字符串数组，而不是靠 id 的生成顺序
+ * 恰好等于字典序 —— 那会让断言自己也在赌一个巧合。
+ */
+function seed(manager: SessionManager, sessionId: string, count: number): string[] {
+  const ids: string[] = [];
+  for (let i = 1; i <= count; i++) {
+    const id = `m-${String(i).padStart(3, "0")}`;
+    manager.appendMessage(
+      sessionId,
+      userMessage(id, sessionId, `第 ${i} 条`, "2026-01-01T00:00:00.000Z"),
+    );
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * 分页的逐页拼接必须**等于**全量：漏一条的 bug 在界面上表现为「中间少一句」，
+ * 不报错、不重复、肉眼完全看不出，只有这一条断言抓得住。
+ *
+ * 它的杀伤力来自 `nextCursor` 的取值：SQL 取的是 `limit + 1` 条，第 limit+1 条只用来
+ * 证明「还有更早的」，不进响应。游标如果取**被丢掉那一行**的 seq，下一页的条件
+ * `seq < cursor` 就正好把它排除掉 —— 而响应看起来完全正常。
+ */
+test("分页逐页拼接等于全量：一条不漏、一条不重", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+  const s = manager.create();
+  const ids = seed(manager, s.id, 101);
+
+  const first = manager.getDetail(s.id, { limit: 100 });
+  assert.ok(first);
+  assert.equal(first.detail.messages.length, 100);
+  assert.ok(first.nextCursor, "还有更早的就必须给游标");
+
+  const second = manager.getDetail(s.id, { limit: 100, before: first.nextCursor });
+  assert.ok(second);
+  assert.equal(second.nextCursor, null, "翻到最早之后不该再给游标");
+
+  // 默认页是**最新**的一页，且已经按插入序（旧→新），所以第二页拼在前面。
+  const paged = [...second.detail.messages, ...first.detail.messages].map((m) => m.id);
+  assert.deepEqual(paged, ids);
+});
+
+test("一页正好取完时不给游标；空会话给空数组而不是 null", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+
+  const exact = manager.create({ title: "刚好一页" });
+  seed(manager, exact.id, 100);
+  const exactPage = manager.getDetail(exact.id);
+  assert.ok(exactPage);
+  assert.equal(exactPage.detail.messages.length, 100);
+  assert.equal(exactPage.nextCursor, null, "第 101 条不存在时不能给游标");
+
+  const empty = manager.create({ title: "空" });
+  const emptyPage = manager.getDetail(empty.id);
+  assert.ok(emptyPage);
+  assert.deepEqual(emptyPage.detail.messages, []);
+  assert.equal(emptyPage.nextCursor, null);
+  assert.equal(emptyPage.detail.messageCount, 0);
+});
+
+test("limit=1 时逐条翻完，游标链是通的", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+  const s = manager.create();
+  const ids = seed(manager, s.id, 3);
+
+  const pages: string[][] = [];
+  let cursor: string | null | undefined;
+  // 循环次数有上界：游标严格递减，翻到 null 就停；万一实现错了（游标不前进），
+  // 这个 guard 会让它失败而不是挂住。
+  for (let guard = 0; guard < 10; guard++) {
+    const page = manager.getDetail(s.id, { limit: 1, before: cursor });
+    assert.ok(page);
+    pages.push(page.detail.messages.map((m) => m.id));
+    cursor = page.nextCursor;
+    if (cursor === null) break;
+  }
+  assert.deepEqual(pages.toReversed().flat(), ids);
+});
+
+test("会话列表分页保持创建序：截断而不改序", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+  const titles = ["A", "B", "C"].map((title) => manager.create({ title }).id);
+
+  // 默认页取**最新**的一批，但数组仍是创建序（旧→新）：dashboard 不做二次排序，
+  // 把它实现成 DESC 直出会让整个列表反序，而这条既有事实不会报错、只会静默失效。
+  const page = manager.list({ limit: 2 });
+  assert.deepEqual(
+    page.sessions.map((s) => s.id),
+    [titles[1], titles[2]],
+  );
+  assert.ok(page.nextCursor);
+
+  const older = manager.list({ limit: 2, before: page.nextCursor });
+  assert.deepEqual(
+    older.sessions.map((s) => s.id),
+    [titles[0]],
+  );
+  assert.equal(older.nextCursor, null);
+});
+
+test("非法的 limit 与 before 都是 400，不夹取也不当没传", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+  manager.create();
+
+  // NaN 是 `Number("abc")` 的结果：它不是整数，所以与「没传」在 `#page()` 里分得开。
+  // 下面刻意用**不存在的 id** 问 `getDetail`：分页校验必须在资源查找之前，
+  // 否则「未知 id + 非法 limit」会回 404，等于用状态码泄露资源存在性。
+  for (const limit of [0, -1, 1.5, 501, Number.NaN]) {
+    assert.throws(() => manager.list({ limit }), /limit 必须是/, `limit=${String(limit)}`);
+    assert.throws(() => manager.getDetail("x", { limit }), /limit 必须是/);
+  }
+  // `base64url` 解码对非法字符是**忽略**而不是抛，所以判据只能落在「必须是纯数字」上。
+  // `"abc"` 解出来是 `ikp` 这种字节串、`"MTIz"` 解出来是 `123`（**那是合法游标**，
+  // 所以它不在下面这个清单里 —— 把它当反例会让这条用例说谎）。
+  for (const before of ["", "!!!", "-1", "0", "abc"]) {
+    assert.throws(() => manager.list({ before }), /before 不是合法的游标/, `before=${before}`);
+  }
+  assert.doesNotThrow(() => manager.list({ before: "MTIz" }));
+});
+
+test("游标指向已经没有内容的位置时回空页，而不是 404", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+  const a = manager.create({ title: "A" });
+  const b = manager.create({ title: "B" });
+  const c = manager.create({ title: "C" });
+
+  const page = manager.list({ limit: 1 });
+  assert.deepEqual(
+    page.sessions.map((s) => s.id),
+    [c.id],
+  );
+  assert.ok(page.nextCursor);
+
+  // 游标还有效，但它指向的那一段已经被删空了：分页不该因为「无旧数据」而报不存在。
+  manager.delete(a.id);
+  manager.delete(b.id);
+  const older = manager.list({ limit: 1, before: page.nextCursor });
+  assert.deepEqual(older.sessions, []);
+  assert.equal(older.nextCursor, null);
 });
 
 test("同一个库文件被重复打开时不会重建 schema，计数走 SQL 而不是数组长度", (t) => {
@@ -307,7 +460,7 @@ test("同一个库文件被重复打开时不会重建 schema，计数走 SQL �
   // 第二个句柄开在同一个文件上（等价于「重启」）：`migrate()` 必须是 no-op，
   // 且 `messageCount` 由 SQL 的相关子查询给出，不是内存数组长度。
   const second = open();
-  const counts = new Map(second.list().map((s) => [s.id, s.messageCount]));
+  const counts = new Map(second.list().sessions.map((s) => [s.id, s.messageCount]));
   assert.equal(counts.get(a.id), 2);
   assert.equal(counts.get(b.id), 0);
 });
