@@ -29,6 +29,21 @@ function onSelect(id: string): void {
       </button>
     </div>
 
+    <!--
+      列表是创建序（旧→新），而默认那一页是**最新**的 100 个，所以「更早的会话」拼在头部
+      （见 store 的 `loadMoreSessions`），入口也就跟着放在列表上方 —— 与消息那边同一个方向。
+      翻到顶（`hasMoreSessions` 为假）就整条从 DOM 消失，不是留在原地 disable。
+    -->
+    <button
+      v-if="sessions.hasMoreSessions"
+      class="cursor-pointer rounded-md border-1 border-line bg-raised px-2 py-1 text-xs text-ink-muted transition-colors hover:text-ink disabled:cursor-wait disabled:opacity-60"
+      type="button"
+      :disabled="sessions.loadingMoreSessions"
+      @click="sessions.loadMoreSessions()"
+    >
+      {{ sessions.loadingMoreSessions ? "加载中…" : "加载更早的会话" }}
+    </button>
+
     <ul class="m-0 flex-1 list-none overflow-y-auto p-0">
       <li
         v-for="s in sessions.sessions"

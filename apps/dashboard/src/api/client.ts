@@ -104,16 +104,30 @@ export async function authStatus() {
 
 // --- 会话 -------------------------------------------------------------------
 
-export async function listSessions() {
-  return body(await listSessionsOp());
+/**
+ * 两个列表接口的游标分页参数。
+ *
+ * `before` 就是上一次响应里的 `nextCursor`（不透明串，前端不解析，只原样传回）。
+ * 刻意不收 `null`：生成类型那侧也是 `string`（OpenAPI 的 query 参数没有 null 这个形状），
+ * 而「翻到顶」的正确表达是**不再发这一页的请求**，不是把哨兵值传过去 ——
+ * 服务端把空串当非法游标回 400，传 null 上去只会得到一个说不清的 400。
+ * 那条由 store 守住（`loadEarlier()` / `loadMoreSessions()` 开头都先判 `cursor === null`）。
+ */
+export interface PageQuery {
+  limit?: number;
+  before?: string;
+}
+
+export async function listSessions(query?: PageQuery) {
+  return body(await listSessionsOp({ query }));
 }
 
 export async function createSession(title?: string) {
   return body(await createSessionOp({ body: { title } }));
 }
 
-export async function getSession(id: string) {
-  return body(await getSessionOp({ path: { id } }));
+export async function getSession(id: string, query?: PageQuery) {
+  return body(await getSessionOp({ path: { id }, query }));
 }
 
 export async function deleteSession(id: string) {

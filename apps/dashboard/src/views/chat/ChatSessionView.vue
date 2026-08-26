@@ -56,6 +56,26 @@ function onScroll(): void {
   stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_THRESHOLD;
 }
 
+/**
+ * 取更早的一页，并把视图钉回用户正在看的那条。
+ *
+ * prepend 会让 `scrollHeight` 变大而 `scrollTop` 不变 —— 整屏内容往下滑，
+ * 「刚点的那条消息跑掉了」。所以补回新增的高度，而不是滚到顶、更不是滚到底。
+ *
+ * 这里刻意**不**动 `stickToBottom`：用户既然看得见顶部那颗按钮，说明他已经上滚离开底部
+ *（`onScroll` 早把它置成 false），此时任何「自动跟到底」都是错的。
+ */
+async function onLoadEarlier(): Promise<void> {
+  const el = scrollBox.value;
+  if (!el) return;
+  const prevHeight = el.scrollHeight;
+  const prevTop = el.scrollTop;
+  const added = await sessions.loadEarlier();
+  if (added === 0) return;
+  await nextTick();
+  el.scrollTop = el.scrollHeight - prevHeight + prevTop;
+}
+
 async function load(id: string): Promise<void> {
   if (!id) {
     status.value = "missing";
@@ -204,7 +224,13 @@ onBeforeUnmount(() => {
             对齐、底色、角色名三个维度怎么标识发送方、三条分支为什么要留在
             同一条 v-if 链上，都记在 MessageBubble 里。
           -->
-          <message-list :messages="sessions.log" :streaming-id="sessions.streamingId" />
+          <message-list
+            :messages="sessions.log"
+            :streaming-id="sessions.streamingId"
+            :has-more="sessions.hasMoreMessages"
+            :loading-earlier="sessions.loadingEarlier"
+            @load-earlier="onLoadEarlier"
+          />
         </div>
       </div>
 
