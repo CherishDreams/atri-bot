@@ -226,9 +226,10 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 ### 数据目录、备份与单实例
 
-`dataDir`（默认 `data/`，可用 `ATRI_DATA_DIR` 或配置文件里的 `dataDir` 改）下只有一个运行状态文件：
-`sessions.sqlite` —— 全部的对话历史都在里面，口令与各 provider 配置则在 `atri.config.json`。
-**需要备份的就是这两样**，其余（`apps/dashboard/dist`）可由源码重新构建。
+`dataDir`（默认 `data/`，可用 `ATRI_DATA_DIR` 或配置文件里的 `dataDir` 改）下有两样运行状态：
+`sessions.sqlite`（全部对话历史）与 `plugins/<插件 id>/`（各插件自己存的东西，框架不管理内容）。
+口令与各 provider 配置则在 `atri.config.json`。**需要备份的就是这几样**，
+其余（`apps/dashboard/dist`）可由源码重新构建。
 
 - **容器里把 `dataDir` 挂成 volume**，否则重建容器等于清空所有历史。
 - **一个数据目录只跑一个实例。** 同会话串行那把锁是进程内的 `Set`（`core/agent/engine.ts`），
@@ -246,7 +247,8 @@ pnpm start            # 或 node apps/server/src/index.ts
 - **插件** —— 一个目录，内含 `index.js`，默认导出
   `{ id, name, version, description?, config?, setup(ctx), teardown?() }`
   （也支持默认导出工厂函数 `(shared) => 上述对象`）。目录来自配置中的 `pluginDirs`。
-  参见 `apps/server/plugins/hello`。
+  要存数据用 `ctx.dataDir`（见[插件的动态加载](#插件的动态加载)），**不要**写进插件自己那个目录 ——
+  那个目录是会被升级覆盖、被用户改名的。参见 `apps/server/plugins/hello`。
 - **适配器** —— 实现 `start()`/`stop()` 并注册到 `AdapterManager`；
   在 `config.adapters.<id>.enabled` 中按需启用。纯 agent 部署可以不启用任何一个。
 - **工具（function calling）** —— 内置工具一颗一个文件（`apps/server/src/core/tool/builtins/`），
@@ -296,6 +298,11 @@ pnpm start            # 或 node apps/server/src/index.ts
   插件默认导出里声明的 `config` 段会合并进来，同名时插件的键优先。
 - `ctx.effect(fn | { dispose() }, label?)`：登记副作用，卸载时逆序自动释放，返回提前释放函数
 - `ctx.subscribe(emitter, event, handler)`：订阅 emitter，并在卸载时自动退订
+- `ctx.dataDir`：这个插件**自己**的数据目录（绝对路径），首次访问时才创建。
+  存东西请用它，别往插件自己的目录里写 —— 那个目录是用户从上游拷来的代码，
+  升级会被整个替换、改名会换目录，写在那儿的数据跟着一起没。
+  目录位置是 `<dataDir>/plugins/<你的 id>`，所以**卸载、禁用、重命名插件目录都不会丢数据**，
+  而框架从不删它（要清理请自己 `rm -rf data/plugins/<id>`）
 - `ctx.plugins()`：**实时**列出此刻已加载的插件（含你自己），每项只有
   `id` / `name` / `version` / `description` / `enabled` 五个键。拿不到同伴的目录，
   也拿不到它们的加载失败原因（那里面可能有绝对路径）；要每次读现值而不是存下来，

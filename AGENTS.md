@@ -107,8 +107,11 @@ plugins/  ─> 只依赖注入给它的 ctx
   秘密会换名字、会新增，黑名单每一次都迟到。
 - **`ctx` 交出去的东西按同一条规矩办**。`ctx.plugins()` 返回 `PluginManager.#peers()` 逐键拼出的
   `PluginInfo`，不含同伴的 `dir` 与 `error`（后者可能带着 `resolve()` 之后的绝对路径）；
-  要扩大它就是「在 `#peers()` 里显式加一行 + 同步 `test/plugins.test.ts` 那句不该有 dir/error」，
+  要扩大它就是「在 `#peers()` 里显式加一行 + 同步 `test/plugins.test.ts` 那句不该有 dir/error/dataDir」，
   而不是把 `#view()` 那份给控制台的形状直接递给插件。
+  `ctx.dataDir` 是这条规矩的一个样本：它给的是 `<dataDir>/plugins/<自己的 id>`，
+  由框架拼、由框架校验、由框架私有参数（`PluginStorage`，**不进白名单**）注入 ——
+  插件要一个地方存东西，不等于它该看见 `dataDir` 本体（那下面躺着 `sessions.sqlite`）。
 - 窄的类型标注**不等于**窄的现实。上面那条「构造参数只声明自己读写的键」只解决强度问题；
   对象真的传出去时，现实由运行时那个对象决定（这里曾经就是这么漏的：类型写的是
   `{ pluginDirs?: string[] }`，运行时交到插件手上的是整个 `AppConfig`）。
