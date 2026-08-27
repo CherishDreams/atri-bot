@@ -39,7 +39,10 @@ atri-bot/
 
 - Node >= 22.18（服务端直接跑 TypeScript 源码，靠 Node 22.18 起默认开启的类型擦除，
   不需要构建步骤；低于它会得到 `UnknownSyntaxError`，而 `.npmrc` 的 `engine-strict`
-  让 `pnpm install` 在这种机器上直接失败，好过跑到一半才崩）
+  让 `pnpm install` 在这种机器上直接失败，好过跑到一半才崩）。
+  这条下限同时也是 `node:sqlite`（会话与消息的存储）**免 `--experimental-sqlite` 旗标**的下限 ——
+  它在 v22.13.0 / v23.4.0 起免旗标，所以本仓的三条脚本 `dev`/`start`/`test` 都不需要加旗标；
+  把下限往下调到 22.13 以下会让服务端启动即失败。
 - pnpm 12（由 `packageManager` 字段固定为 `pnpm@12.11.2`；`.npmrc` 开了 `engine-strict`，
   版本不符会直接报错，所以别用 11 及以下）
 
@@ -99,14 +102,15 @@ pnpm dev
 
 更常见的做法是通过环境变量显式指定（优先级高于配置文件）：
 
-| 变量                  | 默认值                | 说明                                                               |
-| --------------------- | --------------------- | ------------------------------------------------------------------ |
-| `ATRI_ADMIN_USER`     | `admin`               | 管理员用户名                                                       |
-| `ATRI_ADMIN_PASSWORD` | 无（自动生成）        | 管理员口令                                                         |
-| `ATRI_COOKIE_NAME`    | `atri_session`        | 会话 Cookie 名                                                     |
-| `ATRI_COOKIE_SECURE`  | 关                    | 加 `Secure` 属性，仅 HTTPS 有效；本仓默认明文 HTTP 故默认关        |
-| `ATRI_STATIC_DIR`     | `apps/dashboard/dist` | 控制台构建产物目录                                                 |
-| `ATRI_MAX_TOOL_STEPS` | `5`                   | 单轮允许的工具步数（夹到 `[1, 50]`）。改文件不用重启，改这里要重启 |
+| 变量                  | 默认值                | 说明                                                                      |
+| --------------------- | --------------------- | ------------------------------------------------------------------------- |
+| `ATRI_ADMIN_USER`     | `admin`               | 管理员用户名                                                              |
+| `ATRI_ADMIN_PASSWORD` | 无（自动生成）        | 管理员口令                                                                |
+| `ATRI_COOKIE_NAME`    | `atri_session`        | 会话 Cookie 名                                                            |
+| `ATRI_COOKIE_SECURE`  | 关                    | 加 `Secure` 属性，仅 HTTPS 有效；本仓默认明文 HTTP 故默认关               |
+| `ATRI_STATIC_DIR`     | `apps/dashboard/dist` | 控制台构建产物目录                                                        |
+| `ATRI_DATA_DIR`       | `data`                | 运行时数据目录：会话与消息库 `sessions.sqlite` 落在这里（相对项目根解析） |
+| `ATRI_MAX_TOOL_STEPS` | `5`                   | 单轮允许的工具步数（夹到 `[1, 50]`）。改文件不用重启，改这里要重启        |
 
 ### 认证接口
 
@@ -122,6 +126,8 @@ pnpm dev
 - **凭证不进响应体**，只走 `HttpOnly; SameSite=Lax` 的 Cookie，前端 JS 读不到令牌。
 - 令牌是随机 UUID，服务端存**内存**，进程重启即全部失效。绝对有效期 **15 天**、
   空闲有效期 **7 天**：每次使用都会续期空闲计时，但无论如何 15 天后必须重新登录。
+  这里的「会话」指**登录会话**；`/sessions` 那一组的**对话会话**（消息历史）自始持久化在
+  `dataDir` 下的 sqlite，重启不会丢，两者不是一个东西（见[生产部署](#生产部署)的数据目录）。
 - 口令比对用 `timingSafeEqual` 对 **sha256 定长摘要**做比较，避免长度差异泄露信息；
   用户名与口令**都**参与比对（用户名不存在时也照常走完），
   且失败一律返回同一句「账号或密码错误」，不区分是哪一项错了。
@@ -218,6 +224,23 @@ pnpm start            # 或 node apps/server/src/index.ts
 带哈希的静态资源长缓存，`index.html` 使用 `no-cache`（否则发版后浏览器会拿旧外壳）。
 静态目录之外的路径一律 403，不会读出仓库外的文件。
 
+### 数据目录、备份与单实例
+
+`dataDir`（默认 `data/`，可用 `ATRI_DATA_DIR` 或配置文件里的 `dataDir` 改）下只有一个运行状态文件：
+`sessions.sqlite` —— 全部的对话历史都在里面，口令与各 provider 配置则在 `atri.config.json`。
+**需要备份的就是这两样**，其余（`apps/dashboard/dist`）可由源码重新构建。
+
+- **容器里把 `dataDir` 挂成 volume**，否则重建容器等于清空所有历史。
+- **一个数据目录只跑一个实例。** 同会话串行那把锁是进程内的 `Set`（`core/agent/engine.ts`），
+  第二个进程看不见它；SQLite 侧只有文件锁 + 5 秒 busy timeout，抢不到会得到一句中文 500。
+  想跑两份就给它们两个 `dataDir`。
+- **备份用 `sqlite3 <db> ".backup 目标"`，或者先停服再整目录复制。**
+  进程开着时只 `cp sessions.sqlite` 会**漏掉 `-wal` 边车里尚未 checkpoint 的消息** ——
+  那是真的会丢用户对话，不是理论风险。同理不要手工删 `.sqlite-wal` / `.sqlite-shm`。
+- 库文件权限被收紧到 `0600`（与配置文件同一先例，Windows 上静默忽略）：里面是用户的对话内容。
+- 库损坏或打不开时服务端**启动即失败**并打印路径与一句自救提示，不会降级成「历史没了但还能跑」——
+  那样下一次写入就会落在一个我们以为是空的库上。
+
 ## 扩展方式
 
 - **插件** —— 一个目录，内含 `index.js`，默认导出
@@ -282,30 +305,32 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 基础路径 `/api/v1`：
 
-| 方法         | 路径                                            | 说明                                                |
-| ------------ | ----------------------------------------------- | --------------------------------------------------- |
-| GET          | `/health`                                       | 存活检查（公开）                                    |
-| POST         | `/auth/login`、`/auth/logout`                   | 登录 / 登出（公开，见上）                           |
-| GET          | `/auth/me`、`/auth/status`                      | 当前用户 / 是否需要登录                             |
-| GET / POST   | `/sessions`                                     | 列出 / 创建会话                                     |
-| GET / DELETE | `/sessions/:id`                                 | 读取（含完整消息历史）/ 删除会话                    |
-| POST         | `/sessions/:id/messages`                        | 发送用户消息，等完整回复后返回                      |
-| POST         | `/sessions/:id/messages/stream`                 | 同上，但以 SSE 逐段推送回复增量                     |
-| GET          | `/providers`、`/plugins`、`/adapters`、`/tools` | 供控制台使用的状态                                  |
-| POST/DELETE  | `/providers`、`/providers/:id`                  | 新增 / 修改 / 删除模型实例                          |
-| GET          | `/provider-sources`                             | 列出 provider source（**明文含 apiKey**）           |
-| POST/DELETE  | `/provider-sources`、`/provider-sources/:id`    | 新增 / 修改 / 删除 provider source                  |
-| POST         | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                      |
-| POST         | `/plugins/:id/reload`                           | 重载插件（销毁旧实例并重新求值代码）                |
-| POST         | `/plugins/:id/unload`                           | 卸载插件（释放副作用并移除）                        |
-| POST         | `/plugins/:id/enable`                           | 启用 / 禁用插件，body `{ "enabled": true }`         |
-| POST         | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填） |
+| 方法         | 路径                                            | 说明                                                                                    |
+| ------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
+| GET          | `/health`                                       | 存活检查（公开）                                                                        |
+| POST         | `/auth/login`、`/auth/logout`                   | 登录 / 登出（公开，见上）                                                               |
+| GET          | `/auth/me`、`/auth/status`                      | 当前用户 / 是否需要登录                                                                 |
+| GET / POST   | `/sessions`                                     | 列出（默认最新 100 个，创建序 + `nextCursor`）/ 创建会话                                |
+| GET / DELETE | `/sessions/:id`                                 | 读取（默认**最新 100 条**消息 + `nextCursor`）/ 删除会话                                |
+| POST         | `/sessions/:id/messages`                        | 发送用户消息，等完整回复后返回（同会话串行，占用中返回 409）                            |
+| POST         | `/sessions/:id/messages/stream`                 | 同上，但以 SSE 逐段推送回复增量（409 在开流**之前**判，所以是状态码而不是流里的错误帧） |
+| GET          | `/providers`、`/plugins`、`/adapters`、`/tools` | 供控制台使用的状态                                                                      |
+| POST/DELETE  | `/providers`、`/providers/:id`                  | 新增 / 修改 / 删除模型实例                                                              |
+| GET          | `/provider-sources`                             | 列出 provider source（**明文含 apiKey**）                                               |
+| POST/DELETE  | `/provider-sources`、`/provider-sources/:id`    | 新增 / 修改 / 删除 provider source                                                      |
+| POST         | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                                                          |
+| POST         | `/plugins/:id/reload`                           | 重载插件（销毁旧实例并重新求值代码）                                                    |
+| POST         | `/plugins/:id/unload`                           | 卸载插件（释放副作用并移除）                                                            |
+| POST         | `/plugins/:id/enable`                           | 启用 / 禁用插件，body `{ "enabled": true }`                                             |
+| POST         | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填）                                     |
 
 除标注「公开」的路径外，其余接口都需要登录（未登录返回 401）。
 
-写操作全部落在 `atri.config.json` 上（读-改-写，文件权限 `0600`），改完立刻生效、
+**配置类**写操作落在 `atri.config.json` 上（读-改-写，文件权限 `0600`），改完立刻生效、
 **不需要重启**：provider 靠重建注册表生效，工具靠每次现读文件生效（启用状态不常驻内存，
-见 `docs/architecture.md`）。删除仍被引用的 provider source 会被拒绝并列出
+见 `docs/architecture.md`）。**会话与消息**则落在 `dataDir` 下的 `sessions.sqlite`
+（同样 `0600`）—— 它们不是配置，不会写进 `atri.config.json`，也不该被当成配置文件去 diff。
+删除仍被引用的 provider source 会被拒绝并列出
 引用者，除非带上 `?cascade=1`。详细的字段语义见[模型 provider](#模型-provider)。
 
 WebSocket 位于 `/ws`，向客户端推送 `message` / `stream` / `error` / `unauthorized` 帧。

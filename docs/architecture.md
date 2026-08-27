@@ -13,7 +13,7 @@ apps/server/src/
 ├── core/           全部业务逻辑，不依赖上层
 │   ├── agent/      AgentEngine：一轮对话的编排
 │   ├── auth/       AuthManager：管理员口令与会话令牌
-│   ├── session/    SessionManager：会话与消息（当前为内存实现）
+│   ├── session/    SessionManager：会话与消息（`node:sqlite`，落在 `config.dataDir`）
 │   ├── provider/   配置存储 + 装配 + ProviderRegistry + 厂商实现（openai / anthropic）
 │   └── logger.ts
 ├── api/            传输层：HTTP 路由、静态托管、WebSocket（无业务逻辑）
@@ -70,7 +70,7 @@ plugins/  ─> 仅依赖注入给它的 ctx，不 import core/ 之外的具体�
 const logger = createLogger(config.logLevel);
 const auth = new AuthManager(config, logger);
 await auth.init(); // 必须早于 HTTP 启动：未配置口令时要先落盘
-const sessions = new SessionManager();
+const sessions = new SessionManager(config, logger); // 会话库落在 config.dataDir
 const providers = new ProviderRegistry();
 const providerConfig = new ProviderConfigStore(config, logger);
 // 工具：注册表只管「存在与执行」，启用与否由 ToolConfigStore 每次现读文件
@@ -100,9 +100,12 @@ const http = await createHttpServer({
 });
 ```
 
-`SessionManager` / `ProviderRegistry` 现在**不接配置**：给构造参数标类型这一步暴露出这两个类
-把传进来的 `config` 存成了一个从未被读取的字段 —— 那是「以后要持久化」的预留位，不是当前行为。
-留着它就得为它编一个没有任何真实用途的类型，所以删掉；真要做持久化时按当时的需求重新接线。
+`ProviderRegistry` 仍然**不接配置**：早先给它注入的 `config` 被存成一个从未被读取的字段，
+那是「以后要持久化」的预留位而不是当前行为，留着就得为它编一个没有真实用途的类型，所以删掉了。
+
+`SessionManager` 已经把那句话兑现了 —— 它现在接 `config.dataDir`（只声明自己读写的键，
+见下一节）。当年那句「真要做持久化时按当时的需求重新接线」就是现在：接进来的是**唯一被读的
+那一个键**，不是一个通用配置句柄。
 
 依赖靠**构造参数**传入，没有全局单例、没有模块级可变状态。
 这使测试可以直接 `createApp(config)` 起一个真服务，而不需要 mock 掉半个世界。
@@ -133,6 +136,116 @@ HTTP 请求
 这样 `GET /sessions/:id` 与其它的具体路径不会互相遮蔽，行为完全由注册顺序决定，
 不需要理解框架的优先级规则。
 
+## 会话与消息的持久化
+
+会话与消息落在 `config.dataDir` 下的 `sessions.sqlite`，由 `core/session/db.ts`（连接、pragma、
+schema 与版本）和 `manager.ts`（领域方法与 SQL）两层承担 —— 与 `core/provider/` 的
+`store.ts` + `registry.ts` 同构。**不叫 `store.ts`**：本仓 `store` 已经被
+`ProviderConfigStore` / `ToolConfigStore` 占住，含义是「读写 `atri.config.json` 的配置存储」。
+
+选 `node:sqlite` 的理由只有一条最有分量：它是 **Node 内置模块**，因此不破
+「服务端外部运行时依赖只有 `ws`」这条硬约束。免 `--experimental-sqlite` 旗标的下限是
+v22.13.0 / v23.4.0，而本仓 `engines.node >= 22.18.0` 已经在里面，所以
+`dev`/`start`/`test` 都不必加旗标 —— 这一点很关键，任何需要额外旗标的方案都会同时打断这三条脚本。
+跨 22.18→24 可写的类名是 `DatabaseSync`（更新文档里的 `Database` 别名在 v24 的导出中还不存在）。
+被否掉的替代：`better-sqlite3`（带原生编译的外部依赖）、JSONL 手写文件（排序、级联删除、
+按会话取区间全要自己造，而那些正是 sqlite 免费给的）。
+
+因为 `node:sqlite` 本身是同步 API，`SessionManager` 的方法**全部保持同步**，引擎与 HTTP 层
+一个字没改 —— 这是一开始那句「可以直接平替」的兑现。
+
+### 唯一能排序的键是 `seq`
+
+`messages.seq` 是 `INTEGER PRIMARY KEY`（即 rowid 别名），全局单调递增，**插入序的唯一真相**。
+不能用 `created_at`：那是毫秒 ISO，同一轮多步循环里可以完全相同，而 `randomUUID()` 不可排序。
+更阴的是 `ORDER BY created_at` 在 SQLite 上会因为「相同 key 的行按 rowid 兜底」而**碰巧给对结果**，
+于是坏实现能穿过大半测试 —— `session.test.ts` 把 fixture 的 `created_at` 刻意设成与插入顺序**逆序**，
+就是为了杀掉它。也不用 `WITHOUT ROWID`：那会让行序变成 UUID 字典序，插入序直接消失。
+
+顺序不是审美问题：`engine.ts:159-160` 的「助手这条必须先进 history，再排它的结果」是 OpenAI 与
+Anthropic 配对 `tool_calls` ↔ `tool_result` 的前提。
+
+### 三条实测出来的 API 形状，与通识相反
+
+- `node:sqlite` **默认开启外键约束**（`enableForeignKeyConstraints` 的默认值是 true，v22.10 起），
+  与 SQLite C 库的默认相反。所以 `ON DELETE CASCADE` 开箱可用 —— 但 `delete()` 仍然显式发两条
+  DELETE 包在一个事务里，级联只当第二道保险：「删干净」不该寄托在某个库的默认值上。
+- 绑参**拒绝 `undefined` 与 boolean**（`ERR_INVALID_ARG_TYPE`），`null` 可以。所以两个可选字段
+  必须显式 `?? null`，而类型系统不会提醒（`string | undefined` 看起来完全正常）。
+  `create()` 也因此显式校验 `title`：**STRICT 表会把整数 `123` 静默写成 `'123.0'`**，DDL 挡不住它。
+- 查询返回的行**原型是 `null`**。直接 `as Message` 交出去，`JSON.stringify` 恰好正常
+  （HTTP 面看不出任何问题），而 `deepStrictEqual` 会红 —— 最坏的一种假绿。所以每行都过
+  `#toMessage()` 逐字段构造，顺带保证「列是 NULL 就**不带那个键**」而不是带一个 `null`
+  （后者会让 `packages/shared` 的类型与 openapi 规格同时说谎）。
+- `PRAGMA user_version = ?` 是语法错误：pragma 的值不是可绑定参数，只能 `db.exec()` 拼整数。
+
+### `tool_calls` 是 JSON 文本列，不是子表
+
+读路径永远是「整条消息 + 它的全部调用」，而配对这些调用是在内存里做的
+（`engine.ts:229-241` 的 `#historyFor`），SQL 里从不按调用维度查。子表只能靠 JOIN 换回同一个
+集合，却把「一条消息 + 两颗调用」变成 1+2 次 INSERT，任一步失败就留下「有调用没有消息」这种形状。
+`arguments` 全程原样搬运、不解析（`registry.ts:97-105` 把「不是合法 JSON」当常态处理，
+回喂 `isError` 而不是抛），所以落库的只是我们 `JSON.stringify` 出来的那层信封。
+
+`role` 列**刻意没有 `CHECK`**：加了它，「上游打断留下的孤儿调用」就变成写库失败，
+而那条半截历史是必须能读出来的运行期事实。
+
+### 游标分页与那个最容易被写错的 +1
+
+`GET /sessions` 与 `GET /sessions/:id` 都是 `limit`（默认 100、上限 500）+ `before`（不透明游标）。
+游标是 `base64url(seq)`，不是裸数字：裸 seq 会把「内部用 `INTEGER PRIMARY KEY` 排序」写进 API 契约。
+方向只有一个（更早），不引入 `after`，也不引入 `hasMore` 布尔 —— 同一件事写两个字段就会出现
+「`hasMore: true` 而游标为 null」这种规格写得出来、代码难保证的组合。
+
+SQL 取 `limit + 1` 条，第 limit+1 条只用来证明「还有更早的」。
+**`nextCursor` 必须取响应里最旧那一行的 seq，而不是被丢掉那一行的** —— 后者会让下一页的
+`seq < cursor` 正好跳过它，静默漏一条，症状是界面上「中间少一句」，不报错不重复。
+唯一抓得住它的断言是「逐页拼接 == 全量」（`session.test.ts`），所以那条测试是先写的。
+
+默认页是最新一批，但数组仍是插入序（旧→新）：**截断而不改序**。控制台不做二次排序，
+把 DESC 直接吐出去会让列表整个反序，而那条既有事实不会报错、只会静默失效。
+非法 `limit` / `before` 一律 400，不夹取也不当没传 —— 与 `maxToolSteps` 的「夹住 + warn」刻意相反：
+那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说。
+校验排在资源查找之前：「未知 id + 非法 limit」应该回 400，回 404 等于用状态码泄露资源存在性。
+
+`getWithMessages`（引擎专用）**不分页**：引擎要的是「一次问上游时的完整上下文」，
+把分页塞进它意味着模型会忘记自己早先说过的话 —— 那是上下文窗口策略，不是存储的关切。
+代价随之写明：一个几千条的会话，每轮都要一次全量 SELECT 加全量映射；真要治的是上下文裁剪，
+那是另一件事，**不要**顺手在存储层裁（那会让「历史」在库里悄悄变短，比慢更难查）。
+
+### 同会话串行为什么在引擎而不是存储层
+
+一轮对话是「读全量历史 → await 上游几十秒 → 逐步 append」。同会话两个并发请求各自拿到的快照
+都不含对方，落库后交错。内存版今天完全一样，持久化只是把「看起来怪」变成**永久记录**。
+
+SQLite 能给的只有「两条 INSERT 串行」，缺的是「一整轮的读-改-写串行」；放存储层还会迫使
+`appendMessage` 变 async，波及引擎与六个 handler。所以锁在 `AgentEngine.#running`（一个会话 id
+的 `Set`），冲突抛 `ApiError(409)`，释放写在 `finally`（忘记释放的症状是「这个会话从此每次都 409」）。
+流式端点额外用 `engine.isBusy()` 在**写 SSE 响应头之前**预检 —— 响应头一发出就只能靠事件报错，
+409 的语义客户端再也拿不到（与「未知会话要在开流前 404」同一条约束）。预检与权威判定之间必然留
+一个窗口，真撞上时以 error 帧出去，这条写在注释里而不是假装修掉了。
+
+锁是**进程内**的：多进程各自有各自的 `Set`。所以部署上「一个数据目录只跑一个实例」
+（README 的生产部署一节），跨进程的写竞争由 `timeout: 5000` + SQLite 文件锁兜住。
+
+### 打开失败不降级
+
+`openSessionDb` 失败即抛、启动即死，理由与 `config/file.ts` 的 `readConfigFile` 完全同构：
+**把坏库当成空库，下一次写入就会在一个我们以为是空的库上写**。写方法的存储故障则细节只进日志、
+对外一句固定中文 —— SQLite 的错误里带着库文件的绝对路径，不能原样回给客户端
+（与 `list_plugins` 不外传 error 原文同条理由）。库文件权限 `0600`（照配置文件那套，Windows 上
+静默忽略），理由不同但结论一样：配置文件是明文密钥，会话库是用户的对话内容。
+
+### 迁移只有「末尾追加」这一条路
+
+`PRAGMA user_version` 是 SQLite 内置的整数槽位，零依赖零新表；`MIGRATIONS` 数组**只增不改**。
+改了历史条目意味着别人机器上那个「已经执行过旧条目」的库永远不会执行新条目，而 `user_version`
+已经跳过去，症状是运行期某条 SQL 报 `no such column`，离根因极远。条目里不写 `IF NOT EXISTS`：
+重复执行应当立刻报错 —— `CREATE TABLE IF NOT EXISTS` 一把梭最坏的地方正是「加列时它静默什么都不做」。
+也不用 `package.json` 的版本号：app 版本会因无关改动 bump，schema 版本必须只跟 DDL 走。
+
+**这件事没有任何检查守着**，只有 `db.ts` 顶注释那三条规矩 + 一条「第二次打开是 no-op」的测试。
+
 ## 鉴权设计
 
 `AuthManager` 的分工是把「凭据」和「会话」两件事都关在一个类里：
@@ -140,7 +253,9 @@ HTTP 请求
 - **凭据**：用户名与口令都用 `sha256` 摘要成定长 32 字节后再 `timingSafeEqual`，
   避免长度差异提前返回。用户名与口令**都**参与比对，用户名不存在时不短路，
   因此响应时间不泄露「这个账号是否存在」。失败一律返回同一句话。
-- **会话**：令牌是随机 UUID，存在内存 `Map` 里，进程重启即全部失效。
+- **会话**（这里指**登录会话**，即令牌；`core/session/` 的**对话会话**自本轮起持久化在 sqlite，
+  两者不是一个东西，见[会话与消息的持久化](#会话与消息的持久化)）：
+  令牌是随机 UUID，存在内存 `Map` 里，进程重启即全部失效。
   双层过期：绝对 15 天 + 空闲 7 天。每次使用续期空闲计时，但绝对期限不可延长。
   清理是**惰性**的（在 `login` 与 `getByToken` 时顺带 `#prune()`），
   没有定时器，所以 `stop()` 之后不残留任何资源。
@@ -368,6 +483,9 @@ builtins/    一颗工具一个文件（`currentTime.ts`），只导出自己那
 - **历史要做配对修复。** 被客户端断开或撞上限打断的那一轮，会留下「带 `toolCalls`
   但没有对应结果」的助手消息，两家上游都拒绝这种历史；`SessionManager.appendMessage`
   不做角色校验，所以兜底放在 `#historyFor`：那种助手消息退化成纯文本再发出去。
+  **换成 sqlite 之后仍然不校验，`role` 列也刻意不加 `CHECK`** —— 加了就把「上游打断留下的
+  半截一轮」变成写库失败，而那条历史必须能写进去、也必须能读出来（被中断的一轮原样保留，
+  不做启动清理，见[会话与消息的持久化](#会话与消息的持久化)）。
 
 ## 静态托管
 
@@ -633,6 +751,13 @@ server.closeAllConnections?.(); // 兜住空闲 keep-alive 连接
 与之配套的是「客户端断开要中断上游」：`res.on("close")` 里 `controller.abort()`，
 否则用户关掉标签页之后，服务端仍会为一份没人接收的响应继续消耗 token。
 这种取消是预期路径，所以只记 `debug`，不按服务端故障刷 error 堆栈。
+
+会话库排在 `app.stop()` 的**最后**关：`http.close()` 先掐掉在途 SSE 与 WS，那一刻之后不应再有
+新的写库请求；而插件的 `teardown` 理论上也可能触发写（今天 `ctx` 里没有会话句柄，排在它后面
+才对未来也成立）。`close()` 幂等 —— 信号处理与 `t.after` 可能各关一次。
+**不做显式 `wal_checkpoint`**：`db.close()` 作为最后一个连接时 SQLite 会自动回收 WAL，
+而显式 checkpoint 在别的进程持读锁时会返回 busy，那才是能把关停卡住的东西
+（`stream.test.ts` 里「关停不被在途流拖住（<3s）」那条预算就是靠这两点保住的）。
 
 ### pnpm 11 起的两个坑（本仓用 12，规则照旧）
 
