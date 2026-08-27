@@ -136,7 +136,11 @@ test("插件声明的同名键只改写它自己那份副本", async (t) => {
   view.pluginDirs.push("插件的写入");
   assert.deepEqual(config.pluginDirs, [pluginsRoot], "视图与运行期配置共享了数组");
 
-  const mgr = new PluginManager(pluginRuntimeConfig(config), silentLogger());
+  // `dataRoot` 与 `config` 是两个参数不是偶然：这条用例证的正是「插件只看到白名单那一份」，
+  // 而 dataRoot 只进框架内部、连视图都不给（`ctx.dataDir` 才是插件能碰到的那一个目录）。
+  const mgr = new PluginManager(pluginRuntimeConfig(config), silentLogger(), {
+    dataRoot: join(config.dataDir, "plugins"),
+  });
   await mgr.loadAll();
   assert.deepEqual(
     mgr

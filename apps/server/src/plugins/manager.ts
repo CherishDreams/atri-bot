@@ -41,9 +41,26 @@ export interface PluginShared {
  * 源的 `apiKey`、`providers`、`dataDir`、`staticDir`）没有插件用得到的理由，
  * 却有「磁盘上的任意代码读到口令」这一份风险。要加新键就在下面登记，
  * 并同步 `test/plugin-config.test.ts` 里那条键集合断言 —— 让它必须经过一次人的判断。
+ *
+ * `dataDir` 被排除的理由**比其它键都硬**：会话与消息库 `sessions.sqlite` 就落在它下面，
+ * 把 `dataDir` 交给任何一个插件，等于把用户的**全部对话历史**递到磁盘上手写的 JS 手上。
+ * 插件需要存东西时走 `ctx.dataDir` —— 那是 `<dataDir>/plugins/<自己的 id>`，
+ * 由框架拼、由框架校验，只包含它自己那一个目录（见 `PluginStorage`）。
  */
 export interface PluginRuntimeConfig {
   pluginDirs: string[];
+}
+
+/**
+ * `PluginManager` 需要的**框架私有**依赖，与 `PluginRuntimeConfig` 严格分开。
+ *
+ * 分成两个参数而不是往白名单里塞一条，是为了让「什么交给插件、什么不交」这件事在签名上
+ * 就看得见：`config` 会一路流到 `ctx.config` 与 `shared.config`，而 `storage` 只用来
+ * 在框架内部拼出每个插件自己的目录。
+ */
+export interface PluginStorage {
+  /** 插件数据根目录，`app.ts` 传的是 `join(config.dataDir, "plugins")`。 */
+  dataRoot: string;
 }
 
 /**
@@ -97,10 +114,15 @@ export class PluginManager {
 
   config: PluginRuntimeConfig;
   logger: Logger;
+  /** 框架私有的数据根（`<config.dataDir>/plugins`），见 `PluginStorage` 与 `ctx.dataDir`。 */
+  storage: PluginStorage;
 
-  constructor(config: PluginRuntimeConfig, logger: Logger) {
+  constructor(config: PluginRuntimeConfig, logger: Logger, storage: PluginStorage) {
     this.config = config;
     this.logger = logger;
+    // 数组与字符串都是引用值，但这里**不需要拷贝**：`pluginDirs` 交出去是因为它会进
+    // `ctx.config`（插件能改），而 `dataRoot` 只用来在框架内部拼路径，从不外传。
+    this.storage = storage;
   }
 
   /** 供插件使用的共享能力。 */
@@ -163,6 +185,9 @@ export class PluginManager {
       // 传的是闭包而不是 `this.#peers()` 的结果：`load()` 是在 `loadAll()` 的循环里逐个
       // await 的，此刻后面的插件还没进 `#records`，快照会让先加载的那个永远看不见后加载的。
       plugins: () => this.#peers(),
+      // 只给根，插件经 `ctx.dataDir` 看到的是根目录下**它自己那一个**子目录；
+      // `dataDir` 本体（里面有 `sessions.sqlite`）始终不外传，理由见 `PluginRuntimeConfig`。
+      dataRoot: this.storage.dataRoot,
     });
 
     try {

@@ -1,6 +1,7 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PluginInfo } from "@atri/shared";
@@ -25,6 +26,10 @@ declare global {
   var __p3_disposed: number | undefined;
   /** p6a 把 `ctx.plugins` 这个访问器交给用例，好在**加载之后**再调用它。 */
   var __p6_peers: (() => PluginInfo[]) | undefined;
+  /** p7 换目录重载时读回来的那份数据（证明数据目录的键是 id，不是插件目录名）。 */
+  var __p7_note: string | undefined;
+  /** 非法 id 的探针：把「访问 `ctx.dataDir`」这个动作交给用例，好断言它抛的是哪一句。 */
+  var __bad_dataDir: (() => string) | undefined;
 }
 
 /** 建一个临时插件目录，写入给定源码的 index.js。 */
@@ -53,6 +58,19 @@ function silentLogger(): Logger {
 }
 
 /**
+ * 一座临时的插件数据根，用例结束删掉。
+ *
+ * `dataRoot` 是 `PluginManager` 的必填参数（本仓不留「没有数据根」这条第二路径），
+ * 但目录**惰性**创建：只有插件真的访问 `ctx.dataDir` 才会落盘，所以下面那些不碰它的用例
+ * 一句 `mkdir` 也不会发生 —— 这正是「启动不多碰盘」那条例外在测试里的样子。
+ */
+function useDataRoot(t: TestContext): string {
+  const root = mkdtempSync(join(tmpdir(), "atri-plugin-data-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return join(root, "plugins");
+}
+
+/**
  * 只把 `list()` 的返回改成「首项必填」的一层视图。
  *
  * 为什么需要它：有一条断言写成 `assert.equal(mgr.list()[0].status, "disabled")`，
@@ -65,11 +83,11 @@ interface PluginManagerView extends PluginManager {
   list(): [PluginView, ...PluginView[]];
 }
 
-test("加载插件并暴露元数据", async () => {
+test("加载插件并暴露元数据", async (t) => {
   const dir = await makePlugin(`
     export default { id: "p1", name: "插件一", version: "1.2.3", setup() {} };
   `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger());
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
   const info = await mgr.load(dir);
   assert.equal(info.id, "p1");
   assert.equal(info.version, "1.2.3");
@@ -78,7 +96,7 @@ test("加载插件并暴露元数据", async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-test("卸载插件会释放其 effect", async () => {
+test("卸载插件会释放其 effect", async (t) => {
   const dir = await makePlugin(`
     let cleaned = false;
     export default {
@@ -87,7 +105,7 @@ test("卸载插件会释放其 effect", async () => {
     };
     globalThis.__p2_cleaned = () => cleaned;
   `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger());
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
   await mgr.load(dir);
   // 守卫：探针的类型是「可能没有」（用例结尾要 delete 它），而下面两行都要把它当函数调用。
   // 插件确实挂上了它（见上一行 load 的 fixture 源码），没挂上就是 fixture 坏了。
@@ -101,7 +119,7 @@ test("卸载插件会释放其 effect", async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-test("重载插件会销毁旧实例并重新求值代码", async () => {
+test("重载插件会销毁旧实例并重新求值代码", async (t) => {
   const dir = await makePlugin(`
     export default {
       id: "p3",
@@ -112,7 +130,7 @@ test("重载插件会销毁旧实例并重新求值代码", async () => {
       },
     };
   `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger());
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
   await mgr.load(dir);
   assert.equal(globalThis.__p3_loads, 1);
   await mgr.reload("p3");
@@ -123,14 +141,16 @@ test("重载插件会销毁旧实例并重新求值代码", async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-test("禁用后再启用可恢复运行", async () => {
+test("禁用后再启用可恢复运行", async (t) => {
   const dir = await makePlugin(`
     export default {
       id: "p4",
       setup(ctx) { ctx.effect(() => {}); },
     };
   `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger()) as PluginManagerView;
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
+    dataRoot: useDataRoot(t),
+  }) as PluginManagerView;
   await mgr.load(dir);
   const off = await mgr.setEnabled("p4", false);
   assert.equal(off.enabled, false);
@@ -140,23 +160,23 @@ test("禁用后再启用可恢复运行", async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-test("操作未知插件应报错", async () => {
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger());
+test("操作未知插件应报错", async (t) => {
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
   await assert.rejects(() => mgr.reload("nope"), /未知插件/);
   await assert.rejects(() => mgr.unload("nope"), /未知插件/);
 });
 
-test("工厂形式的插件也被支持", async () => {
+test("工厂形式的插件也被支持", async (t) => {
   const dir = await makePlugin(`
     export default (shared) => ({ id: "p5", name: shared.config ? "有配置" : "无" });
   `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger());
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
   const info = await mgr.load(dir);
   assert.equal(info.id, "p5");
   await rm(dir, { recursive: true, force: true });
 });
 
-test("ctx.plugins() 是实时投影，且不含 dir 与 error", async () => {
+test("ctx.plugins() 是实时投影，且不含 dir 与 error", async (t) => {
   const dirA = await makePlugin(`
     export default {
       id: "p6a",
@@ -171,7 +191,7 @@ test("ctx.plugins() 是实时投影，且不含 dir 与 error", async () => {
   const dirB = await makePlugin(`
     export default { id: "p6b", name: "后到的", version: "0.1.0", setup() {} };
   `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger());
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
   await mgr.load(dirA);
 
   const peers = globalThis.__p6_peers;
@@ -200,9 +220,11 @@ test("ctx.plugins() 是实时投影，且不含 dir 与 error", async () => {
 
   // 投影的边界。这是「新增一条可见键必须经过一次人的判断」的可执行形式：同伴的磁盘路径
   // 与加载失败原因不交给插件 —— 后者可能带着 `resolve()` 之后的绝对路径。
+  // `dataDir` 也在这一列：每个插件只有**自己**那一个数据目录，谁都不该看见别人的在哪。
   for (const p of peers()) {
     assert.ok(!("dir" in p), "不该把别的插件的目录交给插件");
     assert.ok(!("error" in p), "不该把加载失败原因交给插件");
+    assert.ok(!("dataDir" in p), "不该把数据目录交给插件去看同伴的");
   }
   // 键是逐个拼出来的而不是 `...meta`：没声明 description 的那个连这个键都不该有。
   assert.equal(peers().find((p) => p.id === "p6a")?.description, "把 ctx.plugins 交给用例");
@@ -212,4 +234,103 @@ test("ctx.plugins() 是实时投影，且不含 dir 与 error", async () => {
   delete globalThis.__p6_peers;
   await rm(dirA, { recursive: true, force: true });
   await rm(dirB, { recursive: true, force: true });
+});
+
+test("ctx.dataDir 惰性创建，路径由 id 决定", async (t) => {
+  const dataRoot = useDataRoot(t);
+  const writer = await makePlugin(`
+    import { writeFileSync } from "node:fs";
+    export default {
+      id: "p7",
+      setup(ctx) {
+        writeFileSync(ctx.dataDir + "/note.json", "第一份");
+      },
+    };
+  `);
+  const idle = await makePlugin(`
+    export default { id: "p8", setup() {} };
+  `);
+
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
+  await mgr.load(writer);
+
+  // 键是 `id`，不是磁盘目录名 —— 目录名可以被用户改，而数据不该跟着一起丢。
+  const dataDir = join(dataRoot, "p7");
+  assert.equal(readFileSync(join(dataDir, "note.json"), "utf8"), "第一份");
+  // 数据根之外不该有任何东西（`<dataDir>/plugins` 是框架建的唯一一个目录）。
+  assert.ok(existsSync(dataRoot), "数据根由第一次访问创建");
+
+  // 惰性的另一半：不调 `ctx.dataDir` 的插件，一次 mkdir 都不该发生。
+  await mgr.load(idle);
+  assert.equal(existsSync(join(dataRoot, "p8")), false, "没访问就不该建目录");
+
+  await mgr.unloadAll();
+  delete globalThis.__p7_note;
+  await rm(writer, { recursive: true, force: true });
+  await rm(idle, { recursive: true, force: true });
+});
+
+test("卸载与换目录都不丢数据：目录的键是 id，不是插件所在的目录名", async (t) => {
+  const dataRoot = useDataRoot(t);
+  const note = join(dataRoot, "p7", "note.json");
+  const first = await makePlugin(`
+    import { writeFileSync } from "node:fs";
+    export default { id: "p7", setup(ctx) { writeFileSync(ctx.dataDir + "/note.json", "第一份"); } };
+  `);
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
+  await mgr.load(first);
+  assert.equal(readFileSync(note, "utf8"), "第一份");
+
+  // 这条断言把「卸载只销毁实例」从**巧合**变成契约：今天 `apps/server/src` 里没有任何
+  // 删除文件的调用，将来有人加删除时，这里会先红。
+  await mgr.unload("p7");
+  assert.ok(existsSync(note), "卸载不得删插件数据");
+
+  // 用户把插件挪进别的目录 / 改了目录名，id 不变 → 数据还在原地等着它。
+  const moved = await makePlugin(`
+    import { readFileSync } from "node:fs";
+    export default {
+      id: "p7",
+      setup(ctx) { globalThis.__p7_note = readFileSync(ctx.dataDir + "/note.json", "utf8"); },
+    };
+  `);
+  await mgr.load(moved);
+  assert.equal(globalThis.__p7_note, "第一份", "数据跟着 id 走，与插件目录名无关");
+
+  // 禁用/启用是同一条语义的另一个面：都不该碰数据。
+  await mgr.setEnabled("p7", false);
+  assert.ok(existsSync(note), "禁用不得删插件数据");
+  await mgr.setEnabled("p7", true);
+  assert.equal(globalThis.__p7_note, "第一份", "重新启用后读到的还是同一份数据");
+
+  await mgr.unloadAll();
+  delete globalThis.__p7_note;
+  await rm(first, { recursive: true, force: true });
+  await rm(moved, { recursive: true, force: true });
+});
+
+test("id 不能当路径用时抛中文错，且不创建任何东西", async (t) => {
+  const dataRoot = useDataRoot(t);
+  // `../escape` 是路径穿越，`with/slash` 会多出层级，`Uppercase` 在大小写不敏感的文件系统上
+  // 会与 `uppercase` 撞同一个目录、在 Linux 上却不撞 —— 三者都不能直接做目录名。
+  for (const bad of ["../escape", "with/slash", "Uppercase"]) {
+    const dir = await makePlugin(`
+      export default { id: ${JSON.stringify(bad)}, setup(ctx) { globalThis.__bad_dataDir = () => ctx.dataDir; } };
+    `);
+    const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
+    // 加载本身**成功**：id 只是不能拿来做目录名，不是不能当插件 id 用。校验落在派生路径那一刻，
+    // 于是它炸在插件自己的 `ctx.dataDir` 上，而不是把整站启动拖下水（`loadAll()` 没有 try/catch）。
+    await mgr.load(dir);
+
+    const accessor = globalThis.__bad_dataDir;
+    assert.ok(accessor, "fixture 必须挂上访问器探针");
+    assert.throws(accessor, /不能用作数据目录名/, `id=${bad}`);
+    delete globalThis.__bad_dataDir;
+    await mgr.unloadAll();
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  // 三次尝试一个目录都没建出来 —— 「不创建任何东西」是这条用例的正题，
+  // 否则非法 id 就会在数据根外面留下目录（穿越成功的实证）。
+  assert.equal(existsSync(dataRoot), false, "非法 id 不得创建任何目录");
 });

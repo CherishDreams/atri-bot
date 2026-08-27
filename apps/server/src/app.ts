@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { createLogger } from "./core/logger.ts";
 import { AgentEngine } from "./core/agent/engine.ts";
 import { SessionManager } from "./core/session/manager.ts";
@@ -36,7 +37,11 @@ export async function createApp(config: AppConfig) {
   // 所以在这里就投影成白名单视图（理由见 `plugins/manager.ts` 的 `PluginRuntimeConfig`）。
   // 构造提前到工具之前：`list_plugins` 那颗工具要从这里拿实时视图（构造只是存两个字段，
   // 真正的扫描仍在下面 `plugins.loadAll()` 那一步）。
-  const plugins = new PluginManager(pluginRuntimeConfig(config), logger);
+  const plugins = new PluginManager(pluginRuntimeConfig(config), logger, {
+    // 插件数据的根。与 `dataDir` 本体分开交出去：插件只能经 `ctx.dataDir` 看到
+    // `<dataDir>/plugins/<自己的 id>`，拿不到根，也拿不到那下面的 `sessions.sqlite`。
+    dataRoot: join(config.dataDir, "plugins"),
+  });
 
   // 工具：注册表只管存在与执行，启用与否每次现读文件（见 `core/tool/store.ts`），
   // 所以控制台改完开关不需要重建任何东西 —— 也没有可重建的长驻状态。

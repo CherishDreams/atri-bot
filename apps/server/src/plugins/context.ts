@@ -1,3 +1,5 @@
+import { chmodSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type { Logger } from "#core/logger.ts";
 import type { PluginInfo } from "@atri/shared";
 import { errorMessage } from "#core/errors.ts";
@@ -29,7 +31,26 @@ export interface PluginContextDeps {
    * 传快照等于让每个插件都停留在「自己出生那一刻」看到的插件表上。
    */
   plugins: () => PluginInfo[];
+  /**
+   * 插件数据的根目录（`<config.dataDir>/plugins`）。**框架私有** —— 插件只能经由
+   * `ctx.dataDir` 拿到根目录下**属于它自己那一个**子目录，永远看不到这个根，也看不到
+   * `dataDir` 本体（那里面有 `sessions.sqlite`，交出根就等于把全部对话历史递给磁盘上
+   * 任一段用户手写的 JS）。
+   */
+  dataRoot: string;
 }
+
+/**
+ * 插件数据目录名的形状。**id 会直接成为路径组件**，所以在这里挡住穿越。
+ *
+ * 首字符限定字母数字，于是 `..`、`.`、`/`、`\` 都进不来；长度收到 64 是为了不让一个
+ * 长得离谱的 id 造出一个难以处理的路径。
+ *
+ * 刻意不接受大写：`Foo` 与 `foo` 在大小写不敏感的文件系统（macOS、Windows）上落到同一个
+ * 目录，而在 Linux 上是两个 —— 那意味着同一份插件数据在不同机器上待在不同地方，且开发者
+ * 在自己机器上永远看不见问题。宁可让插件作者改成一个合规的 id。
+ */
+const DATA_DIR_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 interface Registration {
   release: () => Promise<void>;
@@ -52,21 +73,65 @@ export class PluginContext {
   #disposables: Registration[] = [];
   #disposed = false;
   #peers: () => PluginInfo[];
+  #dataRoot: string;
+  #dataDir?: string;
 
   id: string;
   logger: Logger;
   config: PluginContextConfig;
 
-  constructor({ id, logger, config, plugins }: PluginContextDeps) {
+  constructor({ id, logger, config, plugins, dataRoot }: PluginContextDeps) {
     this.id = id;
     this.logger = logger;
     this.config = config;
     this.#peers = plugins;
+    this.#dataRoot = dataRoot;
   }
 
   /** 是否已卸载。卸载后调用 effect 会直接报错，避免泄漏。 */
   get disposed(): boolean {
     return this.#disposed;
+  }
+
+  /**
+   * 这个插件**自己**的数据目录（绝对路径）。首次访问时创建，之后幂等返回同一个值。
+   *
+   * 与插件本体分开存是刻意的：插件目录是用户从上游拷来的代码，升级时会被整个替换、
+   * 重命名时目录名还会变 —— 把数据写在那儿等于写在一条会被覆盖的路上。反过来，数据落在
+   * `<dataDir>/plugins/<id>`，键是插件自己声明的 `id` 而不是磁盘目录名，于是用户重命名
+   * 插件目录不会丢历史（`test/plugins.test.ts` 有专门一条）。
+   *
+   * 三条边界与 `plugins()` 同一个规矩，都不在这一版里扩大：
+   * - 只给**它自己那一个**目录：不给 `dataRoot`、不给 `dataDir` 本体、不给同伴的目录，
+   *   `dataDir` 也仍然**不在** `PluginRuntimeConfig` 那份白名单里。
+   * - 框架从不删它：禁用、卸载、重载、关停都不碰这个目录（整个 `apps/server/src` 里
+   *   没有任何删除文件的调用）。清理是操作者的事，不是 API 的一个分支。
+   * - **惰性创建**：不调用就一次 `mkdir` 都不发生。所以启动不会因为它多碰盘，而建不成
+   *   也只是插件自己 `setup()` 里收到的一句错，不会变成整站起不来
+   *   （`loadAll()` 没有 try/catch，一个插件的错误不该拖垮别人）。
+   *
+   * @throws Error id 不合 `DATA_DIR_NAME`（穿越风险）、或目录创建失败（权限、磁盘）。
+   */
+  get dataDir(): string {
+    // 缓存在实例上没关系：路径由 id 决定，重载换来的新实例算出来的是同一个目录。
+    if (this.#dataDir !== undefined) return this.#dataDir;
+    if (!DATA_DIR_NAME.test(this.id)) {
+      throw new Error(
+        `插件 id "${this.id}" 不能用作数据目录名：只允许小写字母、数字与 . _ -，` +
+          `首字符必须是字母或数字，长度 1–64`,
+      );
+    }
+    const dir = join(this.#dataRoot, this.id);
+    mkdirSync(dir, { recursive: true });
+    try {
+      // 里面可能有 token、缓存与用户数据：与配置文件（`config/file.ts`）、
+      // 会话库（`core/session/db.ts`）同一先例。不支持 POSIX 权限的环境忽略。
+      chmodSync(dir, 0o700);
+    } catch {
+      /* 忽略 */
+    }
+    this.#dataDir = dir;
+    return dir;
   }
 
   /**
