@@ -230,6 +230,8 @@ pnpm start            # 或 node apps/server/src/index.ts
 `sessions.sqlite`（全部对话历史）与 `plugins/<插件 id>/`（各插件自己存的东西，框架不管理内容）。
 口令与各 provider 配置则在 `atri.config.json`。**需要备份的就是这几样**，
 其余（`apps/dashboard/dist`）可由源码重新构建。
+`plugins/` 下**有目录不等于那个插件在跑**：加载失败的插件也留下了它已经写过的数据
+（框架从不删任何东西），是否可用请看控制台的插件页或 `list_plugins`。
 
 - **容器里把 `dataDir` 挂成 volume**，否则重建容器等于清空所有历史。
 - **一个数据目录只跑一个实例。** 同会话串行那把锁是进程内的 `Set`（`core/agent/engine.ts`），
@@ -238,7 +240,11 @@ pnpm start            # 或 node apps/server/src/index.ts
 - **备份用 `sqlite3 <db> ".backup 目标"`，或者先停服再整目录复制。**
   进程开着时只 `cp sessions.sqlite` 会**漏掉 `-wal` 边车里尚未 checkpoint 的消息** ——
   那是真的会丢用户对话，不是理论风险。同理不要手工删 `.sqlite-wal` / `.sqlite-shm`。
-- 库文件权限被收紧到 `0600`（与配置文件同一先例，Windows 上静默忽略）：里面是用户的对话内容。
+- **数据目录被收紧到 `0700`，库文件本身 `0600`**（Windows 等不支持 POSIX 权限的环境静默忽略）。
+  挡住对话内容的是**目录**：WAL 模式下最近的写入躺在 `sessions.sqlite-wal` 里，那个边车由
+  SQLite 按 umask 创建、并在每次 checkpoint 后重建，逐文件收紧追不上它。已有目录也会在每次
+  启动时被重新 `chmod`（升级路径上你原来那个 `data/` 可能是 `0755`）。挂 volume 时权限跟着走，
+  所以容器里不必额外处理，但**别把 `dataDir` 指到一个共享目录**上。
 - 库损坏或打不开时服务端**启动即失败**并打印路径与一句自救提示，不会降级成「历史没了但还能跑」——
   那样下一次写入就会落在一个我们以为是空的库上。
 

@@ -93,7 +93,20 @@ export function openSessionDb(dataDir: string, logger?: Logger): DatabaseSync {
 
   // `node:sqlite` 不创建父目录，否则目录不存在时得到一句 `ERR_SQLITE_CANTOPEN`，
   // 那比「数据目录不存在」难懂得多。
-  mkdirSync(dataDir, { recursive: true });
+  //
+  // 权限收到 0700，而且**必须落在目录上**：库文件自己 chmod 0600 挡不住 WAL 的两个边车 ——
+  // `-wal` / `-shm` 由 SQLite 按 umask 创建，并在每次 checkpoint 后重建，逐文件收紧是一次性的
+  // 假安全感；而 `synchronous = NORMAL` 下 checkpoint 是惰性的，也就是说**最新的、最敏感的
+  // 那批对话内容**会以 0644 躺在磁盘上。目录 0700 之后文件自身的 mode 就无关紧要了
+  // （别人连 stat 都做不到）。`mode` 与 `chmodSync` 两道都要：`mkdir` 的 mode 对**已存在**
+  // 的目录不起作用，也不受 `recursive` 建的中间层继承。
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  try {
+    // 不支持 POSIX 权限的环境忽略即可（照 `config/file.ts` 与 `plugins/context.ts` 的先例）。
+    chmodSync(dataDir, 0o700);
+  } catch {
+    /* 忽略 */
+  }
 
   let db: DatabaseSync;
   try {
@@ -129,7 +142,8 @@ export function openSessionDb(dataDir: string, logger?: Logger): DatabaseSync {
   }
 
   try {
-    // 收紧权限：配置文件是明文密钥，会话库是**用户的对话内容**，理由不同但结论一样。
+    // 收紧库文件本身：主目录已经挡住了 `-wal` / `-shm` 两个边车（见上面那次 chmod），
+    // 这一道是纵深防御，理由与配置文件同构 —— 那里是明文密钥，这里是**用户的对话内容**。
     // Windows 等不支持 POSIX 权限的环境忽略即可（照 `config/file.ts` 的先例）。
     chmodSync(dbPath, 0o600);
   } catch {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Session, SessionDetail, ToolCall } from "@atri/shared";
@@ -368,3 +368,55 @@ test("带工具调用的一轮跨重启后，调用与结果的配对关系仍�
   // `arguments` 是模型产出的原始串，原样往返（`registry.ts` 刻意不解析它）。
   assert.equal(calls[0]?.arguments, '{"timezone":"UTC"}');
 });
+
+/**
+ * 数据目录的权限位：挡住对话内容的是**目录**，不是库文件的 mode。
+ *
+ * 这条用例盯着一个只在磁盘上成立的事实。库文件 chmod 0600 早就有了，但 WAL 模式下
+ * 真正躺着最近内容的是 `sessions.sqlite-wal`，它由 SQLite 按 umask 创建、并在每次
+ * checkpoint 后**重建**（实测 0644）—— 逐文件收紧是追不上它的。`synchronous = NORMAL`
+ * 下 checkpoint 又是惰性的，所以「最新的、最敏感的那批消息」在一段时间里就停在
+ * 一个 0644 的边上。目录 0700 之后别人连 `stat` 都做不到，文件自己的 mode 才变成次要。
+ *
+ * 删掉 `db.ts` 里那次 `chmodSync(dataDir, 0o700)` 会红在这里。
+ */
+test(
+  "数据目录是 0700：WAL 边车靠目录挡住，不靠它自己的 mode",
+  { skip: process.platform === "win32" && "没有 POSIX 权限位，chmodSync 被静默忽略" },
+  async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "atri-data-mode-"));
+    const running: Running[] = [];
+    t.after(async () => {
+      for (const app of running) await app.stop();
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    // **先**把数据目录建成 0755，模拟从内存版/旧版升上来的那台机器：`mkdir` 的 `mode`
+    // 对已存在的目录不起作用，只有紧随的那次 `chmodSync` 会把它收紧。不这么预置的话，
+    // 新目录光靠 `mode: 0o700` 就已经合规，删掉 chmod 也照样绿 —— 那是量了个不存在的东西。
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir, { recursive: true, mode: 0o755 });
+    chmodSync(dataDir, 0o755);
+    assert.equal(
+      statSync(dataDir).mode & 0o777,
+      0o755,
+      "预置的旧目录应当是宽松的，否则这条用例没前提",
+    );
+
+    const app = await startAppOn(root, {});
+    running.push(app);
+
+    // 先证明「这里真的有一个边车」：没有它，下面那句目录断言就是在量一个不存在的东西。
+    const cookie = await login(app.origin);
+    await createSession(app.origin, cookie, "一条写入");
+    const wal = join(dataDir, "sessions.sqlite-wal");
+    assert.ok(
+      existsSync(wal),
+      "WAL 边车应当在写入后存在；它不在，说明这条用例的量法失效了（而不是实现是对的）",
+    );
+
+    assert.equal(statSync(dataDir).mode & 0o777, 0o700, "数据目录必须被收紧到 0700");
+    // 库文件那一道还在（纵深防御，也是本仓既有的先例）。
+    assert.equal(statSync(join(dataDir, "sessions.sqlite")).mode & 0o777, 0o600);
+  },
+);
