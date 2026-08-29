@@ -8,6 +8,10 @@
  * 规格都会悄悄说谎，而 `codegen:check` 只保证「生成物 = 规格」，照样绿。
  * 做这轮迁移时实测就存在两处说谎：`PluginInfo.error` 发 `null` 而规格写 `string`、
  * `ProviderInfo.name` 必填而代码可能不输出（都已在上一轮修掉）。
+ * 前一处当时是**把规格改成 `null`** 来消红的，而没有去问「为什么永远不为 string」——
+ * 根因是 `PluginRecord.error` 从来没有赋值点。现在加载失败会真的写下它，
+ * 所以夹具里预置了一颗必然失败的插件，让 `status: "failed"` 与 `error` 的 string 那一支
+ * 都真的被驱动到（见 `writeBrokenPluginFixture`）。
  *
  * ## 红了怎么办
  * **改 `apps/server/openapi.json`，然后 `pnpm codegen` 并把生成物一起提交。不要改这个测试。**
@@ -273,6 +277,29 @@ function writePluginFixture(pluginsRoot: string, id: string): void {
   );
 }
 
+/**
+ * 一个 `setup()` 必然抛错的插件。
+ *
+ * 它存在的唯一理由：`PluginStatus` 的 `failed` 与 `PluginInfo.error` 的 **string** 那一支
+ * 只在加载失败的记录上出现，不预置就永远检查不到 —— 而规格上一次正是在这里说谎
+ * （发 `null` 被改成「规格就是 null」，根因却没人查）。加载失败也不再中止启动，
+ * 所以这颗插件会让 `createApp` 照常起来。
+ */
+function writeBrokenPluginFixture(pluginsRoot: string, id: string): void {
+  const dir = join(pluginsRoot, id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "index.js"),
+    `export default {\n` +
+      `  id: ${JSON.stringify(id)},\n` +
+      `  name: "形状守卫夹具（起不来）",\n` +
+      `  version: "1.2.3",\n` +
+      `  setup() { throw new Error("形状守卫：这条插件按设计起不来"); },\n` +
+      `};\n`,
+    "utf8",
+  );
+}
+
 interface Harness {
   origin: string;
   cookie: string;
@@ -289,6 +316,7 @@ async function setup(t: TestContext): Promise<Harness> {
   const upstream = await startUpstream();
   const pluginsRoot = join(root, "plugins");
   writePluginFixture(pluginsRoot, "fixture");
+  writeBrokenPluginFixture(pluginsRoot, "fixture-broken");
 
   const app = await createApp(
     makeTestConfig({

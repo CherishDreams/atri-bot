@@ -5,7 +5,7 @@ import type { PluginInfo, PluginStatus } from "@atri/shared";
 import type { Logger } from "#core/logger.ts";
 import type { AppConfig } from "#config/index.ts";
 import { ApiError, errorMessage } from "#core/errors.ts";
-import { PluginContext, type PluginContextConfig } from "./context.ts";
+import { assertPluginDirName, PluginContext, type PluginContextConfig } from "./context.ts";
 
 /**
  * 插件契约（`index.js` 默认导出）：
@@ -74,13 +74,33 @@ export function pluginRuntimeConfig(config: AppConfig): PluginRuntimeConfig {
   return { pluginDirs: [...config.pluginDirs] };
 }
 
-/** 运行时记录：模块之外由框架持有的那一份状态。 */
+/**
+ * 运行时记录：模块之外由框架持有的那一份状态。
+ *
+ * `dir` 是 `#records` 的键，也是**解析后的绝对路径**。用目录而不是插件自报的 id 做键，
+ * 理由有两条，都被「两个目录声明同一个 id」这一对触发：
+ * - 加载可以在拿到 id **之前**就失败（`index.js` 语法错、导出的对象没有 id），那时 id 不存在；
+ * - 以 id 为键时，B 目录一次坏加载会把 A 目录那份**健康**的记录连实例一起顶掉
+ *   （旧版 `load()` 的同 id 预 teardown 就是这个行为），一次失败足够干掉别人。
+ *
+ * 对外的 id 是 `meta.id`，由 `#find()` 反查；键与对外标识分开，才有「失败记录用一个派生
+ * id 对外可见」这种形状（见 `PluginMeta.id`）。
+ */
 interface PluginRecord {
-  id: string;
+  /** 解析后的插件目录绝对路径，同时是 `#records` 的键。 */
   dir: string;
-  plugin: PluginDefinition;
+  /** 插件自报的 id；在拿到它之前就失败时为 `null`。对外的键是 `meta.id`。 */
+  id: string | null;
+  /**
+   * 实例化成功后的定义。**失败记录一定是 `null`** —— 于是 `#teardown()` 绝不会把一个
+   * 从没构造完的实例的 `teardown()` 调出去：插件作者有理由假设它至多跑一次、且只在成功
+   * `setup()` 之后跑。
+   */
+  plugin: PluginDefinition | null;
+  /** 运行期上下文。失败记录一定是 `null`：要么没建，要么建了但在写记录之前已经 dispose。 */
   ctx: PluginContext | null;
   status: PluginStatus;
+  /** 上一次加载失败的可读原因；正常为 `null`。只给操作者，见 `#peers()` 与 `list_plugins`。 */
   error: string | null;
   meta: PluginMeta;
 }
@@ -89,6 +109,13 @@ interface PluginRecord {
 export type PluginView = PluginInfo & { error: string | null };
 
 interface PluginMeta {
+  /**
+   * 对外的 id：插件自报的那个，或者**失败发生在拿到 id 之前**时的目录名（`basename(dir)`）。
+   *
+   * 保持必填而不是 `string | null`：`PluginInfo.id` 是必填（`shared/types.ts`），而 `#view()`
+   * 直接展开 `meta`，线协议上没有「没有 id」这个表达。取目录名而不是绝对路径，是因为
+   * `meta.dir` 本来就是目录名 —— 控制台显示什么就能被回填什么，不给「外传绝对路径」添一把新梯子。
+   */
   id: string;
   name: string;
   version: string;
@@ -114,28 +141,50 @@ export class PluginManager {
 
   config: PluginRuntimeConfig;
   logger: Logger;
-  /** 框架私有的数据根（`<config.dataDir>/plugins`），见 `PluginStorage` 与 `ctx.dataDir`。 */
-  storage: PluginStorage;
+  /** 框架私有的数据根（`<config.dataDir>/plugins`）。私有字段：注释里那句「从不外传」要在类型上成立。 */
+  #storage: PluginStorage;
 
   constructor(config: PluginRuntimeConfig, logger: Logger, storage: PluginStorage) {
     this.config = config;
     this.logger = logger;
-    // 数组与字符串都是引用值，但这里**不需要拷贝**：`pluginDirs` 交出去是因为它会进
-    // `ctx.config`（插件能改），而 `dataRoot` 只用来在框架内部拼路径，从不外传。
-    this.storage = storage;
+    // `dataRoot` 只用来在框架内部拼每个插件自己的目录，永远不进 `ctx.config` 也不进
+    // `shared.config`（见 `PluginStorage` 与 `ctx.dataDir`），所以它是私有字段。
+    this.#storage = storage;
+  }
+
+  /**
+   * 插件可见的那份运行期配置，**每次现拷**。
+   *
+   * 为什么不复用 `this.config`：`pluginDirs` 是数组引用值。浅层展开出来的那份
+   * `{ pluginDirs: [...] }` 里躺着的是同一个数组，插件一次 `push` 就能改到管理器自己在
+   * `loadAll()` 循环里读的那一份 —— 而 `loadAll()` 的循环**正是**在被这个数组驱动。
+   * `pluginRuntimeConfig()` 在装配处拷了一次（挡住「整份 `AppConfig` 递出去」），
+   * 这一处挡的是「拷过的形状又被共享回去」。同一个理由，两个出口，见 AGENTS.md
+   * 「窄的类型标注不等于窄的现实」。
+   */
+  #configForPlugin(): PluginRuntimeConfig {
+    return { pluginDirs: [...this.config.pluginDirs] };
   }
 
   /** 供插件使用的共享能力。 */
   get shared(): PluginShared {
-    return { logger: this.logger, config: this.config };
+    return { logger: this.logger, config: this.#configForPlugin() };
   }
 
   async loadAll(): Promise<void> {
     for (const dir of this.config.pluginDirs) {
       await this.#scanDir(dir);
     }
-    const active = [...this.#records.values()].filter((r) => r.status === "active");
-    this.logger.info(`已加载 ${active.length} 个插件`);
+    const records = [...this.#records.values()];
+    const active = records.filter((r) => r.status === "active").length;
+    const failed = records.filter((r) => r.status === "failed").length;
+    // 两个数进同一句而不是分两行：「加载了几个 / 坏了几个」是一件事的两半，
+    // 分行会被只 grep 一行的部署脚本漏掉。零失败时保持既有那行的形状不变。
+    this.logger.info(
+      failed === 0
+        ? `已加载 ${active} 个插件`
+        : `已加载 ${active} 个插件，${failed} 个加载失败（原因见控制台插件页与上面的 warn）`,
+    );
   }
 
   async #scanDir(dir: string): Promise<void> {
@@ -155,85 +204,168 @@ export class PluginManager {
       const entry = join(pluginDir, "index.js");
       const ok = await stat(entry).catch(() => null);
       if (!ok) continue;
-      await this.load(pluginDir);
+      // **逐条** try/catch，而不是包整圈循环、也不是包在 `loadAll()` 外面：
+      // 后两者都会把「一个插件坏了」变成「它后面那些根本没被看过」。
+      // `load()` 在抛之前已经把这一颗记成 `failed`，所以操作者仍然看得见它，只是不拖垮启动。
+      try {
+        await this.load(pluginDir);
+      } catch (err) {
+        this.logger.warn(`插件加载失败（${name}）: ${errorMessage(err)}`);
+      }
     }
   }
 
-  /** 加载（或重新加载）某个插件目录，返回其对外元数据。 */
+  /**
+   * 加载（或重新加载）某个插件目录，返回其对外元数据。
+   *
+   * 失败时**先写一条 `failed` 记录，再原样重抛**。这里只抛一次，但有两个方向不同的消费者：
+   * `#scanDir()` 逐条吞掉（坏一颗不影响别人启动），而 `reload()` 与
+   * `POST /plugins/:id/reload` 的调用方要拿到异常与原因。给 `load()` 加「安静模式」参数
+   * 会让这两条路径慢慢走散，所以选了「一处更新状态、异常交给调用方决定」的形状。
+   */
   async load(pluginDir: string): Promise<PluginView> {
     const dir = resolve(pluginDir);
-    const module = await this.#importFresh(join(dir, "index.js"));
-    // 插件是用户手写的 JS，模块形状只能在运行时收窄：默认导出优先，
-    // 工厂写法先调用它拿到定义，然后统一由下面的 `!plugin?.id` 守卫把关。
-    const exported: unknown = module.default ?? module;
-    const plugin = (
-      typeof exported === "function" ? await exported(this.shared) : exported
-    ) as PluginDefinition;
-    if (!plugin?.id) {
-      throw new Error(`插件缺少 id: ${dir}`);
-    }
-    const id = plugin.id;
-
-    // 同 id 已在运行则先销毁旧实例，避免重复。
-    const existing = this.#records.get(id);
-    if (existing) await this.#teardown(existing);
-
-    const ctx = new PluginContext({
-      id,
-      logger: this.logger,
-      config: { ...this.config, ...plugin.config },
-      // 传的是闭包而不是 `this.#peers()` 的结果：`load()` 是在 `loadAll()` 的循环里逐个
-      // await 的，此刻后面的插件还没进 `#records`，快照会让先加载的那个永远看不见后加载的。
-      plugins: () => this.#peers(),
-      // 只给根，插件经 `ctx.dataDir` 看到的是根目录下**它自己那一个**子目录；
-      // `dataDir` 本体（里面有 `sessions.sqlite`）始终不外传，理由见 `PluginRuntimeConfig`。
-      dataRoot: this.storage.dataRoot,
-    });
-
+    // 只在我们真的拿到过一个定义之后才填它：失败记录要靠它维持对外的 id 与名字，
+    // 而「导出没有 id」那种失败本来就没有 id 可维持，退回目录名才是对的。
+    let declared: PluginDefinition | null = null;
     try {
-      await plugin.setup?.(ctx);
-    } catch (err) {
-      await ctx.dispose();
-      throw new Error(`插件 ${id} 初始化失败: ${errorMessage(err)}`, { cause: err });
-    }
+      const module = await this.#importFresh(join(dir, "index.js"));
+      // 插件是用户手写的 JS，模块形状只能在运行时收窄：默认导出优先，
+      // 工厂写法先调用它拿到定义，然后统一由下面的 `!plugin?.id` 守卫把关。
+      const exported: unknown = module.default ?? module;
+      const plugin = (
+        typeof exported === "function" ? await exported(this.shared) : exported
+      ) as PluginDefinition;
+      // 消息用目录名而不是 `resolve()` 之后的绝对路径：操作者按目录名辨认插件
+      // （`meta.dir` 就是它，控制台已经在显示），绝对路径在容器里只是一串没人抄的字符。
+      if (!plugin?.id) {
+        throw new ApiError(`插件缺少 id：目录「${basename(dir)}」下的 index.js 没有导出 id`, 400);
+      }
+      const id = plugin.id;
+      // id 会进日志、进 `list_plugins` 的模型可见文本、进 `ctx.dataDir` 的路径组件，
+      // 所以在登记之前就挡一次：含 `\n` 的 id 能伪造日志行，含 `/` 或 `..` 的能穿出数据根目录。
+      // `ctx.dataDir` 里那道校验保留 —— 它是路径拼接的直接防线，不是这里的重复劳动。
+      assertPluginDirName(id);
+      // 从这一行起，失败记录可以沿用插件自报的 id 与名字（被冲突拒掉的那一条也要让操作者
+      // 看得见「是谁、声明了哪个 id」）。上面那道校验已经保证这个 id 拿得出手。
+      declared = plugin;
 
-    const record: PluginRecord = {
-      id,
+      // **另一个目录**声明了同一个 id 就拒绝。id 是 `ctx.dataDir` 的唯一坐标（目录键只用来
+      // 定位槽位），所以两条同 id 的记录会拿到同一个数据目录 —— 后加载的那个因此经框架之手
+      // 读到前一个插件存的 token 与用户数据。这不是沙箱能补救的事，只能不让它发生。
+      // 判据含失败与被禁用的记录（不只是 active）：先到先得是确定的规则，
+      // 「谁活着谁优先」会让同一对插件在重启后互换。
+      const clash = [...this.#records.values()].find(
+        (r) => r.id === id && r.dir !== dir && r.status !== "failed",
+      );
+      if (clash) {
+        throw new ApiError(
+          `插件 id "${id}" 与已加载的插件冲突（目录「${basename(clash.dir)}」已经声明了它）`,
+          400,
+        );
+      }
+
+      // 同一个目录的那一条（重载 / 重新启用）先销毁旧实例；别的目录一律不动。
+      const existing = this.#records.get(dir);
+      if (existing) await this.#teardown(existing);
+
+      const ctx = new PluginContext({
+        id,
+        logger: this.logger,
+        config: { ...this.#configForPlugin(), ...plugin.config },
+        // 传的是闭包而不是 `this.#peers()` 的结果：`load()` 是在 `loadAll()` 的循环里逐个
+        // await 的，此刻后面的插件还没进 `#records`，快照会让先加载的那个永远看不见后加载的。
+        plugins: () => this.#peers(),
+        // 只给根，插件经 `ctx.dataDir` 看到的是根目录下**它自己那一个**子目录；
+        // `dataDir` 本体（里面有 `sessions.sqlite`）始终不外传，理由见 `PluginRuntimeConfig`。
+        dataRoot: this.#storage.dataRoot,
+      });
+
+      try {
+        await plugin.setup?.(ctx);
+      } catch (err) {
+        await ctx.dispose();
+        throw new ApiError(`插件 ${id} 初始化失败: ${errorMessage(err)}`, 400, { cause: err });
+      }
+
+      const record: PluginRecord = {
+        dir,
+        id,
+        plugin,
+        ctx,
+        status: "active",
+        error: null,
+        meta: {
+          id,
+          name: plugin.name ?? id,
+          version: plugin.version ?? "0.0.0",
+          description: plugin.description,
+          dir: basename(dir),
+        },
+      };
+      this.#records.set(dir, record);
+      this.logger.info(`插件已加载: ${id}`);
+      // 直接视图化刚建好的那份记录：`#records.get()` 在类型上可能为空，
+      // 而这里注定存在，握着引用比再查一次更清楚。
+      return this.#view(record);
+    } catch (err) {
+      this.#records.set(dir, this.#failedRecord(dir, errorMessage(err), declared));
+      throw err;
+    }
+  }
+
+  /**
+   * 造一条失败记录。`declared` 是已经拿到的插件定义（拿到 id 之前就失败时为 `null`）：
+   * 有它就把对外的 id 维持成插件自己声明的那个，`reload()` 才按控制台显示的那个 id 找得回来。
+   */
+  #failedRecord(dir: string, reason: string, declared: PluginDefinition | null): PluginRecord {
+    const name = basename(dir);
+    const id = declared?.id || name;
+    return {
       dir,
-      plugin,
-      ctx,
-      status: "active",
-      error: null,
+      id: declared?.id ?? null,
+      plugin: null,
+      ctx: null,
+      status: "failed",
+      error: reason,
       meta: {
         id,
-        name: plugin.name ?? id,
-        version: plugin.version ?? "0.0.0",
-        description: plugin.description,
-        dir: basename(dir),
+        name: declared?.name ?? id,
+        version: declared?.version ?? "0.0.0",
+        ...(declared?.description === undefined ? {} : { description: declared.description }),
+        dir: name,
       },
     };
-    this.#records.set(id, record);
-    this.logger.info(`插件已加载: ${id}`);
-    // 直接视图化刚建好的那份记录：`#records.get()` 在类型上可能为空，
-    // 而这里注定存在，握着引用比再查一次更清楚。
-    return this.#view(record);
   }
 
   /** 重载单个插件：销毁旧实例 -> 重新 import 模块 -> 创建新实例。 */
   async reload(id: string): Promise<PluginView> {
-    const rec = this.#records.get(id);
+    const rec = this.#find(id);
     if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
     this.logger.info(`正在重载插件: ${id}`);
+    return this.#retryLoad(rec);
+  }
+
+  /**
+   * 「重试某条槽位」的唯一实现：`reload()` 与 `setEnabled(id, true)` 都走这里。
+   *
+   * 它**不** catch：`load()` 已经在抛出之前把 `failed` 写进同一个槽位了，所以操作者照旧拿到
+   * 异常与原因，而记录不再谎报 active。旧写法是 `await this.#teardown(rec); return this.load(...)`
+   * 摊在两处，新代码抛错时旧记录仍以 active 留在表里、而它的 ctx 早就 dispose 了 ——
+   * `list()` 与 `list_plugins` 于是双双说谎。
+   */
+  async #retryLoad(rec: PluginRecord): Promise<PluginView> {
     await this.#teardown(rec);
     return this.load(rec.dir);
   }
 
-  /** 卸载单个插件：释放副作用并销毁实例，从管理器中移除。 */
+  /** 卸载单个插件：释放副作用并销毁实例，从管理器中移除。**不删数据目录**（见 `ctx.dataDir`）。 */
   async unload(id: string): Promise<{ id: string; unloaded: boolean }> {
-    const rec = this.#records.get(id);
+    const rec = this.#find(id);
     if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
     await this.#teardown(rec);
-    this.#records.delete(id);
+    // 删的是 `rec.dir` 而不是传进来的 `id`：`#records` 的键已经换成目录（见 `PluginRecord`）。
+    this.#records.delete(rec.dir);
     this.logger.info(`插件已卸载: ${id}`);
     return { id, unloaded: true };
   }
@@ -244,15 +376,17 @@ export class PluginManager {
    * 启用 = 从原目录重新加载。
    */
   async setEnabled(id: string, enabled: boolean): Promise<PluginView> {
-    const rec = this.#records.get(id);
+    const rec = this.#find(id);
     if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
 
     if (enabled) {
       if (rec.status === "active") return this.#view(rec);
-      return this.load(rec.dir);
+      return this.#retryLoad(rec);
     }
 
-    if (rec.status === "disabled") return this.#view(rec);
+    // 已经是 disabled 就原样返回；**failed 也原样返回**：它没有运行期资源可释放，
+    // 把它标成 disabled 只是把诊断信息藏起来，而控制台上那条记录的按钮本来就该是「重载」。
+    if (rec.status !== "active") return this.#view(rec);
     await this.#teardown(rec);
     rec.status = "disabled";
     rec.ctx = null;
@@ -262,10 +396,14 @@ export class PluginManager {
 
   /** 释放一个记录的运行时资源（teardown + 逆序 effect），保留记录本身。 */
   async #teardown(rec: PluginRecord): Promise<void> {
-    try {
-      await rec.plugin.teardown?.();
-    } catch (err) {
-      this.logger.warn(`插件 ${rec.id} teardown 失败: ${errorMessage(err)}`);
+    // `plugin === null` 是「从没构造成功」的类型级事实：没有实例就没有 teardown 可调。
+    // 少了这道守卫，`unload()` 一条失败记录会当场 TypeError。
+    if (rec.plugin) {
+      try {
+        await rec.plugin.teardown?.();
+      } catch (err) {
+        this.logger.warn(`插件 ${rec.meta.id} teardown 失败: ${errorMessage(err)}`);
+      }
     }
     await rec.ctx?.dispose();
   }
@@ -278,8 +416,26 @@ export class PluginManager {
     return import(url);
   }
 
+  /**
+   * 按**对外的 id** 找记录。`meta.id` 就是 `#view()` 交出去的那个 id，所以「控制台与插件看到的
+   * id」和「这里查得到的 id」永远一致，失败记录那个派生出来的 id 也不例外。
+   *
+   * 线性扫描而不是第二份 id→记录的 Map：插件数是个位数，多一份索引就多一处必须同步的真相，
+   * 而这一层没有按 id 高频读的路径（`list()` 才是主用途）。
+   *
+   * 两条记录可以共有同一个 `meta.id`：被冲突拒绝的那一条也带着它自报的 id（这样操作者才看得懂
+   * 失败原因）。那种情况下这里返回**先登记**的那一条 —— 按 id 的 reload/unload/enable 因此都
+   * 落在赢家身上，输家那条 `failed` 记录要等操作者先处理掉赢家才会重新可达。
+   */
+  #find(id: string): PluginRecord | null {
+    for (const rec of this.#records.values()) {
+      if (rec.meta.id === id) return rec;
+    }
+    return null;
+  }
+
   get(id: string): PluginView | null {
-    const rec = this.#records.get(id);
+    const rec = this.#find(id);
     return rec ? this.#view(rec) : null;
   }
 
@@ -303,12 +459,15 @@ export class PluginManager {
    *
    * - `dir`：别的插件的磁盘路径。插件之间需要知道的是「有没有它、它开着吗」，
    *   不是它落在哪个目录。
-   * - `error`：里面可能有 `resolve()` 之后的绝对路径（`load()` 抛的
-   *   `插件缺少 id: ${dir}` 就是这种）。
+   * - `error`：那是**第三方文本** —— 动态 import 的报错、插件自己抛的错都可能带着
+   *   `resolve()` 之后的绝对路径，而同伴插件是另一份用户手写的 JS，不是操作者。
    *
    * 这两个键是给操作者的，走 `list()` → `GET /plugins`。少给而不是「给了也没关系」：
    * 插件是磁盘上用户手写的代码，一条新暴露的键要经过一次人的判断才出去 ——
    * 与 `pluginRuntimeConfig()` 那份配置白名单同一个规矩，测试里用键集合钉住。
+   *
+   * 失败记录也在这里出现，且 `enabled` 为 `false`：同伴需要知道的正是「别声称它的能力可用」，
+   * 而那一个布尔就够了，为什么失败留给操作者。
    */
   #peers(): PluginInfo[] {
     return [...this.#records.values()].map((rec) => ({

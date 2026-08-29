@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Logger } from "#core/logger.ts";
 import type { PluginInfo } from "@atri/shared";
-import { errorMessage } from "#core/errors.ts";
+import { ApiError, errorMessage } from "#core/errors.ts";
 
 /**
  * 传给插件上下文的配置：插件可见的运行期配置（`PluginRuntimeConfig` 那份白名单视图）
@@ -51,6 +51,24 @@ export interface PluginContextDeps {
  * 在自己机器上永远看不见问题。宁可让插件作者改成一个合规的 id。
  */
 const DATA_DIR_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/**
+ * id 能不能直接当目录名用；不能就说清是哪一个约束没满足。
+ *
+ * 抛 `ApiError(..., 400)` 而不是普通 `Error`：这条校验有两个调用点，而两个点想要的形状不同 ——
+ * `PluginManager.load()` 里它决定「这个插件能不能登记」，失败要能以 400 回给控制台而不是 500；
+ * `ctx.dataDir` 里它是路径拼接前的最后一道闸，抛出去由插件自己的 `setup()` 收到。
+ * 一处规则、两个出口，所以写成共享的函数而不是在两处各写一遍正则与文案。
+ */
+export function assertPluginDirName(id: string): void {
+  if (!DATA_DIR_NAME.test(id)) {
+    throw new ApiError(
+      `插件 id "${id}" 不能用作数据目录名：只允许小写字母、数字与 . _ -，` +
+        `首字符必须是字母或数字，长度 1–64`,
+      400,
+    );
+  }
+}
 
 interface Registration {
   release: () => Promise<void>;
@@ -106,21 +124,19 @@ export class PluginContext {
    *   `dataDir` 也仍然**不在** `PluginRuntimeConfig` 那份白名单里。
    * - 框架从不删它：禁用、卸载、重载、关停都不碰这个目录（整个 `apps/server/src` 里
    *   没有任何删除文件的调用）。清理是操作者的事，不是 API 的一个分支。
-   * - **惰性创建**：不调用就一次 `mkdir` 都不发生。所以启动不会因为它多碰盘，而建不成
-   *   也只是插件自己 `setup()` 里收到的一句错，不会变成整站起不来
-   *   （`loadAll()` 没有 try/catch，一个插件的错误不该拖垮别人）。
+   * - **惰性创建**：不调用就一次 `mkdir` 都不发生。所以启动不会因为它多碰盘；而建不成
+   *   时插件的 `setup()` 收到一句错，`PluginManager.load()` 把这一颗记成 `failed` 并继续
+   *   扫下一颗 —— 一颗插件坏了不拖垮别人，这一条由 `#scanDir` 的逐条 try/catch 兑现。
+   *
+   * id 的合规性在 `load()` 就查过一次（`assertPluginDirName`），这里这道**不是重复劳动**：
+   * 它是 `join(#dataRoot, id)` 之前唯一的直接防线，而本类的构造点在框架之外没人管。
    *
    * @throws Error id 不合 `DATA_DIR_NAME`（穿越风险）、或目录创建失败（权限、磁盘）。
    */
   get dataDir(): string {
     // 缓存在实例上没关系：路径由 id 决定，重载换来的新实例算出来的是同一个目录。
     if (this.#dataDir !== undefined) return this.#dataDir;
-    if (!DATA_DIR_NAME.test(this.id)) {
-      throw new Error(
-        `插件 id "${this.id}" 不能用作数据目录名：只允许小写字母、数字与 . _ -，` +
-          `首字符必须是字母或数字，长度 1–64`,
-      );
-    }
+    assertPluginDirName(this.id);
     const dir = join(this.#dataRoot, this.id);
     mkdirSync(dir, { recursive: true });
     try {
@@ -135,12 +151,15 @@ export class PluginContext {
   }
 
   /**
-   * 此刻已加载的插件（**含调用者自己**），按加载顺序。
+   * 此刻已登记的插件（**含调用者自己**，也含上一次加载失败的那些），按加载顺序。
    *
    * 返回的是投影过的 `PluginInfo`：只有 `id` / `name` / `version` / `description` / `enabled`。
-   * 不给 `dir`（别的插件的磁盘路径）也不给 `error`（里面可能带 `resolve()` 之后的绝对路径），
+   * 不给 `dir`（别的插件的磁盘路径）也不给 `error`（那是第三方文本，可能带着绝对路径），
    * 这两条由 `test/plugins.test.ts` 的键集合断言钉住 —— 想多给一个键必须经过一次人的判断，
    * 与 `pluginRuntimeConfig()` 那份配置白名单是同一个规矩。
+   *
+   * 失败的同伴以 `enabled: false` 出现：这正是你需要的那个事实（别声称它的能力可用），
+   * 而「为什么失败」是给操作者的，走 `GET /plugins`。
    */
   plugins(): PluginInfo[] {
     return this.#peers();

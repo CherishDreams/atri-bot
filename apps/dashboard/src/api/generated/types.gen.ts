@@ -223,9 +223,9 @@ export type AdapterInfo = {
 };
 
 /**
- * 插件运行时状态。active=运行中，disabled=已禁用（保留元数据可再启用）。
+ * 插件运行时状态。active=运行中；disabled=操作者关掉的（保留元数据可再启用）；failed=上一次加载抛错了（实例不存在，目录还等着一次重载，重启会重新判定，所以它不落盘）。这三个取值与 packages/shared 的 PluginStatus 是同一份，改一处必须改两处——形状测试只把「实际发出的值 ⊂ 本 enum」这一个方向管住，dashboard 的类型来自这里、server 的类型来自 shared。
  */
-export type PluginStatus = 'active' | 'disabled';
+export type PluginStatus = 'active' | 'disabled' | 'failed';
 
 export type PluginInfo = {
     id: string;
@@ -233,16 +233,19 @@ export type PluginInfo = {
     version?: string;
     description?: string;
     /**
-     * 当前是否在接收事件（等价于 status === "active"）
+     * 当前是否在运行（等价于 status === "active"）。disabled 与 failed 都是 false，两者由 error 是否为 null 区分。
      */
     enabled: boolean;
+    /**
+     * 刻意非 required：`ctx.plugins()` 那份同伴视图里没有这个键（`PluginManager.#peers()` 逐键拼），写进 required 会让规格对那条路径说谎。
+     */
     status?: PluginStatus;
     /**
-     * 插件所在目录名，便于在控制台辨认
+     * 插件所在目录名（不是绝对路径），便于在控制台辨认
      */
     dir?: string;
     /**
-     * 加载失败时的可读原因；正常时为 null
+     * 上一次加载失败的可读原因；正常时为 null。只给操作者：既不进 ctx.plugins() 的同伴视图，也不进 list_plugins 的工具结果（那是发给第三方 provider 的）。
      */
     error?: string | null;
 };

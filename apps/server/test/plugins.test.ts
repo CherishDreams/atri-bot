@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,9 @@ import type { PluginInfo } from "@atri/shared";
 import { PluginManager } from "#plugins/manager.ts";
 import type { PluginView } from "#plugins/manager.ts";
 import type { Logger } from "#core/logger.ts";
+import { ApiError } from "#core/errors.ts";
+import { createApp } from "#app.ts";
+import { makeTestConfig } from "./helpers/config.ts";
 
 /**
  * 插件 fixture 与用例之间的探针都挂在 `globalThis` 上（见各用例里写进磁盘的 `index.js`）。
@@ -15,7 +18,7 @@ import type { Logger } from "#core/logger.ts";
  * 逐个声明类型，而不是给 `globalThis` 开一个索引签名：索引签名会让「探针名拼错」静默
  * 变成 `undefined`，而这些用例的全部价值恰恰是「读到的到底是不是真值」。
  * `declare global` 是纯类型声明、不产出任何 JS，运行时写入这些键的仍然是插件代码本身；
- * 带上 `| undefined` 是因为用例结尾要 `delete` 它们（`delete` 要求操作数可为空）。
+ * 带上 `| undefined` 是因为 `t.after` 要 `delete` 它们（`delete` 要求操作数可为空）。
  */
 declare global {
   /** p2 用它报告自己的 effect 有没有被释放。 */
@@ -28,13 +31,39 @@ declare global {
   var __p6_peers: (() => PluginInfo[]) | undefined;
   /** p7 换目录重载时读回来的那份数据（证明数据目录的键是 id，不是插件目录名）。 */
   var __p7_note: string | undefined;
-  /** 非法 id 的探针：把「访问 `ctx.dataDir`」这个动作交给用例，好断言它抛的是哪一句。 */
-  var __bad_dataDir: (() => string) | undefined;
+  /** 坏插件报告 `setup()` / `teardown()` 各被跑过几次。 */
+  var __p9_setup: number | undefined;
+  var __p9_teardown: number | undefined;
 }
 
-/** 建一个临时插件目录，写入给定源码的 index.js。 */
-async function makePlugin(source: string) {
+/**
+ * 建一个临时插件目录，写入给定源码，并把删除挂到 `t.after` 上。
+ *
+ * 清理**必须**挂在钩子上而不是写在用例体末尾：写在末尾时任何一条先红的断言都会把
+ * 临时目录和 `globalThis` 上的探针留给后面的用例，于是「第二条用例失败」的原因
+ * 其实是第一条的残留。
+ */
+async function makePlugin(t: TestContext, source: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "atri-plugin-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, "index.js"), source, "utf8");
+  return dir;
+}
+
+/**
+ * 在同一个插件根下按**目录名**建一个插件。
+ *
+ * 失败记录的对外 id 就是这个名字（插件没来得及自报 id），所以这些用例要的是可预测的
+ * 目录名，`mkdtemp` 那种随机名证不了这件事。
+ */
+async function makeNamedPlugin(
+  t: TestContext,
+  root: string,
+  name: string,
+  source: string,
+): Promise<string> {
+  const dir = join(root, name);
+  await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "index.js"), source, "utf8");
   return dir;
 }
@@ -57,6 +86,11 @@ function silentLogger(): Logger {
   };
 }
 
+/** 起一个只有管理器的管理器；`pluginDirs` 由调用方决定（`shared.config` 那条用例要读它）。 */
+function makeManager(t: TestContext, pluginDirs: string[] = []) {
+  return new PluginManager({ pluginDirs }, silentLogger(), { dataRoot: useDataRoot(t) });
+}
+
 /**
  * 一座临时的插件数据根，用例结束删掉。
  *
@@ -73,54 +107,72 @@ function useDataRoot(t: TestContext): string {
 /**
  * 只把 `list()` 的返回改成「首项必填」的一层视图。
  *
- * 为什么需要它：有一条断言写成 `assert.equal(mgr.list()[0].status, "disabled")`，
- * 而断言序列在本次迁移中逐字冻结（有快照比对），守卫插不进那一行——`mgr.list()[0]`
- * 是「调用表达式的下标」，TS 的收窄只认引用，连 `assert.ok(mgr.list()[0])` 都帮不到下一行。
- * 这里写的是真实的运行时前提：上一行刚 `load()` 成功并拿到 p4，列表里就是那一个插件。
- * 真的空列表时行为与迁移前一致（TypeError），那条断言照样红。
+ * 为什么需要它：有一条断言写成 `assert.equal(mgr.list()[0].status, "disabled")`，而
+ * `mgr.list()[0]` 是「调用表达式的下标」，TS 的收窄只认引用，连 `assert.ok(mgr.list()[0])`
+ * 都帮不到下一行。这里写的是真实的运行时前提：上一行刚 `load()` 成功并拿到 p4，
+ * 列表里就是那一个插件。真的空列表时行为与迁移前一致（TypeError），那条断言照样红。
  */
 interface PluginManagerView extends PluginManager {
   list(): [PluginView, ...PluginView[]];
 }
 
+/** 取同伴视图里的某一条；找不到就报出「谁不见了」，而不是把 `undefined` 传进后面的断言。 */
+function peerOf(peers: PluginInfo[], id: string): PluginInfo {
+  const found = peers.find((p) => p.id === id);
+  assert.ok(found, `同伴视图里应该有 ${id}`);
+  return found;
+}
+
 test("加载插件并暴露元数据", async (t) => {
-  const dir = await makePlugin(`
+  const dir = await makePlugin(
+    t,
+    `
     export default { id: "p1", name: "插件一", version: "1.2.3", setup() {} };
-  `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
+  `,
+  );
+  const mgr = makeManager(t);
   const info = await mgr.load(dir);
   assert.equal(info.id, "p1");
   assert.equal(info.version, "1.2.3");
   assert.equal(info.status, "active");
   assert.equal(mgr.list().length, 1);
-  await rm(dir, { recursive: true, force: true });
 });
 
 test("卸载插件会释放其 effect", async (t) => {
-  const dir = await makePlugin(`
+  t.after(() => {
+    delete globalThis.__p2_cleaned;
+  });
+  const dir = await makePlugin(
+    t,
+    `
     let cleaned = false;
     export default {
       id: "p2",
       setup(ctx) { ctx.effect(() => { cleaned = true; }, "cleanup"); },
     };
     globalThis.__p2_cleaned = () => cleaned;
-  `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
+  `,
+  );
+  const mgr = makeManager(t);
   await mgr.load(dir);
-  // 守卫：探针的类型是「可能没有」（用例结尾要 delete 它），而下面两行都要把它当函数调用。
-  // 插件确实挂上了它（见上一行 load 的 fixture 源码），没挂上就是 fixture 坏了。
+  // 守卫：探针的类型是「可能没有」（它由插件代码挂上），而下面两行都要把它当函数调用。
+  // 没挂上就是 fixture 坏了。
   assert.ok(globalThis.__p2_cleaned, "p2 的 fixture 必须挂上清理探针");
   // 卸载前副作用未释放
   assert.equal(globalThis.__p2_cleaned(), false);
   await mgr.unload("p2");
   assert.equal(globalThis.__p2_cleaned(), true, "unload 应释放 effect");
   assert.equal(mgr.list().length, 0);
-  delete globalThis.__p2_cleaned;
-  await rm(dir, { recursive: true, force: true });
 });
 
 test("重载插件会销毁旧实例并重新求值代码", async (t) => {
-  const dir = await makePlugin(`
+  t.after(() => {
+    delete globalThis.__p3_loads;
+    delete globalThis.__p3_disposed;
+  });
+  const dir = await makePlugin(
+    t,
+    `
     export default {
       id: "p3",
       version: "1",
@@ -129,55 +181,104 @@ test("重载插件会销毁旧实例并重新求值代码", async (t) => {
         ctx.effect(() => { globalThis.__p3_disposed = (globalThis.__p3_disposed ?? 0) + 1; });
       },
     };
-  `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
+  `,
+  );
+  const mgr = makeManager(t);
   await mgr.load(dir);
   assert.equal(globalThis.__p3_loads, 1);
   await mgr.reload("p3");
   assert.equal(globalThis.__p3_loads, 2, "重载应重新实例化");
   assert.equal(globalThis.__p3_disposed, 1, "重载应先释放旧实例的 effect");
-  delete globalThis.__p3_loads;
-  delete globalThis.__p3_disposed;
-  await rm(dir, { recursive: true, force: true });
 });
 
 test("禁用后再启用可恢复运行", async (t) => {
-  const dir = await makePlugin(`
+  const dir = await makePlugin(
+    t,
+    `
     export default {
       id: "p4",
       setup(ctx) { ctx.effect(() => {}); },
     };
-  `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
-    dataRoot: useDataRoot(t),
-  }) as PluginManagerView;
+  `,
+  );
+  const mgr = makeManager(t) as PluginManagerView;
   await mgr.load(dir);
   const off = await mgr.setEnabled("p4", false);
   assert.equal(off.enabled, false);
   assert.equal(mgr.list()[0].status, "disabled");
   const on = await mgr.setEnabled("p4", true);
   assert.equal(on.status, "active");
-  await rm(dir, { recursive: true, force: true });
 });
 
 test("操作未知插件应报错", async (t) => {
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
+  const mgr = makeManager(t);
   await assert.rejects(() => mgr.reload("nope"), /未知插件/);
   await assert.rejects(() => mgr.unload("nope"), /未知插件/);
+  await assert.rejects(() => mgr.setEnabled("nope", true), /未知插件/);
+  await assert.rejects(() => mgr.setEnabled("nope", false), /未知插件/);
 });
 
 test("工厂形式的插件也被支持", async (t) => {
-  const dir = await makePlugin(`
+  const dir = await makePlugin(
+    t,
+    `
     export default (shared) => ({ id: "p5", name: shared.config ? "有配置" : "无" });
-  `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
+  `,
+  );
+  const mgr = makeManager(t);
   const info = await mgr.load(dir);
   assert.equal(info.id, "p5");
-  await rm(dir, { recursive: true, force: true });
 });
 
-test("ctx.plugins() 是实时投影，且不含 dir 与 error", async (t) => {
-  const dirA = await makePlugin(`
+/**
+ * `shared.config` 与 `ctx.config` 都必须是**每次新拷**的一份。
+ *
+ * 这条用例盯的是「拷过的形状又被共享回去」：`pluginRuntimeConfig()` 在装配处已经拷过一次，
+ * 但 `PluginManager` 若把 `this.config` 原样递出去（旧写法），或者 `ctx.config` 用浅层展开
+ * （`{ ...this.config }` 之后 `pluginDirs` 还是同一个数组），插件一次 `push` 就能改到
+ * 管理器自己在 `loadAll()` 循环里读的那一份 —— 而那个循环正是被这个数组驱动的。
+ * AGENTS.md「窄的类型标注不等于窄的现实」说的就是这种形状。
+ */
+test("shared.config 与 ctx.config 都是副本，插件改不到管理器的配置", async (t) => {
+  const sharedDir = await makePlugin(
+    t,
+    `
+    export default (shared) => {
+      shared.config.pluginDirs.push("/偷来的目录");
+      return { id: "p10", name: "改了共享配置", version: "1", setup() {} };
+    };
+  `,
+  );
+  const ctxDir = await makePlugin(
+    t,
+    `
+    export default {
+      id: "p11",
+      name: "改了上下文配置",
+      version: "1",
+      setup(ctx) { ctx.config.pluginDirs.push("/另一个偷来的目录"); },
+    };
+  `,
+  );
+  const mgr = new PluginManager({ pluginDirs: ["/原样"] }, silentLogger(), {
+    dataRoot: useDataRoot(t),
+  });
+  await mgr.load(sharedDir);
+  await mgr.load(ctxDir);
+
+  assert.deepEqual(mgr.config.pluginDirs, ["/原样"], "插件改 shared.config 不得改到管理器那一份");
+  // `shared` 每次读都该是新的一份：第二次拿到的数组里没有上一个插件 push 进去的东西。
+  assert.deepEqual(mgr.shared.config.pluginDirs, ["/原样"]);
+  assert.notEqual(mgr.shared.config, mgr.config, "shared.config 不能就是管理器那一个对象");
+});
+
+test("ctx.plugins() 是实时投影，键集合由白名单钉住", async (t) => {
+  t.after(() => {
+    delete globalThis.__p6_peers;
+  });
+  const dirA = await makePlugin(
+    t,
+    `
     export default {
       id: "p6a",
       name: "会看同伴",
@@ -187,11 +288,15 @@ test("ctx.plugins() 是实时投影，且不含 dir 与 error", async (t) => {
         globalThis.__p6_peers = () => ctx.plugins();
       },
     };
-  `);
-  const dirB = await makePlugin(`
+  `,
+  );
+  const dirB = await makePlugin(
+    t,
+    `
     export default { id: "p6b", name: "后到的", version: "0.1.0", setup() {} };
-  `);
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot: useDataRoot(t) });
+  `,
+  );
+  const mgr = makeManager(t);
   await mgr.load(dirA);
 
   const peers = globalThis.__p6_peers;
@@ -210,35 +315,67 @@ test("ctx.plugins() 是实时投影，且不含 dir 与 error", async (t) => {
     "运行期新加载的插件必须立刻可见",
   );
 
-  const late = peers().find((p) => p.id === "p6b");
-  assert.equal(late?.name, "后到的");
-  assert.equal(late?.version, "0.1.0");
-  assert.equal(late?.enabled, true);
+  const late = peerOf(peers(), "p6b");
+  assert.equal(late.name, "后到的");
+  assert.equal(late.version, "0.1.0");
+  assert.equal(late.enabled, true);
   // `enabled` 投影自运行期 status（`#peers()`），所以禁用会立刻反映到同伴视图上。
   await mgr.setEnabled("p6b", false);
-  assert.equal(peers().find((p) => p.id === "p6b")?.enabled, false);
+  assert.equal(peerOf(peers(), "p6b").enabled, false);
 
-  // 投影的边界。这是「新增一条可见键必须经过一次人的判断」的可执行形式：同伴的磁盘路径
-  // 与加载失败原因不交给插件 —— 后者可能带着 `resolve()` 之后的绝对路径。
-  // `dataDir` 也在这一列：每个插件只有**自己**那一个数据目录，谁都不该看见别人的在哪。
-  for (const p of peers()) {
-    assert.ok(!("dir" in p), "不该把别的插件的目录交给插件");
-    assert.ok(!("error" in p), "不该把加载失败原因交给插件");
-    assert.ok(!("dataDir" in p), "不该把数据目录交给插件去看同伴的");
-  }
-  // 键是逐个拼出来的而不是 `...meta`：没声明 description 的那个连这个键都不该有。
-  assert.equal(peers().find((p) => p.id === "p6a")?.description, "把 ctx.plugins 交给用例");
-  assert.ok(!("description" in (peers().find((p) => p.id === "p6b") ?? {})));
+  // 投影的边界。这是「新增一条可见键必须经过一次人的判断」的可执行形式。
+  // **键集合相等**而不是「不含 dir / error / dataDir」那种缺席式断言：后者对**新增**的键
+  // 完全不红（把 `dir` 改名成 `path`、或多给一条 `dataRoot` 都照样绿），而 AGENTS.md 明令
+  // 禁止用黑名单去列「不该看到的键」—— 秘密会换名字、会新增，黑名单每一次都迟到。
+  const KEYS = ["enabled", "id", "name", "version"];
+  const KEYS_WITH_DESCRIPTION = [...KEYS, "description"].toSorted();
+  assert.deepEqual(Object.keys(peerOf(peers(), "p6a")).toSorted(), KEYS_WITH_DESCRIPTION);
+  assert.deepEqual(Object.keys(peerOf(peers(), "p6b")).toSorted(), KEYS);
+  // 没声明 description 的那个连这个键都不该有（键是逐个拼出来的，不是 `...meta`）。
+  assert.ok(!("description" in peerOf(peers(), "p6b")));
 
   await mgr.unloadAll();
-  delete globalThis.__p6_peers;
-  await rm(dirA, { recursive: true, force: true });
-  await rm(dirB, { recursive: true, force: true });
+});
+
+test("加载失败的插件也在同伴视图里，且 enabled 为 false", async (t) => {
+  t.after(() => {
+    delete globalThis.__p6_peers;
+  });
+  const dirA = await makePlugin(
+    t,
+    `
+    export default {
+      id: "p6a",
+      name: "会看同伴",
+      version: "1.0.0",
+      setup(ctx) { globalThis.__p6_peers = () => ctx.plugins(); },
+    };
+  `,
+  );
+  const broken = await makePlugin(
+    t,
+    `
+    export default { id: "p6c", name: "起不来", version: "1", setup() { throw new Error("坏了"); } };
+  `,
+  );
+  const mgr = makeManager(t);
+  await mgr.load(dirA);
+  await assert.rejects(() => mgr.load(broken));
+
+  const peers = globalThis.__p6_peers;
+  assert.ok(peers, "p6a 的 fixture 必须挂上同伴视图探针");
+  // 同伴需要知道的正是「别声称它的能力可用」，而那一个布尔就够了 —— 为什么失败留给操作者，
+  // 所以这一条在 `#peers()` 里也**不带** error 键（键集合与健康的同伴一致）。
+  const bad = peerOf(peers(), "p6c");
+  assert.equal(bad.enabled, false);
+  assert.deepEqual(Object.keys(bad).toSorted(), ["enabled", "id", "name", "version"]);
 });
 
 test("ctx.dataDir 惰性创建，路径由 id 决定", async (t) => {
   const dataRoot = useDataRoot(t);
-  const writer = await makePlugin(`
+  const writer = await makePlugin(
+    t,
+    `
     import { writeFileSync } from "node:fs";
     export default {
       id: "p7",
@@ -246,10 +383,14 @@ test("ctx.dataDir 惰性创建，路径由 id 决定", async (t) => {
         writeFileSync(ctx.dataDir + "/note.json", "第一份");
       },
     };
-  `);
-  const idle = await makePlugin(`
+  `,
+  );
+  const idle = await makePlugin(
+    t,
+    `
     export default { id: "p8", setup() {} };
-  `);
+  `,
+  );
 
   const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
   await mgr.load(writer);
@@ -265,18 +406,21 @@ test("ctx.dataDir 惰性创建，路径由 id 决定", async (t) => {
   assert.equal(existsSync(join(dataRoot, "p8")), false, "没访问就不该建目录");
 
   await mgr.unloadAll();
-  delete globalThis.__p7_note;
-  await rm(writer, { recursive: true, force: true });
-  await rm(idle, { recursive: true, force: true });
 });
 
 test("卸载与换目录都不丢数据：目录的键是 id，不是插件所在的目录名", async (t) => {
+  t.after(() => {
+    delete globalThis.__p7_note;
+  });
   const dataRoot = useDataRoot(t);
   const note = join(dataRoot, "p7", "note.json");
-  const first = await makePlugin(`
+  const first = await makePlugin(
+    t,
+    `
     import { writeFileSync } from "node:fs";
     export default { id: "p7", setup(ctx) { writeFileSync(ctx.dataDir + "/note.json", "第一份"); } };
-  `);
+  `,
+  );
   const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
   await mgr.load(first);
   assert.equal(readFileSync(note, "utf8"), "第一份");
@@ -287,13 +431,16 @@ test("卸载与换目录都不丢数据：目录的键是 id，不是插件所�
   assert.ok(existsSync(note), "卸载不得删插件数据");
 
   // 用户把插件挪进别的目录 / 改了目录名，id 不变 → 数据还在原地等着它。
-  const moved = await makePlugin(`
+  const moved = await makePlugin(
+    t,
+    `
     import { readFileSync } from "node:fs";
     export default {
       id: "p7",
       setup(ctx) { globalThis.__p7_note = readFileSync(ctx.dataDir + "/note.json", "utf8"); },
     };
-  `);
+  `,
+  );
   await mgr.load(moved);
   assert.equal(globalThis.__p7_note, "第一份", "数据跟着 id 走，与插件目录名无关");
 
@@ -304,33 +451,275 @@ test("卸载与换目录都不丢数据：目录的键是 id，不是插件所�
   assert.equal(globalThis.__p7_note, "第一份", "重新启用后读到的还是同一份数据");
 
   await mgr.unloadAll();
-  delete globalThis.__p7_note;
-  await rm(first, { recursive: true, force: true });
-  await rm(moved, { recursive: true, force: true });
 });
 
-test("id 不能当路径用时抛中文错，且不创建任何东西", async (t) => {
+test("id 不能当路径用时拒绝加载，且不创建任何东西", async (t) => {
+  t.after(() => {
+    delete globalThis.__p9_setup;
+  });
   const dataRoot = useDataRoot(t);
   // `../escape` 是路径穿越，`with/slash` 会多出层级，`Uppercase` 在大小写不敏感的文件系统上
   // 会与 `uppercase` 撞同一个目录、在 Linux 上却不撞 —— 三者都不能直接做目录名。
   for (const bad of ["../escape", "with/slash", "Uppercase"]) {
-    const dir = await makePlugin(`
-      export default { id: ${JSON.stringify(bad)}, setup(ctx) { globalThis.__bad_dataDir = () => ctx.dataDir; } };
-    `);
+    const dir = await makePlugin(
+      t,
+      `
+      export default { id: ${JSON.stringify(bad)}, setup(ctx) { globalThis.__p9_setup = 1; } };
+    `,
+    );
     const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
-    // 加载本身**成功**：id 只是不能拿来做目录名，不是不能当插件 id 用。校验落在派生路径那一刻，
-    // 于是它炸在插件自己的 `ctx.dataDir` 上，而不是把整站启动拖下水（`loadAll()` 没有 try/catch）。
-    await mgr.load(dir);
+    // id 会**直接成为** `<dataDir>/plugins/<id>` 的路径组件，所以它在登记那一刻就被拒，
+    // 而不是等插件自己去碰 `ctx.dataDir` 才发现：后者意味着一份 id 不合规的插件已经进了
+    // 登记表、进了日志、进了 `list_plugins` 给模型看的文本（含 `\n` 的 id 还能伪造日志行）。
+    await assert.rejects(() => mgr.load(dir), /不能用作数据目录名/, `id=${bad}`);
 
-    const accessor = globalThis.__bad_dataDir;
-    assert.ok(accessor, "fixture 必须挂上访问器探针");
-    assert.throws(accessor, /不能用作数据目录名/, `id=${bad}`);
-    delete globalThis.__bad_dataDir;
+    // 被拒的那一颗记为 failed，`setup()` 一次都没跑，而且列表里就只有它。
+    assert.equal(globalThis.__p9_setup, undefined, "id 被拒时不得跑 setup()");
+    const [failed] = mgr.list();
+    assert.equal(mgr.list().length, 1);
+    assert.equal(failed?.status, "failed");
+
     await mgr.unloadAll();
-    await rm(dir, { recursive: true, force: true });
   }
 
   // 三次尝试一个目录都没建出来 —— 「不创建任何东西」是这条用例的正题，
   // 否则非法 id 就会在数据根外面留下目录（穿越成功的实证）。
   assert.equal(existsSync(dataRoot), false, "非法 id 不得创建任何目录");
+});
+
+test("setup() 抛错：记为 failed、load() 仍抛，而失败的实例不会被调 teardown", async (t) => {
+  t.after(() => {
+    delete globalThis.__p9_setup;
+    delete globalThis.__p9_teardown;
+  });
+  const dir = await makePlugin(
+    t,
+    `
+    export default {
+      id: "p9",
+      name: "起不来",
+      version: "2.0.0",
+      setup() {
+        globalThis.__p9_setup = (globalThis.__p9_setup ?? 0) + 1;
+        throw new Error("缺少一个环境变量");
+      },
+      teardown() {
+        globalThis.__p9_teardown = (globalThis.__p9_teardown ?? 0) + 1;
+      },
+    };
+  `,
+  );
+  const mgr = makeManager(t);
+  await assert.rejects(
+    () => mgr.load(dir),
+    // 400 而不是 500：磁盘上的一颗插件坏了是「这次没加载成功，原因是…」，
+    // 而 `POST /plugins/{id}/reload` 的规格里声明的是 400/401/404，没有 500 这一档。
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, `应是 ApiError，实际是 ${String(err)}`);
+      assert.equal(err.status, 400);
+      assert.match(err.message, /插件 p9 初始化失败/);
+      // 包装必须带 cause：不带的话堆栈里就丢了插件原始那一句，排查变成猜。
+      assert.ok(err.cause instanceof Error, "必须带上插件抛出的原始错误");
+      assert.match(err.cause.message, /缺少一个环境变量/);
+      return true;
+    },
+  );
+  assert.equal(globalThis.__p9_setup, 1);
+  // 从没构造完的实例不该被宣布存在过：插件作者有理由假设 `teardown()` 至多跑一次、
+  // 且只在成功 `setup()` 之后跑。
+  assert.equal(globalThis.__p9_teardown, undefined, "失败的实例不该被调 teardown()");
+
+  const [failed] = mgr.list();
+  assert.equal(mgr.list().length, 1, "失败记录也要在登记表里，否则操作者看不见");
+  assert.equal(failed?.status, "failed");
+  assert.equal(failed?.enabled, false);
+  assert.equal(failed?.id, "p9", "拿到过 id，对外的 id 就该是它（reload 找得回来）");
+  assert.match(failed?.error ?? "", /缺少一个环境变量/, "失败原因给操作者");
+});
+
+test("模块求值就坏的插件记为 failed，对外的 id 退回目录名", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atri-plugin-scan-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const boom = await makeNamedPlugin(
+    t,
+    root,
+    "boom",
+    `
+    throw new Error("模块求值就炸");
+    export default { id: "boom" };
+  `,
+  );
+  const noid = await makeNamedPlugin(
+    t,
+    root,
+    "noid",
+    `
+    export default { name: "没有 id 的插件" };
+  `,
+  );
+  const mgr = makeManager(t);
+
+  await assert.rejects(() => mgr.load(boom));
+  const [bad1] = mgr.list();
+  assert.equal(bad1?.status, "failed");
+  assert.equal(bad1?.id, "boom", "没拿到过 id → 用目录名顶上，线协议里没有「没有 id」这个表达");
+  assert.equal(bad1?.dir, "boom");
+
+  await assert.rejects(() => mgr.load(noid), /插件缺少 id：目录「noid」/);
+  const noidView = mgr.list().find((p) => p.id === "noid");
+  assert.equal(noidView?.status, "failed");
+  // 消息里是目录名而不是 `resolve()` 之后的绝对路径：操作者按目录名辨认插件，
+  // 而这一句还会流经 `list()` → 控制台。
+  assert.doesNotMatch(noidView?.error ?? "", /tmp/, "失败原因里不该有绝对路径");
+});
+
+test("坏插件不拖垮启动：同一根下 good 是 active、broken 是 failed", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atri-plugin-mixed-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const pluginsRoot = join(root, "plugins");
+  await mkdir(pluginsRoot, { recursive: true });
+  await makeNamedPlugin(
+    t,
+    pluginsRoot,
+    "good",
+    `export default { id: "good", name: "好的", version: "1", setup() {} };`,
+  );
+  await makeNamedPlugin(
+    t,
+    pluginsRoot,
+    "broken",
+    `export default { id: "broken", name: "坏的", version: "1", setup() { throw new Error("坏了"); } };`,
+  );
+
+  // 走 `createApp` 而不是直接 `mgr.load()`：这条用例的真问题是「一颗坏插件会不会让进程
+  // 退出 1」，而那只发生在装配链上（`app.ts` → `plugins.loadAll()` → `#scanDir`）。
+  const app = await createApp(makeTestConfig({ root, pluginDirs: [pluginsRoot] }));
+  await app.start();
+  t.after(async () => {
+    await app.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const origin = `http://127.0.0.1:${app.address().port}`;
+  const loginRes = await fetch(`${origin}/api/v1/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "pw" }),
+  });
+  assert.equal(loginRes.status, 200);
+  const [cookie] = (loginRes.headers.get("set-cookie") ?? "").split(";");
+
+  const res = await fetch(`${origin}/api/v1/plugins`, { headers: { cookie: cookie ?? "" } });
+  assert.equal(res.status, 200);
+  const { plugins } = (await res.json()) as { plugins: PluginView[] };
+  const byId = new Map(plugins.map((p) => [p.id, p]));
+  assert.equal(byId.get("good")?.status, "active");
+  assert.equal(byId.get("broken")?.status, "failed");
+  assert.equal(byId.get("broken")?.enabled, false);
+  assert.match(byId.get("broken")?.error ?? "", /坏了/);
+});
+
+test("重载失败不再谎报 active：槽位仍是那一个，状态退成 failed", async (t) => {
+  // 中途改写 index.js 之所以安全，是因为 `#importFresh` 带 `?v=${++revision}` 绕开 ESM 的
+  // 模块缓存；否则读者会怀疑是模块缓存导致的 flake。
+  const dir = await makePlugin(
+    t,
+    `
+    export default { id: "pr", name: "会被改坏", version: "1", setup() {} };
+  `,
+  );
+  const mgr = makeManager(t);
+  await mgr.load(dir);
+  assert.equal(mgr.list()[0]?.status, "active");
+
+  await writeFile(
+    join(dir, "index.js"),
+    `
+    export default { id: "pr", name: "会被改坏", version: "1", setup() { throw new Error("新代码坏了"); } };
+  `,
+  );
+  await assert.rejects(() => mgr.reload("pr"), /新代码坏了/);
+  assert.equal(mgr.list().length, 1, "重载不得留下第二个槽位（键是目录）");
+  const broken = mgr.list()[0];
+  assert.equal(broken?.status, "failed", "旧实例已销毁，记录不能再声称 active");
+  assert.equal(broken?.enabled, false);
+
+  await writeFile(
+    join(dir, "index.js"),
+    `
+    export default { id: "pr", name: "会被改坏", version: "1", setup() {} };
+  `,
+  );
+  const back = await mgr.reload("pr");
+  assert.equal(back.status, "active");
+  assert.equal(back.error, null, "加载成功后失败原因要清掉");
+  assert.equal(mgr.list().length, 1);
+});
+
+test("failed 记录可卸载、可停用（不隐藏诊断），且不影响 unloadAll 与关停", async (t) => {
+  const dir = await makePlugin(
+    t,
+    `
+    export default { id: "pf", name: "起不来", version: "1", setup() { throw new Error("坏了"); } };
+  `,
+  );
+  const mgr = makeManager(t);
+  await assert.rejects(() => mgr.load(dir));
+  assert.equal(mgr.list()[0]?.status, "failed");
+
+  // 停用一条失败记录：它没有运行期资源可释放，标成 disabled 只会把诊断藏起来。
+  const off = await mgr.setEnabled("pf", false);
+  assert.equal(off.status, "failed", "failed 不该被改成 disabled");
+  assert.match(off.error ?? "", /坏了/, "原因要留着");
+
+  // 卸载它不该 TypeError（`#teardown` 对没构造出来的实例要跳过）。
+  await mgr.unload("pf");
+  assert.equal(mgr.list().length, 0);
+
+  await assert.rejects(() => mgr.reload("pf"), /未知插件/, "卸载后按 id 找不回来");
+  await mgr.unloadAll();
+});
+
+test("两个目录声明同一个 id 时，后来那个被拒绝 —— 数据目录不共享", async (t) => {
+  const dataRoot = useDataRoot(t);
+  const victim = await makePlugin(
+    t,
+    `
+    import { writeFileSync } from "node:fs";
+    export default {
+      id: "shared",
+      name: "受害者",
+      version: "1",
+      setup(ctx) { writeFileSync(ctx.dataDir + "/secret.json", "受害者的第三方 token"); },
+    };
+  `,
+  );
+  const hijacker = await makePlugin(
+    t,
+    `
+    export default { id: "shared", name: "劫持者", version: "1", setup() {} };
+  `,
+  );
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
+  await mgr.load(victim);
+
+  // `ctx.dataDir` 的路径就是 `<dataRoot>/<id>`，id 又是插件**自报**的：不拒绝第二次声明，
+  // 框架就会把 A 存的 token、缓存与用户数据所在的目录**主动递给** B —— 那正是
+  // AGENTS.md「信任边界只有一条：插件」要挡住的那条默认路径（不是插件自己去发现的）。
+  await assert.rejects(() => mgr.load(hijacker), /插件 id "shared" 与已加载的插件冲突/);
+
+  assert.equal(mgr.list().length, 2, "被拒的那一颗也要留一条 failed 记录，让操作者看得见");
+  assert.equal(mgr.list().filter((p) => p.status === "active").length, 1);
+  assert.equal(mgr.list().find((p) => p.name === "劫持者")?.status, "failed");
+  // 受害者还活着，没被顶掉。
+  assert.equal(mgr.list().find((p) => p.name === "受害者")?.status, "active");
+  assert.equal(
+    readFileSync(join(dataRoot, "shared", "secret.json"), "utf8"),
+    "受害者的第三方 token",
+  );
+
+  // 同一个目录重载不受这条拒绝影响（`reload()` 走的就是同目录替换）。
+  const again = await mgr.reload("shared");
+  assert.equal(again.name, "受害者", "按 id 找到的应该是先登记的那一个");
+  assert.equal(again.status, "active");
 });

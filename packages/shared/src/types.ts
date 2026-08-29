@@ -113,8 +113,24 @@ export interface AdapterInfo {
   enabled: boolean;
 }
 
-/** 插件运行时状态。active=运行中，disabled=已禁用（保留元数据可再启用）。 */
-export type PluginStatus = "active" | "disabled";
+/**
+ * 插件运行时状态。取值是**协议键**（它进 `openapi.json` 的 enum、进生成 SDK 的联合类型，
+ * 是机器比对的那一侧），所以与 `ProviderInfo.type` 的 `openai`/`anthropic` 同一口径保持英文。
+ *
+ * - `active`：实例建好了，`setup()` 跑通了。
+ * - `disabled`：操作者关掉的，元数据保留着以便再启用。
+ * - `failed`：**上一次加载抛错了**。它既不是运行中也不是已禁用 —— 实例压根不存在，
+ *   而目录还在磁盘上等一次重载。它是「上一次加载的结果」而不是持久属性：重启会重新扫描、
+ *   重新判定，所以没有任何地方需要把它落盘。
+ *
+ * 与 `error` 取值不选同一个词是刻意的：同一个对象上已经有一个 `error: string | null` 字段，
+ * `status === "error"` 与它并存会让「状态」和「原因」这两件事在 grep 与文档里混成一个词。
+ *
+ * 这三个取值与 `apps/server/openapi.json` 的 `components.schemas.PluginStatus` 是同一份，
+ * **改一处必须改两处** —— 没有任何检查在绑它们：形状测试只把「实际发出的值 ⊂ 规格 enum」
+ * 这一个方向管住，而 dashboard 的类型来自规格、server 的类型来自这里。
+ */
+export type PluginStatus = "active" | "disabled" | "failed";
 export interface PluginInfo {
   id: string;
   name: string;

@@ -156,9 +156,11 @@ test("list_plugins 逐个报告启用状态，且不把失败原因原文外传�
   assert.equal(out.isError, undefined);
   assert.match(out.content, /ok 插件（id: ok）：运行中/);
   assert.match(out.content, /off 插件（id: off）：已禁用/);
-  assert.match(out.content, /bad 插件（id: bad）：已禁用；上次加载失败/);
-  // 失败原因里带着 `resolve()` 之后的绝对路径（`plugins/manager.ts:151`），而工具结果会整段
-  // 发给第三方 provider。模型只需要「别声称这个插件的能力可用」，原因是给操作者看的。
+  // `error` 先判，所以失败的那条说「上次加载失败」而不是「已禁用」——
+  // 后者会把「它坏了」说成「操作者关掉了它」，模型据此会建议用户去开一个根本起不来的插件。
+  assert.match(out.content, /bad 插件（id: bad）：上次加载失败/);
+  // 失败原因原文里带着绝对路径，而工具结果会整段发给第三方 provider。模型只需要
+  // 「别声称这个插件的能力可用」，原因是给操作者看的（`GET /plugins` 那侧）。
   assert.doesNotMatch(out.content, /\/home\/atri/);
 });
 

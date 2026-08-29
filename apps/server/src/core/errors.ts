@@ -11,12 +11,18 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** 需要回给客户端一个明确 HTTP 状态码的错误。 */
+/**
+ * 需要回给客户端一个明确 HTTP 状态码的错误。
+ *
+ * `options` 直通 `Error` 的 `ErrorOptions`，为的是让**包装**捕获到的错误时能带上 `cause`
+ * （AGENTS.md：不带 cause 的话堆栈里就丢了原始错误，排查变成猜）。`Error` 的构造函数本身
+ * 就读 `options.cause`，所以这里不需要自己做任何事。
+ */
 export class ApiError extends Error {
   status: number;
 
-  constructor(message: string, status = 400) {
-    super(message);
+  constructor(message: string, status = 400, options?: ErrorOptions) {
+    super(message, options);
     this.name = "ApiError";
     this.status = status;
   }
