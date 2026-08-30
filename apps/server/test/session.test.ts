@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message, Session, SessionDetail } from "@atri/shared";
 import { SessionManager } from "#core/session/manager.ts";
+import { ApiError } from "#core/errors.ts";
 import { sessionDbPath } from "#core/session/db.ts";
 
 /**
@@ -104,10 +105,20 @@ test("创建、读取并列出会话", (t) => {
   assert.equal(m.list().length, 1);
 });
 
-test("对未知会话追加消息应报错", (t) => {
+test("对未知会话追加消息应报 404，而不是把内部串回给客户端", (t) => {
   const { open } = useStore(t);
   const m: AppendLoose = open();
-  assert.throws(() => m.appendMessage("missing", {}), /未知会话/);
+  // 断言的是**类型与状态码**，不是消息文本：旧写法只 match `/未知会话/`，于是那句话改成
+  // 任何中文都还是绿的，而 `appendMessage` 的 catch 靠它区分「刻意 404」与「存储故障」。
+  assert.throws(
+    () => m.appendMessage("missing", {}),
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, `应是 ApiError，实际是 ${String(err)}`);
+      assert.equal(err.status, 404);
+      assert.equal(err.message, "会话不存在");
+      return true;
+    },
+  );
 });
 
 test("统计消息数量且不泄露消息内容", (t) => {

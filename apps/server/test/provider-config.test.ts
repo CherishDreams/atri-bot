@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Logger } from "#core/logger.ts";
+import { ApiError } from "#core/errors.ts";
 import type { FileConfig, ProviderEntryConfig, ProviderSourceEntryConfig } from "#config/file.ts";
 import {
   MAX_TIMEOUT_MS,
@@ -461,10 +462,30 @@ test("落盘：写到一半失败不会留下半份配置", async () => {
 
 test("落盘：配置文件损坏时拒绝写入，而不是当成空配置覆盖", async () => {
   const root = mkdtempSync(join(tmpdir(), "atri-store-"));
+  // 记录 error 那一条：store 现在把细节**只**写进日志，所以「细节去哪了」是可证的，
+  // 而不是「我们把信息丢了」—— 只断言对外那句固定文案的测试会在有人删掉 logger 调用后照样绿。
+  const logged: string[] = [];
+  const recordingLogger: Logger = {
+    ...quietLogger,
+    error(msg: string) {
+      logged.push(msg);
+    },
+  };
   try {
     writeFileSync(configFilePath(root), "{ 这不是 JSON", "utf8");
-    const store = new ProviderConfigStore({ root }, quietLogger);
-    assert.throws(() => store.createSource({ id: "s" }), /不是合法 JSON/);
+    const store = new ProviderConfigStore({ root }, recordingLogger);
+    assert.throws(
+      () => store.createSource({ id: "s" }),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError, `应是 ApiError，实际是 ${String(err)}`);
+        assert.equal(err.status, 500);
+        // 对外一句固定的中文：这句里**不得**有配置文件绝对路径（`errorMessage` 那条原文有）。
+        assert.equal(err.message, "保存 provider 配置失败，详情见服务端日志");
+        assert.doesNotMatch(err.message, /atri-store|atri\.config\.json/);
+        return true;
+      },
+    );
+    assert.match(logged.join("\n"), /不是合法 JSON/, "真实原因必须留在日志里");
     // 关键：原文件必须原封不动。若被当成空配置写回，用户其它设置就没了。
     assert.equal(readFileSync(configFilePath(root), "utf8"), "{ 这不是 JSON");
   } finally {

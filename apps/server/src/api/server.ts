@@ -134,6 +134,36 @@ export function createHttpServer(deps: HttpDeps) {
    */
   const openStreams = new Set<AbortController>();
 
+  /**
+   * handler 自带 catch 时的唯一出口：**5xx 的原文一律不回客户端**。
+   *
+   * 之前十个 handler 各写一遍 `sendError(res, statusForError(err), errorMessage(err))`，
+   * 而 `statusForError` 对不带 status 的错误给 500 —— 于是存储故障的原始错误
+   * （`core/provider/store.ts` 那句里带着**配置文件的绝对路径**）被原样发出去了，
+   * 与同一个文件里顶层兜底那句「500 的文案固定，细节只在日志」正好相反。
+   * 两处规则相反，说明其中一处本来就该是函数。
+   *
+   * 4xx 仍然原样回：那是使用方问题，消息本身就是给用户的中文说明（「必须提供 content」
+   * 「未知插件」），藏起来只会让人无法自助。
+   */
+  function fail(res: ServerResponse, err: unknown): void {
+    // 响应已经开始写了就没有第二次机会：SSE 与静态托管都在「已经发头」之后还可能抛，
+    // 那时候唯一正确的动作是别再往一个正在成的响应里塞第二个状态码。
+    if (res.headersSent) return;
+    const status = statusForError(err);
+    if (status < 500) {
+      // 4xx 是使用方问题，只记一句：打堆栈会把真正的故障淹掉。
+      logger.warn(`请求被拒绝 (${status}): ${errorMessage(err)}`);
+      sendError(res, status, errorMessage(err));
+      return;
+    }
+    logger.error(`请求处理出错: ${errorStack(err)}`);
+    // 不把内部错误原文回出去：**5xx 一律固定文案**，细节只在日志里。这一条对
+    // `ApiError(…, 500)` 也成立（存储层那句「保存 X 失败，详情见服务端日志」因此只进日志），
+    // 判据不是「这条消息看起来安全」而是「凡是 5xx 都不往外说」—— 后者不需要每次都判断对。
+    sendError(res, 500, "服务器内部错误，详情见服务端日志");
+  }
+
   router.get(`${API_PREFIX}/health`, async (_req, res) => {
     sendJson(res, 200, { ok: true, app: APP_NAME, version: "1.0.0" });
   });
@@ -349,7 +379,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 201, { provider: viewProvider(provider, providerConfig.defaultId) });
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -360,7 +390,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 200, { provider: viewProvider(provider, providerConfig.defaultId) });
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -370,7 +400,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 200, result);
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -390,7 +420,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 201, { source });
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -401,7 +431,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 200, { source });
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -414,7 +444,7 @@ export function createHttpServer(deps: HttpDeps) {
       reloadProviders();
       sendJson(res, 200, result);
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -461,7 +491,7 @@ export function createHttpServer(deps: HttpDeps) {
       const plugin = await plugins.reload(params.id);
       sendJson(res, 200, { plugin });
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -470,7 +500,7 @@ export function createHttpServer(deps: HttpDeps) {
       const result = await plugins.unload(params.id);
       sendJson(res, 200, result);
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -480,7 +510,7 @@ export function createHttpServer(deps: HttpDeps) {
       const result = await plugins.setEnabled(params.id, body.enabled !== false);
       sendJson(res, 200, { plugin: result });
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -509,7 +539,7 @@ export function createHttpServer(deps: HttpDeps) {
       const { enabled } = toolConfig.setEnabled(params.id, body.enabled);
       sendJson(res, 200, { tool: viewTool(tool, enabled) });
     } catch (err) {
-      sendError(res, statusForError(err), errorMessage(err));
+      fail(res, err);
     }
   });
 
@@ -530,18 +560,9 @@ export function createHttpServer(deps: HttpDeps) {
       if (!hit) return serveStatic(req, res, pathname);
       await hit.handler(req, res, hit.params);
     } catch (err) {
-      // 状态码由错误自己带（见 core/errors.ts 的 statusForError），这样「客户端把 JSON
-      // 写坏了」不会再被当成服务端故障回 500。
-      const status = statusForError(err);
-      if (status < 500) {
-        // 4xx 是使用方问题，只记一句：打堆栈会把真正的故障淹掉。
-        logger.warn(`请求被拒绝 (${status}): ${errorMessage(err)}`);
-        if (!res.headersSent) sendError(res, status, errorMessage(err));
-      } else {
-        logger.error(`请求处理出错: ${errorStack(err)}`);
-        // 不把内部错误原文回出去：500 的文案固定，细节只在日志里。
-        if (!res.headersSent) sendError(res, 500, "服务器内部错误");
-      }
+      // 与 handler 自带 catch 走的是同一个出口（见 `fail`）：状态码由错误自己带，
+      // 这样「客户端把 JSON 写坏了」不会被当成服务端故障回 500，而 5xx 的原文也不会出去。
+      fail(res, err);
     }
   });
 

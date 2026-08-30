@@ -436,3 +436,37 @@ test("路由：加载失败（缺源）的条目仍出现在列表里并带上�
   }
   assert.match(entry.error, /未找到/);
 });
+
+/**
+ * 5xx 的原文不回客户端 —— 只在 HTTP 层才成立的那一半。
+ *
+ * `store.ts` 把落盘故障包成 `ApiError(…, 500)` 是单元层面测过的；这里要证的是**响应体**里
+ * 没有配置文件的绝对路径。这条以前是破的：十个 handler 各写一遍
+ * `sendError(res, statusForError(err), errorMessage(err))`，而 `errorMessage` 那句里
+ * 带着 `${this.filePath}`，于是 500 把 `/run/user/…/atri.config.json` 原样发出去了，
+ * 而同一个文件的顶层兜底早就规定了「500 的文案固定、细节只在日志」。
+ */
+test("路由：存储故障回固定文案的 500，不把配置文件的路径回出去", async (t) => {
+  const app = await startApp(t);
+  t.after(() => app.stop());
+  const cookie = await login(app.origin);
+
+  // 启动之后再把配置文件改坏：store 每次写都现读文件，所以这一步必然让下一次写入失败
+  // （它不把坏文件当成空配置，那是更严重的故障）。
+  const broken = "{ 这不是 JSON";
+  writeFileSync(configFilePath(app.root), broken, "utf8");
+
+  const res = await post(app.origin, cookie, "/provider-sources", {
+    id: "probe",
+    type: "openai",
+    baseUrl: "https://example.test/v1",
+  });
+  assert.equal(res.status, 500);
+  // 固定文案，且这一条对「存储层自己包好的那句」也成立：判据是「凡是 5xx 都不往外说」，
+  // 不是「这条消息看起来安全」。后者要求每一次抛错的人都判断对一次。
+  assert.equal(res.body.error, "服务器内部错误，详情见服务端日志");
+  // 整个响应体里都不该出现路径：临时目录名与配置文件名是两个可辨认的记号。
+  assert.doesNotMatch(JSON.stringify(res.body), /atri-routes|atri\.config\.json/);
+  // 坏文件仍在原地，没被「顺手」覆盖掉 —— 覆盖等于把用户的其它设置抹了。
+  assert.equal(readFileSync(configFilePath(app.root), "utf8"), broken);
+});

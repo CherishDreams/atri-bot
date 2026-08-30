@@ -506,7 +506,13 @@ export class ProviderConfigStore {
       });
     } catch (err) {
       if (err instanceof ProviderConfigError) throw err;
-      throw new Error(`写入 ${this.filePath} 失败：${errorMessage(err)}`, { cause: err });
+      // 细节只进日志，不回客户端：`errorMessage(err)` 里带着**配置文件的绝对路径**
+      // （`readConfigFile` / `updateConfigFile` 的错误消息都把它拼进去了），而这个异常会
+      // 一路走到 `api/server.ts` 的 handler。与 `core/tool/store.ts` 同一条纪律，
+      // 也与「SQLite 的错不外传」同一条理由 —— 判据是**出口**：模型与客户端不可信，
+      // 操作者侧的日志与鉴权闸门内的接口可信，所以这里只换掉对外那一句。
+      this.#logger?.error(`写入 ${this.filePath} 失败: ${errorMessage(err)}`);
+      throw new ApiError("保存 provider 配置失败，详情见服务端日志", 500, { cause: err });
     }
   }
 }

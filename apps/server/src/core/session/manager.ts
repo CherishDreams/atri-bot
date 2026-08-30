@@ -236,11 +236,12 @@ export class SessionManager {
    * 落一条消息并刷新会话的 `updatedAt`，两者在同一个事务里。
    *
    * 用 `UPDATE` 的 `changes` 同时完成存在性检查与刷新时间：一次查询两件事，而且天然把
-   * 「会话被并发删除」变成 `changes === 0` → 未知会话。被否掉的写法是先 `SELECT 1`
-   *（两次往返，且两次之间会话可能消失）。
+   * 「会话被并发删除」变成 `changes === 0` → 一句 404「会话不存在」。被否掉的写法是先 `SELECT 1`
+   * 再 `UPDATE`（两次往返，且两次之间会话可能消失）。
    *
    * 上事务的理由：否则「`updatedAt` 刷了、消息没进去」是一个在列表上看得见（会话排到了最新）
-   * 却在历史里查不到的状态 —— 正是 `engine.ts:191` 那句「不要出现只有半边看得见」要挡的东西。
+   * 却在历史里查不到的状态 —— 正是 `AgentEngine.handleMessage` 那句「不要出现只有半边看得见」
+   * 要挡的东西。
    */
   appendMessage(sessionId: string, message: Message): Message {
     const now = new Date().toISOString();
@@ -254,7 +255,7 @@ export class SessionManager {
           now,
           sessionId,
         );
-        if (touched.changes === 0) throw new Error(`未知会话: ${sessionId}`);
+        if (touched.changes === 0) throw new ApiError("会话不存在", 404);
         // `session_id` 绑的是**形参**而不是 `message.sessionId`：这一列是外键落点，
         // 得由被追加到的那个会话决定，而不是由调用方随手带的字段决定。
         this.#run(
@@ -273,12 +274,14 @@ export class SessionManager {
         );
       });
     } catch (err) {
-      // 「未知会话」是被测的行为，原样抛（`session.test.ts` 与引擎都按这句话断言）。
-      if (err instanceof Error && err.message.startsWith("未知会话:")) throw err;
+      // 我们自己刻意抛的那些（现在只有「会话不存在」404）原样出去。
+      // **判据是类型而不是消息文本**：旧写法判 `message.startsWith("未知会话:")`，
+      // 于是有人改了那句术之后，真正的存储故障就会走进这个分支、带着 SQLite 原文回给客户端。
+      if (err instanceof ApiError) throw err;
       // 其余是存储故障（磁盘满、权限、库被外部改坏）。细节只进日志：SQLite 的错里带着
       // **库文件的绝对路径**，不能原样回给客户端 —— 与 `list_plugins` 不外传 error 原文同条理由。
       this.#logger?.error(`写入会话库失败: ${errorMessage(err)}`);
-      throw new ApiError("保存会话失败，详情见服务端日志", 500);
+      throw new ApiError("保存会话失败，详情见服务端日志", 500, { cause: err });
     }
     // 既有语义：返回入参同一个对象（引擎的 `#record` 就是拿它去广播的）。
     return message;

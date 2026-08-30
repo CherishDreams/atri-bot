@@ -144,7 +144,10 @@ export class AgentEngine {
       const userMessage = this.#newMessage(sessionId, { role: "user", content });
       this.sessions.appendMessage(sessionId, userMessage);
       const session = this.sessions.getWithMessages(sessionId);
-      if (!session) throw new Error(`未知会话: ${sessionId}`);
+      // 404 而不是普通 Error：会话可能在预检之后、这一行之前被另一个请求删掉
+      // （`api/server.ts` 的 `sessions.has` 与这里之间必然有窗口），那不是「客户端请求写错了」
+      // 400，也不是服务端故障 500，而是一个说得出名的 404。
+      if (!session) throw new ApiError("会话不存在", 404);
       this.#emit({ type: "message", message: userMessage });
 
       const reply = await this.#runLoop({ session, model, onDelta, onMessage, signal });
