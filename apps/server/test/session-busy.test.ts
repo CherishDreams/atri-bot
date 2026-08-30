@@ -148,3 +148,134 @@ test("同会话并发：非流式与流式都在开流前拿到 409，结束后�
     ],
   );
 });
+
+/**
+ * 客户端在**非流式**那一轮中途走掉时，锁必须跟着释放。
+ *
+ * 这条用例盯的是一个只有两条请求才能现形的故障：非流式端点以前不传 `signal`，
+ * 于是关掉标签页之后那一轮照跑到底，而 `AgentEngine.#running` 是按会话持有的 ——
+ * 症状是「这个会话从此每次发消息都 409」，用户怎么刷新都发不出去，`http.close()` 也救不了
+ * （`openStreams` 以前只装 SSE 控制器）。
+ *
+ * 桩上游按「第一次请求挂住、第二次正常回」设计，收尾时无论成败都放行第一条 ——
+ * 否则实现坏了的时候那条请求还挂着，`app.stop()` 会干等到测试运行器把整条用例掐掉，
+ * 症状就从「红成一句能读的话」变成「莫名其妙超时」。
+ */
+test("非流式端点：客户端中途断开时中断上游并释放会话锁", async (t) => {
+  let markEntered!: () => void;
+  let markAborted!: () => void;
+  const entered = new Promise<void>((resolve) => (markEntered = resolve));
+  const upstreamAborted = new Promise<void>((resolve) => (markAborted = resolve));
+  let seen = 0;
+  // 第一条请求的 response 被扣住不放。收尾时必须放它走：实现**没坏**的时候它会被 abort 掉，
+  // 而实现坏了的时候它还在跑 —— 那时 `app.stop()` 会等一个永远不会回的 upstream。
+  let firstPending: ServerResponse | null = null;
+
+  const upstream = createServer((req: IncomingMessage, res: ServerResponse) => {
+    req.resume();
+    req.on("end", () => {
+      seen += 1;
+      if (seen === 1) {
+        // 第一条：挂住不回，等对端把连接关掉。这一刻就是「客户端已经走了，服务端还不知道」。
+        markEntered();
+        req.on("close", () => markAborted());
+        firstPending = res;
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "答完了" }, finish_reason: "stop" }],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+  const bound = upstream.address();
+  if (bound === null || typeof bound === "string") throw new Error("桩上游未绑定 TCP 端口");
+
+  const root = mkdtempSync(join(tmpdir(), "atri-session-abort-"));
+  const app = await createApp(
+    makeTestConfig({
+      root,
+      providers: {
+        stub: { type: "openai", baseUrl: `http://127.0.0.1:${bound.port}/v1`, models: ["m"] },
+      },
+    }),
+  );
+  await app.start();
+  t.after(async () => {
+    // 顺序就是这条用例的意义所在：先放行可能被扣住的那一条，再停服。
+    if (firstPending && !firstPending.writableEnded && !firstPending.destroyed) {
+      firstPending.writeHead(200, { "content-type": "application/json" });
+      firstPending.end(
+        JSON.stringify({
+          choices: [
+            { message: { role: "assistant", content: "迟到的一答" }, finish_reason: "stop" },
+          ],
+        }),
+      );
+    }
+    await app.stop();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const origin = `http://127.0.0.1:${app.address().port}`;
+  const cookie = await login(origin);
+  const created = await fetch(`${origin}/api/v1/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ title: "断开" }),
+  });
+  const { session } = (await created.json()) as { session: Session };
+  const messagesUrl = `${origin}/api/v1/sessions/${session.id}/messages`;
+  const send = (content: string, signal?: AbortSignal) =>
+    fetch(messagesUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content, model: "m" }),
+      ...(signal ? { signal } : {}),
+    });
+
+  const controller = new AbortController();
+  const abandoned = send("第一条", controller.signal).catch(() => null);
+  await entered;
+  controller.abort();
+  await abandoned;
+
+  // 有界等待：等不到就明说「这一步没发生」，而不是让整条用例挂到测试运行器的超时。
+  //
+  // **这条不是判据**：实测把 `signal` 接回去拿掉，它照样绿 —— 客户端断开时我们这侧的
+  // socket 会被销毁，那一跳连带把上游的请求也关掉了，所以「上游收到 close」在两种实现下
+  // 都成立。真正的判据是下面那句「第二条得到 200」：只有 handler 把 abort 传进
+  // `handleMessage`，引擎才会提前结束、才会把 `#running` 里的这一格还回去。
+  // 留在这里是因为它把故障现场说清楚了（锁没释放时，先看到这条还是先看到那条）。
+  const gotClose = await Promise.race([
+    upstreamAborted.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+  ]);
+  assert.ok(gotClose, "客户端的断开没有传到上游那一跳");
+
+  // 锁还回来了：同会话的第二条得到 200，而不是「这个会话从此每次 409」。
+  //
+  // 这里**必须等**：断开 → provider 那一跳被 abort → 引擎的 `finally` 把这一格还回
+  // `#running`，中间隔着一次 socket 关闭与几个微任务。单独跑本文件时这个窗口从来没被撞上，
+  // 整仓并发跑第一次就撞上了 —— 那是用例的时序假设，不是产品缺陷。409 在这里是「再试一次」
+  // 的信号，失败的定义是「重试到截止仍然是 409」。
+  // 被拒的那几次不会写进历史（引擎在追加用户消息**之前**就返回 409），所以重试不留痕迹。
+  const settled = await retryWhileBusy("第二条");
+  assert.equal(settled.status, 200, "客户端断开不得把会话永久锁死");
+  await settled.body?.cancel();
+
+  /** 撞上 409 就重试，最多 2 秒；返回最后一个响应（200 或截止时的 409）。 */
+  async function retryWhileBusy(content: string) {
+    const deadline = Date.now() + 2_000;
+    for (;;) {
+      const res = await send(content);
+      if (res.status !== 409 || Date.now() >= deadline) return res;
+      await res.body?.cancel();
+      await new Promise((r) => setTimeout(r, 20).unref());
+    }
+  }
+});

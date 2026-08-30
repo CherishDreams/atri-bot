@@ -129,8 +129,11 @@ export function createHttpServer(deps: HttpDeps) {
   const router = new Router();
 
   /**
-   * 进行中的 SSE 流。`server.close()` 会等所有连接自然结束，而流式响应是长连接：
-   * 不主动收尾，关闭就会一直挂到上游超时（实测有客户端开着流时 `stop()` 要等 120s+）。
+   * 进行中的**一轮回复**（SSE 与非流式都往里放），值就是各自的 abort 入口。
+   *
+   * `server.close()` 会等所有连接自然结束，而流式响应是长连接：不主动收尾，关闭就会一直
+   * 挂到上游超时（实测有客户端开着流时 `stop()` 要等 120s+）。非流式端点也要进来，
+   * 否则关停时它不在任何集合里，而它占着的**会话锁**会让下一轮直接 409。
    */
   const openStreams = new Set<AbortController>();
 
@@ -245,18 +248,34 @@ export function createHttpServer(deps: HttpDeps) {
     // 与流式端点一致：会话不存在是 404。以前它被下面的 catch 一并算成 400，
     // 于是「发消息给一个已经被删掉的会话」和「content 写错了」共用同一个状态码。
     if (!sessions.has(params.id)) return sendError(res, 404, "会话不存在");
+    // 客户端断开要能中止这一轮 —— 与流式端点同一个理由，但这里的后果更严重：
+    // 会话锁按会话持有（`AgentEngine.#running`），没人等的轮次跑完之前，用户下一条
+    // 消息只会得到 409；而 `http.close()` 也拦不住它 —— `openStreams` 此前只装 SSE 控制器。
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.on("close", onClose);
+    openStreams.add(controller);
     try {
       const reply = await engine.handleMessage({
         sessionId: params.id,
         content: body.content,
         model: readModel(body),
+        signal: controller.signal,
       });
       sendJson(res, 200, { message: reply });
     } catch (err) {
+      if (controller.signal.aborted) {
+        // 是人走了，不是服务坏了：按服务端故障记一条 error 堆栈会把真问题淹掉。
+        logger.debug(`客户端断开，已中断回复: ${params.id}`);
+        return;
+      }
       // 带 status 的错误自己说话 —— 409「这个会话有一次对话还没结束」就是新加的那一种。
-      // 不直接套 `statusForError`：那会把「已达单轮工具调用步数上限」（`engine.ts:137` 抛的
-      // 一条普通 Error）从 400 升成 500，那是明显的行为退化。
+      // 不直接套 `statusForError`：那会把「已达单轮工具调用步数上限」（引擎在步数耗尽时
+      // 抛的那条普通 Error）从 400 升成 500，那是明显的行为退化。
       sendError(res, err instanceof ApiError ? err.status : 400, errorMessage(err));
+    } finally {
+      res.off("close", onClose);
+      openStreams.delete(controller);
     }
   });
 
