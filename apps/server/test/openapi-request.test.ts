@@ -143,9 +143,14 @@ test("规格声明的必填请求字段，实现真的在拒", async (t) => {
   }
 });
 
-/** 畸形 JSON：规格里这些操作声明了 400，实现不能把它冒成 500。 */
-test("畸形请求体回 400 而不是 500", async (t) => {
-  const h = await start(t);
+/**
+ * 规格里「带 requestBody 且声明了 400」的全部操作。
+ *
+ * 提成一处是因为有两条用例都要它：畸形 **语法** 与非对象 **形状** 走的是同一批端点，
+ * 而两边的判据应该一样硬（少一处就是漏测）。列端点这件事本身由规格给，不在测试里重抄，
+ * 否则新增一个接受 body 的端点就又是靠人记得。
+ */
+function bodyOperations(): { method: string; path: string }[] {
   const ops: { method: string; path: string }[] = [];
   for (const [path, item] of Object.entries(
     SPEC.paths as Record<string, Record<string, unknown>>,
@@ -156,6 +161,13 @@ test("畸形请求体回 400 而不是 500", async (t) => {
       ops.push({ method: method.toUpperCase(), path });
     }
   }
+  return ops;
+}
+
+/** 畸形 JSON：规格里这些操作声明了 400，实现不能把它冒成 500。 */
+test("畸形请求体回 400 而不是 500", async (t) => {
+  const h = await start(t);
+  const ops = bodyOperations();
   assert.ok(
     ops.length >= 8,
     `带 requestBody 且声明 400 的操作只剩 ${ops.length} 个，规格是不是被动过了？`,
@@ -172,6 +184,40 @@ test("畸形请求体回 400 而不是 500", async (t) => {
       const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       assert.equal(res.status, 400, `${method} ${path} 的畸形 JSON 应当是 400，实际 ${res.status}`);
       assert.deepEqual(Object.keys(body), ["error"], "错误体必须是 { error }，不能夹带内部细节");
+    });
+  }
+});
+
+/**
+ * 「合法 JSON 但不是对象」也一样要 400。
+ *
+ * `readJson` 的返回类型声明的是 `Record<string, unknown>`，而 `JSON.parse("null")` 给的就是
+ * `null`：调用方第一处 `body.content` 直接 TypeError → 500「服务器内部错误」。
+ * 那条路径以前没人挡，所以这里逐个端点过一遍四种非对象形状。
+ */
+test("合法的 JSON 但不是对象时回 400，不是 500", async (t) => {
+  const h = await start(t);
+  const bodies = ["null", "[]", "42", '"一个字符串"'];
+  for (const { method, path } of bodyOperations().toSorted((a, b) =>
+    a.path.localeCompare(b.path),
+  )) {
+    await t.test(`${method} ${path}`, async () => {
+      for (const bodyText of bodies) {
+        const url = `${h.origin}/api/v1${path.replace("{id}", "does-not-exist")}`;
+        const res = await fetch(url, {
+          method,
+          headers: { cookie: h.cookie, "content-type": "application/json" },
+          body: bodyText,
+        });
+        const parsed = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        // 500 是这里唯一可接受的错法之外的错法：形状问题在边界上就该说完。
+        assert.equal(
+          res.status,
+          400,
+          `${method} ${path} 收到 ${bodyText} 应当是 400，实际 ${res.status}（${String(parsed.error ?? "")}）`,
+        );
+        assert.deepEqual(Object.keys(parsed), ["error"], "错误体必须是 { error }");
+      }
     });
   }
 });
