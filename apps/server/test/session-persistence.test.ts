@@ -370,6 +370,68 @@ test("带工具调用的一轮跨重启后，调用与结果的配对关系仍�
 });
 
 /**
+ * 分页参数走**真 URL** 的那一段。
+ *
+ * `api/server.ts` 的 `pageOptions()` 把 query 里的字符串变成 `limit: number`，而它以前
+ * 一次也没被 HTTP 测过 —— 单元侧的 `#page()` 断言全绿也挡不住这里 `Number(...)` 被删掉、
+ * 或者 `?before=` 的空串被当成「没传」。更关键的是游标要过一次 URL：`base64url` 的 alphabet
+ * 与 query string 的转义规则（`+` 变空格、`=` 要编码）是本项目里最容易只在真机上坏的一类。
+ */
+test("分页游标经真 URL 逐页拼接：一条不漏、一条不重，非法值一律 400", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atri-page-url-"));
+  const running: Running[] = [];
+  t.after(async () => {
+    for (const app of running) await app.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const app = await startAppOn(root, {});
+  running.push(app);
+  const cookie = await login(app.origin);
+  const titles = ["甲", "乙", "丙"];
+  const created = [];
+  for (const title of titles) created.push(await createSession(app.origin, cookie, title));
+
+  const get = (query: string) =>
+    fetch(`${app.origin}/api/v1/sessions?${query}`, { headers: { cookie } });
+
+  // 逐页翻完：拼接结果必须等于全量，且游标链在 URL 上不断。
+  const seen: string[] = [];
+  let cursor: string | null = null;
+  for (let guard = 0; guard < titles.length + 1; guard += 1) {
+    const res = await get(
+      cursor === null ? "limit=1" : `limit=1&before=${encodeURIComponent(cursor)}`,
+    );
+    assert.equal(res.status, 200, `翻第 ${guard + 1} 页得到 ${res.status}`);
+    const body = await json<{ sessions: Session[]; nextCursor: string | null }>(res);
+    assert.equal(body.sessions.length, 1, "limit=1 就是一条");
+    const [only] = body.sessions;
+    if (!only) throw new Error("空页：游标链断了");
+    seen.push(only.id);
+    cursor = body.nextCursor;
+    if (cursor === null) break;
+  }
+  assert.deepEqual(
+    seen.toSorted(),
+    created.map((s) => s.id).toSorted(),
+    "逐页拼接 == 全量：少一条是漏，多一条是重",
+  );
+  assert.equal(cursor, null, "翻到底要给出 null，而不是继续给同一个游标");
+
+  // 非法值：400 + 标准错误体，不夹取也不当没传。
+  for (const query of ["limit=0", "limit=-1", "limit=abc", "limit=1.5", "limit=501"]) {
+    const res = await get(query);
+    assert.equal(res.status, 400, `${query} 应当被拒`);
+    const body = await json<Record<string, unknown>>(res);
+    assert.deepEqual(Object.keys(body), ["error"]);
+  }
+  for (const query of ["before=%21%21%21", "before=", "before=MTIz"]) {
+    const res = await get(query);
+    assert.equal(res.status, 400, `${query} 应当被当成非法游标`);
+    assert.match(String((await json<{ error: string }>(res)).error), /游标/);
+  }
+});
+
+/**
  * 数据目录的权限位：挡住对话内容的是**目录**，不是库文件的 mode。
  *
  * 这条用例盯着一个只在磁盘上成立的事实。库文件 chmod 0600 早就有了，但 WAL 模式下

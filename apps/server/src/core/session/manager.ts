@@ -66,24 +66,34 @@ export interface MessagePage {
 }
 
 /**
- * 游标 = base64url(`seq` 的十进制)。
+ * 游标属于哪一个序列。**编进游标本身**，而不是只在调用点区分。
+ *
+ * 以前 `GET /sessions` 给的 `nextCursor` 会被 `GET /sessions/:id` 照单收下，然后拿去过滤
+ * **另一条** seq 序列 —— 不报错、不回 400，只是安静地给出一页不相干的消息。两个游标空间
+ * 今天都是表的 rowid，数值上会互相撞对，所以只能靠串里这个标记把它们分开。
+ */
+type CursorKind = "sessions" | "messages";
+
+/**
+ * 游标 = base64url(`<kind>:<seq 的十进制>`)。
  *
  * 不透明而不是裸数字：裸 seq 会把「内部用 `INTEGER PRIMARY KEY` 排序」这件事写进 API 契约，
  * 将来加第二个排序键就是一次破坏性变更，而不透明串只是服务端自己换编解码。
  * 用 base64**url** 而不是标准 base64：游标要过 query string，而 `+` 会被解成空格、`=` 填充
  * 也要命 —— 那是一条只在真机发作的坏路径。
  */
-function encodeCursor(seq: number): string {
-  return Buffer.from(String(seq), "utf8").toString("base64url");
+function encodeCursor(kind: CursorKind, seq: number): string {
+  return Buffer.from(`${kind}:${seq}`, "utf8").toString("base64url");
 }
 
-/** @throws ApiError 400 —— 形状不对、非正整数、超出安全整数范围都是同一句错。 */
-function decodeCursor(raw: string): number {
+/** @throws ApiError 400 —— 形状不对、不属于本序列、非正整数、超出安全整数范围都是同一句错。 */
+function decodeCursor(kind: CursorKind, raw: string): number {
   // 边界收窄：`Buffer.from(..., "base64url")` 对非法字符是**忽略**而不是抛，
-  // 所以解出来的串可以是任何东西，判据只能落在「必须是纯数字」上。
+  // 所以解出来的串可以是任何东西，判据只能落在「必须是 `<kind>:<纯数字>`」上。
   const text = Buffer.from(raw, "base64url").toString("utf8");
-  const seq = Number(text);
-  if (!/^\d+$/.test(text) || !Number.isSafeInteger(seq) || seq <= 0) {
+  const match = /^([a-z]+):(\d+)$/.exec(text);
+  const seq = Number(match?.[2]);
+  if (!match || match[1] !== kind || !Number.isSafeInteger(seq) || seq <= 0) {
     throw new ApiError("before 不是合法的游标", 400);
   }
   return seq;
@@ -173,7 +183,7 @@ export class SessionManager {
     // 先校验分页参数再看资源存不存在：请求形状不对就是 400，与那个会话在不在**无关**。
     // 反过来写会让「未知 id + 非法 limit」回 404，等于用状态码泄露资源存在性，
     // 也让调用方要等到改对 id 之后才发现自己参数拼错。
-    const page = this.#page(opts);
+    const page = this.#page(opts, "messages");
     const row = this.#getOne(SQL_SESSION_WITH_COUNT + " WHERE s.id = ? LIMIT 1", id);
     if (!row) return null;
     const rows = this.#allNamed(
@@ -186,7 +196,7 @@ export class SessionManager {
       // 混合匿名与编号参数（`?` 与 `?1`）会报 `column index out of range`，实测，所以全用命名参数。
       { sid: id, before: page.beforeSeq, limit: page.limit + 1 },
     ) as RawMessageRow[];
-    const { items, nextCursor } = this.#pageOf(rows, page.limit);
+    const { items, nextCursor } = this.#pageOf(rows, page.limit, "messages");
     return {
       detail: { ...this.#toSession(row), messages: items.map((r) => this.#toMessage(r)) },
       nextCursor,
@@ -222,13 +232,13 @@ export class SessionManager {
    * 分页只截断（默认页取最新的一批），截断与改序是两件事。
    */
   list(opts: PageOptions = {}): SessionPage {
-    const page = this.#page(opts);
+    const page = this.#page(opts, "sessions");
     const rows = this.#allNamed(
       SQL_SESSION_WITH_COUNT +
         " WHERE (:before IS NULL OR s.seq < :before) ORDER BY s.seq DESC LIMIT :limit",
       { before: page.beforeSeq, limit: page.limit + 1 },
     ) as SessionRowWithCount[];
-    const { items, nextCursor } = this.#pageOf(rows, page.limit);
+    const { items, nextCursor } = this.#pageOf(rows, page.limit, "sessions");
     return { sessions: items.map((row) => this.#toSession(row)), nextCursor };
   }
 
@@ -314,7 +324,10 @@ export class SessionManager {
    * 全都落进同一条 400 —— 判据是「是不是 1..MAX 的整数」，不是「能不能解析」。
    * `before` 空串也判 400：只有**不传**才表示「从最新处开始」。
    */
-  #page({ limit = DEFAULT_PAGE_SIZE, before }: PageOptions): {
+  #page(
+    { limit = DEFAULT_PAGE_SIZE, before }: PageOptions,
+    kind: CursorKind,
+  ): {
     limit: number;
     beforeSeq: number | null;
   } {
@@ -323,19 +336,20 @@ export class SessionManager {
     }
     return {
       limit,
-      beforeSeq: before === undefined || before === null ? null : decodeCursor(before),
+      beforeSeq: before === undefined || before === null ? null : decodeCursor(kind, before),
     };
   }
 
   /**
    * 把「按 seq 倒序多取一条 → 判有没有更早 → 翻回插入序 → 出游标」收成一处，
-   * 会话列表与消息历史共用同一段逻辑（它们只是两个不同的游标空间）。
+   * 会话列表与消息历史共用同一段逻辑（它们只是两个不同的游标空间，靠 `kind` 分开）。
    *
    * `rows` 必须是 `ORDER BY seq DESC LIMIT limit+1` 取来的。
    */
   #pageOf<T extends { seq: number }>(
     rows: T[],
     limit: number,
+    kind: CursorKind,
   ): { items: T[]; nextCursor: string | null } {
     const hasMore = rows.length > limit;
     const kept = hasMore ? rows.slice(0, limit) : rows;
@@ -344,7 +358,7 @@ export class SessionManager {
       // 游标取**响应里最旧那一行**的 seq，不是被丢掉那一行的：下一页的条件是 `seq < cursor`，
       // 取被丢掉那行会把它自己排除掉、**静默漏一条**。那个 bug 在 UI 上表现为「中间少一句」，
       // 不报错也不重复 —— 只有「逐页拼接 == 全量」那条断言抓得住，所以先写那条测试。
-      nextCursor: hasMore && oldest !== undefined ? encodeCursor(oldest.seq) : null,
+      nextCursor: hasMore && oldest !== undefined ? encodeCursor(kind, oldest.seq) : null,
       // 倒序取、正序给。用 `toReversed()` 而不是 `reverse()`：后者原地改（AGENTS.md 的
       // unicorn/no-array-reverse），而这里的数组还要交出去。
       items: kept.toReversed(),
@@ -438,7 +452,14 @@ export class SessionManager {
       db.exec("COMMIT");
       return result;
     } catch (err) {
-      db.exec("ROLLBACK");
+      // 回滚本身可能失败：SQLite 在某些错误里（实测延迟外键违例之后）已经**自己**终止了
+      // 事务，这时 `ROLLBACK` 抛的是 `cannot rollback - no transaction is active`，
+      // 于是原始那条错误被它盖掉 —— 排查的人看到的是「回滚失败」，真因已经从堆栈顶上消失了。
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        /* 原始错误才是要往上抛的那一个 */
+      }
       throw err;
     }
   }

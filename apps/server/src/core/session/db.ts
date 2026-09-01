@@ -19,19 +19,18 @@ import type { Logger } from "#core/logger.ts";
 /** 库文件名，落在 `config.dataDir` 下。 */
 export const SESSION_DB_NAME = "sessions.sqlite";
 
-/** schema 版本。**只增不改**：`MIGRATIONS[i]` 是把库从 v(i+1) 升到 v(i+2) 的 DDL。 */
-export const SCHEMA_VERSION = 1;
-
 /**
  * 迁移脚本，按版本顺序。**以后改表时的三条规矩**（改任何一条都要连带改这里）：
  *
  * 1. 只往**末尾追加**，绝不修改已有条目 —— 改了就意味着别人机器上那个「已经执行过旧条目」
  *    的库永远不会执行新条目，而 `user_version` 已经跳过去了，症状是运行期某条 SQL 报
  *    `no such column`，离根因极远。
- * 2. 追加的同时把 `SCHEMA_VERSION` 加 1。
- * 3. 迁移必须**纯加性**（`ALTER TABLE ADD COLUMN` / 建新索引）。SQLite 的 `ADD COLUMN` 本身
+ * 2. 迁移必须**纯加性**（`ALTER TABLE ADD COLUMN` / 建新索引）。SQLite 的 `ADD COLUMN` 本身
  *    就要求新列可空或有默认值，这条约束是天然的；「一条事务里 DDL + 数据回填」在本仓
  *    还没有先例，真要动数据时再单独谈。
+ * 3. 加一条迁移**不需要**同时改版本号：`SCHEMA_VERSION` 就是 `MIGRATIONS.length`（见下）。
+ *    版本号以前是手写的，于是「追加了迁移但忘了 +1」会安静地不执行那条 DDL，
+ *    而新代码期望的列不存在 —— 那正是本条要消灭的那类漂移。
  *
  * 条目里不用 `IF NOT EXISTS`：重复执行应当**立刻报错**，而不是静默跳过 —— 后者是
  * `CREATE TABLE IF NOT EXISTS` 一把梭最坏的地方（加列时它什么都不做，新代码期望的列不存在）。
@@ -58,6 +57,15 @@ const MIGRATIONS: readonly string[] = [
 
    CREATE INDEX messages_by_session ON messages (session_id, seq);`,
 ];
+
+/**
+ * schema 版本 = 迁移条目数。**只增不改**：`MIGRATIONS[i]` 是把库从 v(i+1) 升到 v(i+2) 的 DDL。
+ *
+ * 派生而不是写死数字，是为了让「加了一条迁移却忘了改版本」这件事不可能发生：
+ * 那种漏法不会报错，只会让新列静默缺席，等到某条 SQL 撞上 `no such column` 时
+ * 离根因已经隔了一个启动。
+ */
+export const SCHEMA_VERSION = MIGRATIONS.length;
 
 export interface RawSessionRow {
   seq: number;
@@ -136,9 +144,21 @@ export function openSessionDb(dataDir: string, logger?: Logger): DatabaseSync {
     migrate(db);
   } catch (err) {
     // pragma 与 DDL 失败时库句柄必须关掉，否则文件一直被我方占着，用户连「移走文件重建」
-    // 都做不干净。
-    db.close();
-    throw err;
+    // 都做不干净。但**关掉自己的失败不能盖掉真正的原因**：`db.close()` 抛出来会让堆栈里
+    // 只剩一条与故障无关的 SQLite 错，所以它单独吞。
+    try {
+      db.close();
+    } catch {
+      /* 已经有一句更要紧的错要往上抛了 */
+    }
+    // 包成中文是刻意的：这是本文件最后一处「原文直接往外走」的出口，而 pragma/DDL 的原文是
+    // 英文、且带着库文件的绝对路径。它最终会落到启动日志与进程退出消息里，也可能被
+    // `appendMessage` 的存储故障分支带进响应 —— 两种落点都不该出现 SQLite 的英文术语。
+    throw new Error(
+      `会话库初始化失败 ${dbPath}：${errorMessage(err)}` +
+        `（可用 \`sqlite3 ${dbPath} ".integrity"\` 检查这个库）`,
+      { cause: err },
+    );
   }
 
   try {
@@ -181,7 +201,14 @@ function migrate(db: DatabaseSync): void {
       db.exec(`PRAGMA user_version = ${v + 1}`);
       db.exec("COMMIT");
     } catch (err) {
-      db.exec("ROLLBACK");
+      // 与 `SessionManager` 的 `#tx` 同一条理由：这条 DDL 失败时 SQLite 可能已经自己终止了
+      // 事务，那句 `cannot rollback - no transaction is active` 会把真正的「哪条 DDL 为什么失败」
+      // 顶掉 —— 而这是启动期唯一的一条线索。
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        /* 原始错误才是要往上抛的那一个 */
+      }
       throw new Error(`会话库升级失败（v${v} → v${v + 1}）: ${errorMessage(err)}`, { cause: err });
     }
   }

@@ -193,7 +193,11 @@ Anthropic 配对 `tool_calls` ↔ `tool_result` 的前提。
 ### 游标分页与那个最容易被写错的 +1
 
 `GET /sessions` 与 `GET /sessions/:id` 都是 `limit`（默认 100、上限 500）+ `before`（不透明游标）。
-游标是 `base64url(seq)`，不是裸数字：裸 seq 会把「内部用 `INTEGER PRIMARY KEY` 排序」写进 API 契约。
+游标是 `base64url("<kind>:<seq>")`，不是裸数字：裸 seq 会把「内部用 `INTEGER PRIMARY KEY` 排序」
+写进 API 契约。`kind`（`sessions` / `messages`）也在串里，因为两个序列的游标以前互相对得上 ——
+把会话列表的 `nextCursor` 交给 `GET /sessions/:id`，它被照单收下并去过滤**另一条** rowid 序列，
+不报错也不回 400，只是安静地给出一页不相干的消息。改这一处会让升级那一刻还留在浏览器里的
+旧游标得到一次 400：游标不落盘、只活一页，刷新即好，所以这个代价可接受。
 方向只有一个（更早），不引入 `after`，也不引入 `hasMore` 布尔 —— 同一件事写两个字段就会出现
 「`hasMore: true` 而游标为 null」这种规格写得出来、代码难保证的组合。
 

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { Message, Session, SessionDetail } from "@atri/shared";
 import { SessionManager } from "#core/session/manager.ts";
 import { ApiError } from "#core/errors.ts";
-import { sessionDbPath } from "#core/session/db.ts";
+import { openSessionDb, sessionDbPath } from "#core/session/db.ts";
 
 /**
  * 会话存储的用例跑在**临时目录里的真库**上。
@@ -429,13 +429,58 @@ test("非法的 limit 与 before 都是 400，不夹取也不当没传", (t) => 
     assert.throws(() => manager.list({ limit }), /limit 必须是/, `limit=${String(limit)}`);
     assert.throws(() => manager.getDetail("x", { limit }), /limit 必须是/);
   }
-  // `base64url` 解码对非法字符是**忽略**而不是抛，所以判据只能落在「必须是纯数字」上。
-  // `"abc"` 解出来是 `ikp` 这种字节串、`"MTIz"` 解出来是 `123`（**那是合法游标**，
-  // 所以它不在下面这个清单里 —— 把它当反例会让这条用例说谎）。
-  for (const before of ["", "!!!", "-1", "0", "abc"]) {
+  // `base64url` 解码对非法字符是**忽略**而不是抛，所以判据只能落在「必须是
+  // `<kind>:<纯数字>`」上。`"MTIz"` 解出来是裸的 `123` —— 那是**上一版**的游标格式，
+  // 现在归进非法一类：代价是「升级那一瞬间还留在浏览器里的旧游标」会得到一次 400，
+  // 而游标不落盘、只在内存里活一页，刷新即好。把它继续当合法值才是说谎。
+  for (const before of ["", "!!!", "-1", "0", "abc", "MTIz"]) {
     assert.throws(() => manager.list({ before }), /before 不是合法的游标/, `before=${before}`);
   }
-  assert.doesNotThrow(() => manager.list({ before: "MTIz" }));
+});
+
+/**
+ * 两个分页序列的游标不通用。
+ *
+ * 修之前 `GET /sessions` 的 `nextCursor` 会被 `GET /sessions/:id` 照单收下，拿去过滤
+ * **另一条** seq 序列：不报错、不回 400，只是安静地给出一页不相干的消息 —— 两个序列都是
+ * 表的 rowid，数值上本来就会互相撞对。判据现在写在游标串里，所以这条要能证伪。
+ */
+test("会话列表的游标不能拿去翻消息，反之也一样", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+  const session = manager.create({ title: "两个游标空间" });
+  // 三个会话 + 三条消息：两侧都要能翻出「还有更早」，否则游标根本不出现、用例没有前提。
+  manager.create({ title: "B" });
+  manager.create({ title: "C" });
+  for (const i of [0, 1, 2]) {
+    manager.appendMessage(
+      session.id,
+      userMessage(`m-${i}`, session.id, `第 ${i} 条`, `2026-01-0${i + 1}T00:00:00.000Z`),
+    );
+  }
+
+  const sessionsPage = manager.list({ limit: 1 });
+  const messagesPage = manager.getDetail(session.id, { limit: 1 });
+  // `getDetail` 的返回带 `| null`（未知 id 那条路径），这里会话是自己刚建的，守卫只为让
+  // 后面几次读游标时不必再各自 `?.`。
+  assert.ok(messagesPage, "会话存在就该给出一页");
+  assert.ok(sessionsPage.nextCursor, "一页装不下三行时才出游标；没出游标这条用例就没前提");
+  assert.ok(messagesPage.nextCursor, "同上：消息侧也要先有游标");
+
+  assert.throws(
+    () => manager.getDetail(session.id, { before: sessionsPage.nextCursor ?? "" }),
+    /before 不是合法的游标/,
+    "会话列表的游标不该被消息分页收下",
+  );
+  assert.throws(
+    () => manager.list({ before: messagesPage.nextCursor ?? "" }),
+    /before 不是合法的游标/,
+    "消息分页的游标也不该被会话列表收下",
+  );
+
+  // 各归各用：同一个游标对自己的序列仍然有效（否则这条改动就把分页整个弄坏了）。
+  const older = manager.getDetail(session.id, { limit: 1, before: messagesPage.nextCursor ?? "" });
+  assert.ok(older);
 });
 
 test("游标指向已经没有内容的位置时回空页，而不是 404", (t) => {
@@ -474,4 +519,93 @@ test("同一个库文件被重复打开时不会重建 schema，计数走 SQL �
   const counts = new Map(second.list().sessions.map((s) => [s.id, s.messageCount]));
   assert.equal(counts.get(a.id), 2);
   assert.equal(counts.get(b.id), 0);
+});
+
+/**
+ * 连接的两个 pragma 是真的下设了，而不只是注释里说了。
+ *
+ * `journal_mode = WAL` 与 `timeout: 5_000` 都是「只在有两个进程时才看得出差别」的设置：
+ * 单进程的测试全绿也挡不住有人把这两行删掉，而删掉的后果是别人备份时读到一句
+ * `database is locked`。这里量的是 `openSessionDb` 本人 —— 它是生产路径上唯一建连接的地方。
+ * `busy_timeout` 是**每连接**的属性，所以这个探针连接报告的就是 `openSessionDb` 设的那个值。
+ */
+test("库连接按 WAL + 5 秒 busy timeout 打开", (t) => {
+  const dataDir = join(mkdtempSync(join(tmpdir(), "atri-pragma-")), "data");
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+
+  const probe = openSessionDb(dataDir);
+  t.after(() => probe.close());
+
+  // 每一句都先摊成普通对象再比：`node:sqlite` 返回的行**原型是 null**（实测，
+  // `manager.ts` 的「必须逐字段构造领域对象」就是为它写的），而 `deepStrictEqual`
+  // 比原型 —— 直接拿行去比会红在「原型不同」上，看起来像 pragma 没生效。
+  const pragma = (sql: string): Record<string, unknown> => {
+    const row = probe.prepare(sql).get();
+    // `get()` 在类型上是「可能没有这一行」，而 pragma 恒给一行；守卫把它变成必有。
+    assert.ok(row, `${sql} 没有返回行`);
+    return { ...row };
+  };
+  assert.deepEqual(pragma("PRAGMA journal_mode"), { journal_mode: "wal" });
+  assert.deepEqual(pragma("PRAGMA busy_timeout"), { timeout: 5_000 });
+  // 外键**刻意不下设**（`node:sqlite` 自 v22.10 起默认开），但默认必须是开着的：
+  // `delete()` 的「只删会话靠级联」那半道保险寄托在它上面。
+  assert.deepEqual(pragma("PRAGMA foreign_keys"), { foreign_keys: 1 });
+});
+
+/**
+ * 库比代码新时要当场说清楚，而不是「跑得起来但读不出东西」。
+ *
+ * 这条守卫只在 downgrade 的场景发作（拿旧版服务端开新版库），所以平时没人走得到 ——
+ * 也正因为平时走不到，它最容易被改掉而无人察觉。
+ */
+test("库的 schema 比代码新时启动即失败，并给出可读的一句", (t) => {
+  const dataDir = join(mkdtempSync(join(tmpdir(), "atri-pragma-new-")), "data");
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+
+  const fresh = openSessionDb(dataDir);
+  // 手工把版本号拨到代码之上，模拟「这个库是被更高版本的服务端建的」。
+  // `PRAGMA user_version = ?` 是语法错误（pragma 的值不是可绑定参数），只能拼串。
+  fresh.exec("PRAGMA user_version = 99");
+  fresh.close();
+
+  assert.throws(
+    () => openSessionDb(dataDir),
+    /schema 版本是 v99，比当前代码支持的 v\d+ 更新/,
+    "库比代码新时必须拒绝启动，而不是跳过迁移后在某条 SQL 上报 no such column",
+  );
+});
+
+/**
+ * 追加消息是**一个**原子单元，不是两条各自提交的语句。
+ *
+ * `appendMessage` 里先 `UPDATE sessions SET updated_at`、再 `INSERT INTO messages`，
+ * 两条之间失败的话，症状是「会话在列表上排到了最新，历史里却没有那条」—— 正是引擎侧
+ * 那句「不要出现只有半边看得见」要挡的东西。没有 `#tx` 的话这条用例照样绿，
+ * 所以这条用例是那个 BEGIN/COMMIT 唯一的守卫。
+ */
+test("追加消息：INSERT 失败时 updatedAt 也不许留下变化", (t) => {
+  const { open } = useStore(t);
+  const m = known(open());
+  const s = m.create({ title: "半边看不见" });
+  m.appendMessage(s.id, userMessage("dup", s.id, "第一条", "2026-01-01T00:00:00.000Z"));
+  const committed = m.get(s.id).updatedAt;
+  // **同步等过一毫秒**再去撞失败。`appendMessage` 自己取 `new Date().toISOString()`，
+  // 毫秒分辨率，连着两次调用完全可以落在同一毫秒里 —— 那时无效实现（没有 BEGIN/COMMIT）
+  // 里第二条的 UPDATE 写回的是同一个串，下面的断言就成了空跑。这条用例第一次就是这样假绿的，
+  // 所以这一行不是装饰：它把「时间确实前进了」变成断言的前提。
+  // `SessionManager` 没有注时钟的地方（`now` 是它内部一次性取的），所以这里等真实时钟。
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3);
+
+  // 故意复用同一个消息 id：`messages.id` 上有 UNIQUE，INSERT 必失败，
+  // 而它前面那条 UPDATE（换一个 `now`）已经执行过了 —— 回滚必须把它一起抹掉。
+  assert.throws(() =>
+    m.appendMessage(s.id, userMessage("dup", s.id, "又一条", "2026-01-02T00:00:00.000Z")),
+  );
+
+  assert.equal(
+    m.get(s.id).updatedAt,
+    committed,
+    "UPDATE 提交而 INSERT 失败 = 列表排到最新、历史里查不到那条",
+  );
+  assert.equal(m.get(s.id).messageCount, 1, "失败的那条不该留下半个壳子");
 });
