@@ -57,6 +57,10 @@ type Failure = {
  *
  * 判别标志用 `isAxiosError` 而非 `status`：成功的 AxiosResponse 同样带
  * `status: 200`，拿 status 判存在性会把成功当失败。
+ *
+ * 这里只管 **axios** 那条路。流式端点走全局 `fetch`，同一个 401→`UnauthorizedError` 规则
+ * 在 `sseFetch` 里另写一遍 —— 一个规则两个出口是因为生成客户端用了两套传输栈，
+ * 不是两份规则。改的时候两处一起改。
  */
 function unwrap<T>(result: T): T {
   const failure = result as Failure;
@@ -72,6 +76,38 @@ function unwrap<T>(result: T): T {
 function body<T extends { data?: unknown }>(result: T): NonNullable<T["data"]> {
   unwrap(result);
   return result.data as NonNullable<T["data"]>;
+}
+
+/**
+ * SSE 那一侧的错误出口。
+ *
+ * **一条规则，两套栈**：非流式走 axios（`generated/client.gen.ts` 用的是 `_axios`，
+ * 压根不碰 `fetch`），流式走全局 `fetch`。「401 → `UnauthorizedError`」这条规则因此必须
+ * 在 `unwrap()` 与这里各写一遍 —— 两处注释互相指一次，别有人「顺手统一」成一份而漏掉另一份。
+ *
+ * 为什么必须由我们包装：生成的 SSE 循环在 `!response.ok` 时抛的是
+ * `SSE failed: 409 Conflict` 这种内部话术，紧接着被同一个 try 的 catch 吞掉、
+ * 因为 `sseMaxRetryAttempts: 0` 直接 break —— 用户看到的是「回复流意外中断」，
+ * 而服务端明明说清了「这个会话有一次对话还没结束」。读 `{error}` 再抛是唯一能把那句话
+ * 送上界面的位置。
+ *
+ * 它是挂在**每次请求**的 options 上，不是 `client.setConfig`：生成的
+ * `Config<ClientOptions>` 里没有 `fetch` 这一根键（写进去被类型直接拒），而
+ * `ServerSentEventsOptions` 有 —— 这也正说明这个口子是 SSE 专属的，axios 那条路不读它。
+ */
+async function sseFetch(input: URL | RequestInfo, init?: RequestInit): Promise<Response> {
+  const res = await globalThis.fetch(input, init);
+  if (res.ok) return res;
+  let detail = "";
+  try {
+    detail = String(((await res.json()) as { error?: unknown }).error ?? "");
+  } catch {
+    // 响应体不是 JSON（前置代理吐的 502 页之类）：下面退回状态码本身。
+  }
+  // 用户看到一句话，永远比看到一个精确的句子重要。
+  const message = detail || `请求失败: ${res.status}`;
+  if (res.status === 401) throw new UnauthorizedError(message);
+  throw new Error(message);
 }
 
 // 同源访问时 Cookie 默认就会带上；显式声明是为了让「令牌只在 HttpOnly Cookie 里」
@@ -151,13 +187,34 @@ export async function* sendMessageStream(
   model?: string,
   signal?: AbortSignal,
 ): AsyncGenerator<StreamChunk> {
+  // 生成的循环会把 `fetch` 抛出的任何东西 catch 掉（`core/serverSentEvents.gen.ts` 里
+  // 那个 catch 只调 `onSseError` 再 break），所以不接这个回调，409 与 401 就变成
+  // 「流安静地结束、界面留一条空回复」。捞回来存着，等迭代结束后再抛 ——
+  // 在 generator 里直接抛会让消费方的 `for await` 拿到一个没有上下文的错。
+  let failure: unknown = null;
+  // 生成物的 `RequestOptions` 只从 `ServerSentEventsOptions` 里 pick 了
+  // `onRequest` / `onSseError` / `onSseEvent` / `sseDefaultRetryDelay` /
+  // `sseMaxRetryAttempts` / `sseMaxRetryDelay`，**唯独漏了 `fetch`** —— 而运行时那一行
+  // 读的就是 `options.fetch`（`core/serverSentEvents.gen.ts` 的
+  // `options.fetch ?? globalThis.fetch`）。写成 `fetch: sseFetch` 会被对象字面量的
+  // excess-property 检查拒掉，`as any` 会把整份 options 的校验一起丢掉；用一个具名变量
+  // 展开进去，是把「类型里没有、运行时认」这一件事单独说清楚，也让升级 openapi-ts 之后
+  // 的下一个人在 diff 里看得见它。
+  const fetchOverride = { fetch: sseFetch };
   const { stream } = await streamMessage({
     path: { id: sessionId },
     body: { content, model },
     signal,
+    ...fetchOverride,
     sseMaxRetryAttempts: 0,
+    onSseError: (err: unknown) => {
+      // 切页面 / 关停会让 `signal.abort()` 抛 AbortError，那是**正常路径**，不是故障。
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      failure ??= err;
+    },
   });
   for await (const chunk of stream) yield chunk as StreamChunk;
+  if (failure) throw failure;
 }
 
 // --- 插件 -------------------------------------------------------------------

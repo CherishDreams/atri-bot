@@ -20,6 +20,12 @@ defineProps<{
   hasMore?: boolean;
   /** 「加载更早」在途，按钮要禁用并改文案。 */
   loadingEarlier?: boolean;
+  /**
+   * 现在点也不会做事（流式进行中，store 那侧直接拒绝）。与 `loadingEarlier` 分开：
+   * 那个要改文案成「加载中…」，这个什么都没在加载，只该禁住并说清原因。
+   * 禁住而不隐藏：用户点了没反应、按钮又长得跟平时一样，是本仓最讨厌的那类「假坏」。
+   */
+  earlierBlocked?: boolean;
 }>();
 
 const emit = defineEmits<{ (e: "loadEarlier"): void }>();
@@ -42,7 +48,8 @@ const emit = defineEmits<{ (e: "loadEarlier"): void }>();
     v-if="hasMore"
     class="mb-2 mr-auto cursor-pointer rounded-md border-1 border-line bg-raised px-2.5 py-1 text-xs text-ink-muted transition-colors hover:text-ink disabled:cursor-wait disabled:opacity-60"
     type="button"
-    :disabled="loadingEarlier"
+    :disabled="loadingEarlier || earlierBlocked"
+    :title="earlierBlocked && !loadingEarlier ? '有一次对话还没结束，等它说完再翻' : ''"
     @click="emit('loadEarlier')"
   >
     {{ loadingEarlier ? "加载中…" : "加载更早的消息" }}

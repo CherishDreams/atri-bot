@@ -122,6 +122,19 @@ export const useSessionsStore = defineStore("sessions", {
     listCursor: null as string | null,
     /** 「加载更早的会话」在途。 */
     loadingMoreSessions: false,
+    /**
+     * 代际计数：`open()`（换会话）与 `refresh()`（列表被整份替换）都自增它。
+     *
+     * 存在的唯一理由是「跨 await 的过期检查没法靠读那些值本身做」。`loadEarlier()` 在
+     * await **之前**判过 `active` 与 `cursor`，可那两道守卫挡不住「请求在途时用户切了会话」：
+     * 响应回来时 `this.log` 已经是**另一个会话**的日志，`prependOlder` 就把 A 的三十条旧消息
+     * 拼进了 B 的对话里，还把 A 的游标写进了 B 的 cursor —— 按 id 去重挡不住（不同会话的
+     * 消息 id 本来就不同）。真实浏览器里量到过。
+     *
+     * 为什么不用「比较 id 就够了」：新建会话、删除后重建、`refresh()` 回到最新那一页
+     * 都不改变 `active?.id`，但都让在途的那一页作废。
+     */
+    epoch: 0,
     error: null as string | null,
   }),
 
@@ -140,6 +153,8 @@ export const useSessionsStore = defineStore("sessions", {
      * 更早条目会被丢弃。刻意的简单 —— 否则每次新建/删除都要判断「那一页还在不在范围内」。
      */
     async refresh(): Promise<void> {
+      // 列表即将被整份替换：任何在途的「加载更早的会话」都不该再把结果拼回来。
+      this.epoch += 1;
       const { sessions, nextCursor } = await api.listSessions();
       this.sessions = sessions;
       this.listCursor = nextCursor;
@@ -154,15 +169,22 @@ export const useSessionsStore = defineStore("sessions", {
      */
     async loadMoreSessions(): Promise<number> {
       const cursor = this.listCursor;
+      const epoch = this.epoch;
       if (cursor === null) return 0;
       this.loadingMoreSessions = true;
       try {
         const { sessions, nextCursor } = await api.listSessions({ before: cursor });
+        // 同 `loadEarlier()`：await 之前判过的守卫管不了在途期间发生的一次 `refresh()`
+        // —— 那一页是**上一个列表**的更早，拼进来会静默跳过若干会话。
+        if (this.epoch !== epoch) return 0;
         const seen = new Set(this.sessions.map((s) => s.id));
         const fresh = sessions.filter((s) => !seen.has(s.id));
         this.sessions.unshift(...fresh);
         this.listCursor = nextCursor;
         return fresh.length;
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : "加载更早的会话失败";
+        return 0;
       } finally {
         this.loadingMoreSessions = false;
       }
@@ -184,6 +206,9 @@ export const useSessionsStore = defineStore("sessions", {
     async open(id: string): Promise<Session | null> {
       this.loading = true;
       this.error = null;
+      // 作废一切在途的分页请求（见 state 的 `epoch`）：切会话之后，上一条消息流上还没回来的
+      // 那一页不属于这个会话。
+      this.epoch += 1;
       // 换会话先清游标：残留上一个会话的那一串会 prepend 出**别的会话**的消息，
       // 而按 id 去重挡不住（不同会话的消息 id 本来就不同）。失败分支同样清，
       // 于是两个出口都是「干净的一页」，不需要调用方再补一次 reset。
@@ -214,19 +239,32 @@ export const useSessionsStore = defineStore("sessions", {
      * 流式期间直接拒绝（组件层已经把按钮禁用，这里是第二道）：那一刻尾部挂着草稿，
      * 「服务端整条替换草稿」与「头部 prepend 一批」同时发生，会让两件事在两次 await
      * 之间被别人看见 —— 宁可不做，也别让用户看到一条跳走的回复。
+     *
+     * 失败**自己吞掉并置 `error`**（与 `open()` 同一约定）：两个调用点都在模板里直接调它，
+     * 不吞就是一个 unhandled rejection，而用户看到的是「按钮转了一圈又变回可点」——
+     * 什么都不说。游标保持不变，所以重试仍然有效。
      */
     async loadEarlier(): Promise<number> {
       // 收窄到 const：`this.cursor` 的判空结果在跨 `await` 之后不一定还跟着（而 Pinia 的
       // action 本来就被挂在另一个对象上执行），局部常量能让编译器一路知道它不是 null。
       const cursor = this.cursor;
-      if (this.active === null || cursor === null) return 0;
+      const activeId = this.active?.id ?? null;
+      const epoch = this.epoch;
+      if (activeId === null || cursor === null) return 0;
       if (this.sending || this.streamingId !== null) return 0;
       this.loadingEarlier = true;
       try {
-        const { session, nextCursor } = await api.getSession(this.active.id, { before: cursor });
+        const { session, nextCursor } = await api.getSession(activeId, { before: cursor });
+        // **await 之后再判一次过期**，这才是这条用例的落点：await 之前那两道守卫读的是
+        // 出发那一刻的世界。响应回来时代际或活跃会话已经变了，这一页就不属于这里 ——
+        // 既不 prepend，也不把别的会话的游标写进来。
+        if (this.epoch !== epoch || this.active?.id !== activeId) return 0;
         const added = prependOlder(this.log, session.messages);
         this.cursor = nextCursor;
         return added;
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : "加载更早的消息失败";
+        return 0;
       } finally {
         this.loadingEarlier = false;
       }
@@ -316,6 +354,14 @@ export const useSessionsStore = defineStore("sessions", {
         // 会让用户连自己看到了什么都不知道。
         this.error = err instanceof Error ? err.message : "发送失败";
         if (this.error === "回复流意外中断") this.dropDraft();
+        // 但**一个字节都没开始**的失败一定要把那条空草稿摘掉（409「这个会话有一次对话还没
+        // 结束」、401「登录失效」、404 会话不见了）：留着就是一条永远转圈的「正在输入」，
+        // 而那比一句明确的错更让用户以为系统还在干活。
+        // 只在草稿仍是本次发送挂的那一条、且它还是空的时动手 —— 中途已有增量到达的话，
+        // `streamingId` 早就跟着中间消息换到新草稿上了，那种草稿不该被这里清掉。
+        if (this.streamingId === draftId && this.log.some((m) => m.id === draftId && !m.content)) {
+          this.dropDraft();
+        }
       } finally {
         this.sending = false;
         this.streamingId = null;

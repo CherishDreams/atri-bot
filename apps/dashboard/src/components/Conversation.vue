@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref } from "vue";
 import MessageList from "./shared/MessageList.vue";
+import { captureAnchor } from "./shared/scrollAnchor.js";
 import { useSessionsStore } from "../stores/sessions.js";
 
 const sessions = useSessionsStore();
@@ -15,20 +16,18 @@ async function onSend(): Promise<void> {
 }
 
 /**
- * 取更早的一页并钉回用户正在看的那条 —— 与 `views/chat/ChatSessionView.vue` 里那份
- * 逐字相同。两份各写是刻意的：本仓对提前抽象的态度写在 AGENTS.md 的测试一节，
- * 而这段只有 8 行、无分支、无状态，漂不出 bug；会漂出 bug 的是游标那 5 行，
- * 它已经在 store 里只有一份了。改一处记得改另一处。
+ * 取更早的一页并钉回用户正在看的那条 —— 与 `views/chat/ChatSessionView.vue` 里那份相同。
+ * 锚定的量法（比同一个元素的前后位移，不比 scrollHeight）与它为什么不能各写一份，
+ * 都写在 `components/shared/scrollAnchor.ts` 的注释里。
  */
 async function onLoadEarlier(): Promise<void> {
   const el = scrollBox.value;
   if (!el) return;
-  const prevHeight = el.scrollHeight;
-  const prevTop = el.scrollTop;
+  const restore = captureAnchor(el);
   const added = await sessions.loadEarlier();
   if (added === 0) return;
   await nextTick();
-  el.scrollTop = el.scrollHeight - prevHeight + prevTop;
+  restore();
 }
 </script>
 
@@ -48,9 +47,17 @@ async function onLoadEarlier(): Promise<void> {
         :loading="sessions.loading"
         :has-more="sessions.hasMoreMessages"
         :loading-earlier="sessions.loadingEarlier"
+        :earlier-blocked="sessions.sending"
         @load-earlier="onLoadEarlier"
       />
     </div>
+
+    <!--
+      store 的失败都汇到 `sessions.error` 这一处（打开会话、加载更早的消息、加载更早的会话
+      都是「自己吞掉异常并置 error」，见 store 的 `open()`）。这一页以前没有这个出口，
+      所以分页失败在 bot 控制台上是**什么都不显示**的 —— 与 chat 会话页那处同一形式。
+    -->
+    <div v-if="sessions.error" class="px-4 pb-2 text-xs text-danger">{{ sessions.error }}</div>
 
     <form class="flex gap-2 border-t-1 border-line p-3" @submit.prevent="onSend">
       <input
