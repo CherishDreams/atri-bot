@@ -815,6 +815,44 @@ test("工厂：apiKey 缺省时回落到环境变量", () => {
   }
 });
 
+/**
+ * 两个方向都写过，才第一次真的钉住了顺序。
+ *
+ * 上面那条只测「文件里没配 → 落到 env」这一半，于是代码里**文件优先**的写法照样全绿，
+ * 而 `.env.example` 那句「环境变量优先」一直在说谎。缺的正是「两边都有」这一格。
+ */
+test("工厂：文件与环境变量同时存在时，环境变量赢", () => {
+  process.env.ATRI_MY_GATEWAY_API_KEY = "from-env";
+  try {
+    const { providers } = createProviders(
+      { "my-gateway": { type: "openai", baseUrl: "https://x/v1", apiKey: "写在文件里的" } },
+      { logger: quietLogger },
+    );
+    onlyInstance(providers, OpenAIProvider);
+    assert.equal(providers[0].apiKey, "from-env");
+  } finally {
+    delete process.env.ATRI_MY_GATEWAY_API_KEY;
+  }
+});
+
+test("工厂：环境变量是空串时不算「注入了密钥」，仍落回文件", () => {
+  process.env.ATRI_MY_GATEWAY_API_KEY = "";
+  try {
+    const { providers } = createProviders(
+      { "my-gateway": { type: "openai", baseUrl: "https://x/v1", apiKey: "写在文件里的" } },
+      { logger: quietLogger },
+    );
+    onlyInstance(providers, OpenAIProvider);
+    assert.equal(
+      providers[0].apiKey,
+      "写在文件里的",
+      "空串通常是「变量已声明但没填」，不该把文件里那条真密钥顶掉",
+    );
+  } finally {
+    delete process.env.ATRI_MY_GATEWAY_API_KEY;
+  }
+});
+
 test("工厂：也可以靠 provider 上的 default:true 指定默认", () => {
   assert.equal(readDefaultProviderId({ a: { type: "openai" }, b: { default: true } }), "b");
 });
@@ -1002,6 +1040,27 @@ test("两层：apiKey 缺省时按 source 的 id 回落环境变量", () => {
       { "a-m": { source: "my-gateway", model: "m" } },
       {
         sources: { "my-gateway": { type: "openai", baseUrl: "https://x/v1" } },
+        logger: quietLogger,
+      },
+    );
+    onlyInstance(providers, OpenAIProvider);
+    assert.equal(providers[0].apiKey, "from-env");
+  } finally {
+    delete process.env.ATRI_MY_GATEWAY_API_KEY;
+  }
+});
+
+test("两层：源配了 apiKey 而环境变量也在时，环境变量赢", () => {
+  // 两层结构下凭证属于源，所以「谁赢」这件事只需要在源这一层判一次。
+  // 这一格以前同样没人测：只测「缺省回落」的话，文件优先的实现照样全绿。
+  process.env.ATRI_MY_GATEWAY_API_KEY = "from-env";
+  try {
+    const { providers } = createProviders(
+      { "a-m": { source: "my-gateway", model: "m" } },
+      {
+        sources: {
+          "my-gateway": { type: "openai", baseUrl: "https://x/v1", apiKey: "源里写的" },
+        },
         logger: quietLogger,
       },
     );

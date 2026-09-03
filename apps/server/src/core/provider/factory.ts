@@ -158,17 +158,24 @@ export function createProviders(
 }
 
 /**
- * 密钥解析顺序：provider 自己的 `apiKey` → 环境变量 `ATRI_<ID>_API_KEY`。
+ * 密钥解析顺序：**环境变量 `ATRI_<ID>_API_KEY` → provider/源自己的 `apiKey`**。
+ *
+ * 环境变量优先有两个依据：AGENTS.md 那条「内置默认值 → `atri.config.json` → 环境变量」
+ * 的通则，以及 `.env.example` 一直写着的「容器部署时把密钥留在文件之外」。注入的才是真的 ——
+ * 这条不该取决于文件里恰好留下了什么。
+ *
+ * 以前这里**恰好反过来**（文件优先），后果不是「顺序不合心意」而是**静默失效**：
+ * `atri.config.example.json` 的占位值是一句非空中文，照 README 复制示例文件的人，他
+ * `ATRI_DEEPSEEK_API_KEY` 注入的密钥会被那句占位顶掉，症状只是上游 401，
+ * 谁也想不到根因是配置模板里的一句话。占位值同时改成了空串。
  *
  * `id` 传的是**源**的 id（两层结构下一份凭证属于一个源），内联老写法下就是
- * provider 自己的 id，两种情形都得到同一个变量名。
- *
- * 用环境变量而不是只认配置文件，是因为 `atri.config.json` 虽然已被 .gitignore
- * 忽略，但把明文密钥写在磁盘文件里仍然不如注入环境变量安全。
+ * provider 自己的 id，两种情形都得到同一个变量名。空串不算「注入了密钥」。
  */
 function resolveApiKey(id: string, raw: MergedConfig): string {
-  if (typeof raw.apiKey === "string" && raw.apiKey) return raw.apiKey;
-
   const envKey = `ATRI_${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
-  return process.env[envKey] ?? "";
+  const fromEnv = process.env[envKey];
+  if (fromEnv) return fromEnv;
+
+  return typeof raw.apiKey === "string" ? raw.apiKey : "";
 }
