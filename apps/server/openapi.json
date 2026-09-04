@@ -270,18 +270,20 @@
       "parameters": [
         {
           "$ref": "#/components/parameters/SessionId"
-        },
-        {
-          "$ref": "#/components/parameters/PageLimit"
-        },
-        {
-          "$ref": "#/components/parameters/BeforeCursor"
         }
       ],
       "get": {
         "operationId": "getSession",
         "summary": "读取会话详情（一页消息）",
         "tags": ["sessions"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PageLimit"
+          },
+          {
+            "$ref": "#/components/parameters/BeforeCursor"
+          }
+        ],
         "responses": {
           "200": {
             "description": "会话详情（含一页消息）",
@@ -1106,7 +1108,7 @@
           "maximum": 500,
           "default": 100
         },
-        "description": "一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。"
+        "description": "一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。必须挂在**具体 operation** 上，不要「顺手归位」到 path-item 的 parameters：那里会被同一路径下的每个方法共享，`DELETE /sessions/{id}` 因此在 SDK 里 advertise 两个服务端从不读的参数（handler 压根不看 query），而三道规格守卫谁也看不见这种说谎。"
       },
       "BeforeCursor": {
         "name": "before",
