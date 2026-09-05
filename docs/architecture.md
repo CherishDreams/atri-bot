@@ -271,6 +271,11 @@ SQLite 能给的只有「两条 INSERT 串行」，缺的是「一整轮的读-�
   双层过期：绝对 15 天 + 空闲 7 天。每次使用续期空闲计时，但绝对期限不可延长。
   清理是**惰性**的（在 `login` 与 `getByToken` 时顺带 `#prune()`），
   没有定时器，所以 `stop()` 之后不残留任何资源。
+  这句也是「登录会话到期为什么不发 WS `unauthorized` 帧」的理由：要精确地通知到期就得加一个
+  扫描定时器，而 TTL 是 15 天 / 7 天，间隔只能取分钟到小时级 —— 那样给客户端的承诺是
+  「± 一个间隔之内告诉你」，永远不如它下一个请求拿到的 401 明确。加定时器还会让
+  `close()` 多一样要清理的东西（忘了清就是测试挂到超时）。这一句写在这里，
+  是因为「为了覆盖过期去加个定时器」看起来像是明显的改进。
 - **时钟可注入**：`constructor(config, logger, { now = Date.now })`。
   过期测试因此能把时间真正往前拨，而不是回拨内部字段——
   后者只能证明「字段被读了」，证明不了「时间到了就失效」。
@@ -278,6 +283,12 @@ SQLite 能给的只有「两条 INSERT 串行」，缺的是「一整轮的读-�
 令牌只经 `HttpOnly; SameSite=Lax` 的 Cookie 传递，从不进入响应体。
 WebSocket 复用同一个 Cookie 完成握手（浏览器无法为握手自定义请求头），
 未登录的连接在握手阶段即以 401 拒绝。
+握手之后也不是「一次鉴权、永久放行」：连接按**它握手时的那条登录会话**记账
+（`clients: Map<WebSocket, token>`），会话被显式作废（登出 / 全量撤销）时只给那批连接
+发一帧 `unauthorized` 再关掉。以前没有这一步，症状是「在另一个窗口登出之后，这个窗口的
+socket 还在无条件收全量对话内容」—— 握手时鉴权管不到已经建立的连接。
+帧类型声明在 `packages/shared/src/protocol.ts`，由 `apps/server/test/protocol-frames.test.ts`
+守着（「声明了却没人发」与「发了却没声明」两个方向都比）。
 
 ## 模型 provider
 
@@ -771,7 +782,10 @@ src/
 - **`bodySerializer`**。生成物在没配它时把请求体对象原样交给 fetch，
   对象会被序列化成 `[object Object]`。axios 路径自己会序列化所以看不出来，
   但 **SSE 走全局 `fetch`**，于是只有流式接口坏掉。
-- **WebSocket**。OpenAPI 描述不了 WS，那一段永远是手写的。
+- **WebSocket**。OpenAPI 描述不了 WS，那一段永远是手写的。也正因为它不在规格里，
+  三道规格守卫对帧类型一个字都不管 —— 帧的清单在 `packages/shared/src/protocol.ts`，
+  而「声明的与真的发出去的相等」由 `apps/server/test/protocol-frames.test.ts` 守。
+  别去 `openapi.json` 里找这份保证，那里永远没有。
 
 ### 流式渲染
 
@@ -816,9 +830,20 @@ src/
 
 ```js
 for (const controller of openStreams) controller.abort(); // 长连接，不掐就干等
+unsubscribeEngine(); // engine.subscribe / auth.onSessionLost 都要退掉
+unsubscribeAuth();
+for (const ws of clients.keys()) ws.close(); // **不**先广播 unauthorized，理由见下
 wss.close(() => server.close(done));
 server.closeAllConnections?.(); // 兜住空闲 keep-alive 连接
 ```
+
+关停时**不发** `unauthorized`：一次例行发版会把每个开着控制台的浏览器弹回登录页，
+而操作者会读成「我被踢了」—— 那是把非鉴权事件伪装成鉴权事件。连接随进程一起死，
+客户端下一个请求自然拿到 401，走的是同一条路。
+
+两个 `subscribe` 都要留住退订函数：`engine.subscribe(broadcast)` 以前把返回值丢了，
+于是关停之后引擎上一直挂着这个闭包（今天不出错，因为 `broadcast` 会跳过非 OPEN 的连接，
+但「关停之后还有谁在收事件」这件事归零才诚实）。
 
 `server.close()` 只是「停止接受新连接」，它会**等所有既有连接自然结束**。
 流式响应是长连接、可以持续几十秒，所以不主动收尾的关停会一直挂着

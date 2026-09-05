@@ -620,10 +620,19 @@ export function createHttpServer(deps: HttpDeps) {
       return Boolean(token && auth.getByToken(token));
     },
   });
-  const clients = new Set<WebSocket>();
+  /**
+   * 在线连接 -> **它握手时用的令牌**。
+   *
+   * 存令牌不是为了再鉴权一次，而是为了「一个浏览器登出」只影响它自己那批连接：
+   * 没有这个对应关系，`unauthorized` 就只能广播给所有人，那等于让任何一个窗口
+   * 都能把别人的控制台踢回登录页。握手时 `verifyClient` 已经验过，所以这里存的
+   * 必然是当时有效的令牌。
+   */
+  const clients = new Map<WebSocket, string>();
 
-  wss.on("connection", (ws) => {
-    clients.add(ws);
+  wss.on("connection", (ws, req) => {
+    const token = parseCookies(req)[cookieName] ?? "";
+    clients.set(ws, token);
     ws.on("message", (raw) => {
       let frame;
       try {
@@ -631,6 +640,8 @@ export function createHttpServer(deps: HttpDeps) {
       } catch {
         return;
       }
+      // `ClientFrame` 今天只有 `ping` 一种；`subscribe` / `unsubscribe` 已从协议里删掉
+      // （服务端从不消费它们，而留着会让客户端写出永远走不到的分支）。
       if (frame.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
     });
     ws.on("close", () => clients.delete(ws));
@@ -638,11 +649,37 @@ export function createHttpServer(deps: HttpDeps) {
 
   const broadcast = (frame: ServerFrame) => {
     const data = JSON.stringify(frame);
-    for (const ws of clients) {
+    for (const ws of clients.keys()) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
   };
-  engine.subscribe(broadcast);
+  const unsubscribeEngine = engine.subscribe(broadcast);
+
+  /**
+   * 登录会话被显式作废时，只通知**用它握手的那批连接**，然后关掉它们。
+   *
+   * 关掉才是这条通知的全部内容：以前 `verifyClient` 只在握手时鉴权，握手之后的连接
+   * **无条件继续收全量 `message` 帧** —— 令牌死了也照收，也就是「登出之后那个 socket
+   * 还在读全部对话内容」。`ws-auth.test.ts` 里以前那句「旧连接不会被动断开」把这个
+   * 行为当成了预期，现在它被当成漏洞修掉了。
+   *
+   * 先 `send` 再 `close`：`ws` 会把已排队的 data 帧在关闭握手之前冲刷出去，
+   * 对端因此先收到这一帧、再收到 close。
+   */
+  const unsubscribeAuth = auth.onSessionLost((token, reason) => {
+    const text = reason === "logout" ? "已在别处登出" : "登录态已被服务端撤销";
+    for (const [ws, wsToken] of clients) {
+      if (wsToken !== token) continue;
+      if (ws.readyState === ws.OPEN) {
+        // 帧**就地构造在 `ws.send(...)` 的实参里**，不是先存进变量再传：
+        // `test/protocol-frames.test.ts` 那道守卫的锚点就是
+        // `.send(JSON.stringify({ type: "…`，先落成变量会让它看不见这处产生点（它会假绿）。
+        ws.send(JSON.stringify({ type: "unauthorized", reason: text } satisfies ServerFrame));
+      }
+      ws.close();
+      clients.delete(ws);
+    }
+  });
 
   return {
     listen: (port: number, host: string) =>
@@ -669,7 +706,17 @@ export function createHttpServer(deps: HttpDeps) {
         for (const controller of openStreams) controller.abort();
         openStreams.clear();
 
-        for (const ws of clients) ws.close();
+        // 两个订阅都要退掉。`engine.subscribe` 以前把退订函数丢了，于是关停之后
+        // 引擎上一直挂着这个闭包；`auth.onSessionLost` 同一条规矩。
+        unsubscribeEngine();
+        unsubscribeAuth();
+
+        // **关停不发 `unauthorized`**：一次例行发版会让每个开着控制台的浏览器跳回登录页，
+        // 而操作者会把它读成「我被踢了」—— 那是把非鉴权事件伪装成鉴权事件。
+        // 连接随进程一起死，客户端下一次请求自然拿到 401 并走同一条登出路径。
+        // 这句留在原地，否则将来一定有人把它「改进」成先广播再关。
+        for (const ws of clients.keys()) ws.close();
+        clients.clear();
         wss.close(() => server.close(() => done()));
         // WebSocket 升级过的连接不算在 http server 的普通请求里，closeAllConnections
         // 兜住剩余的空闲 keep-alive 连接，否则关停仍可能拖到超时。

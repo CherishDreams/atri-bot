@@ -14,6 +14,15 @@ export const IDLE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const GENERATED_PASSWORD_BYTES = 18;
 
 /**
+ * 登录会话消失的原因。取值是英文**协议键**（传输层要按它分派），说明文字是中文的。
+ *
+ * 只有这两个：`expired`（绝对或空闲过期）**不在里面**，因为表现它需要服务端定时器，
+ * 而本仓刻意没有定时器（见 `#sessions` 那条注释与 architecture.md 的鉴权一节）——
+ * 到期由下一个请求的 401 表达，客户端走的是同一条路。
+ */
+export type AuthSessionLostReason = "logout" | "revoked";
+
+/**
  * AuthManager 实际读写的配置键。
  *
  * 刻意不直接用 `AppConfig`：各模块声明自己那份最小结构，`loadConfig()` 的产物
@@ -62,6 +71,15 @@ export class AuthManager {
   // 必须显式标注：口令是在 init() 里才有的，推断成 null 就赋不进 Buffer。
   #passwordHash: Buffer | null = null;
   #sessions = new Map<string, AuthSessionRecord>();
+  /**
+   * 「某个登录会话被显式作废」的出站通知点，由 `api/server.ts` 用它自己的
+   * WebSocket 广播注册进来。
+   *
+   * 方向是 **api -> core**（分层图允许的那一侧），所以不需要经过组合根重新接线：
+   * 与同一个文件里既有的 `engine.subscribe(broadcast)` 同形。刻意只给 token 与原因，
+   * 不给任何传输层类型 —— `core/` 不认识 `WebSocket`。
+   */
+  #sessionListeners = new Set<(token: string, reason: AuthSessionLostReason) => void>();
   #now: () => number;
 
   /**
@@ -185,13 +203,40 @@ export class AuthManager {
     };
   }
 
+  /**
+   * 订阅「某个登录会话被显式作废」。返回退订函数 —— 调用方必须把它留住并在关停时调一次，
+   * 否则监听器会一直挂在这个管理器上（`engine.subscribe` 以前就漏过这一步）。
+   */
+  onSessionLost(fn: (token: string, reason: AuthSessionLostReason) => void): () => boolean {
+    this.#sessionListeners.add(fn);
+    return () => this.#sessionListeners.delete(fn);
+  }
+
+  /**
+   * 只在「这条会话原本还活着、被我们主动弄死」的两条路径上调。
+   *
+   * 惰性过期**不走这里**：那条路径上客户端的连接还好好活着，而我们要等的下一个动作是
+   * 它自己发来的请求（那时它自然拿到 401）。为过期发帧就得给服务端加定时器，
+   * 那是拿「± 一个扫描间隔」的不精确通知去换掉一条明确的 401，不划算。
+   */
+  #notifyLost(token: string, reason: AuthSessionLostReason): void {
+    for (const fn of this.#sessionListeners) fn(token, reason);
+  }
+
   logout(token: string): boolean {
-    return this.#sessions.delete(token);
+    const existed = this.#sessions.delete(token);
+    // 只有真删掉一条活会话才算「作废」：否则一个假令牌、或重复登出一次，
+    // 就会把别人（甚至自己另一个窗口）的连接踢下线。
+    if (existed) this.#notifyLost(token, "logout");
+    return existed;
   }
 
   /** 用于「密钥轮换」这类场景：一次性作废所有浏览器上的登录态。 */
   revokeAll(): void {
+    // 先取键再清：清空之后就没人知道刚才有哪几条会话活着，也就无法逐条通知。
+    const tokens = [...this.#sessions.keys()];
     this.#sessions.clear();
+    for (const token of tokens) this.#notifyLost(token, "revoked");
   }
 
   /** 清掉已过期条目，避免长期运行后 Map 无限增长。 */

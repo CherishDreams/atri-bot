@@ -31,9 +31,9 @@ interface ConnectOptions {
  * 握手结果，刻意做成**以 `opened` 为判别式**的联合。
  *
  * 为什么不是 `{ opened: boolean; ws?: WebSocket }`：有断言紧接着读 `result.ws` 与
- * `first.ws`，而断言序列在本次迁移中逐字冻结（有快照比对），守卫插不进那些行。
- * 判成联合之后，上一行的 `assert.equal(result.opened, true)` 就能把类型筛到
- * `opened: true` 那一支（严格模式下 `assert.equal` 就是 `strictEqual`，带
+ * `first.ws`，而断言行在本次迁移中保持原样（本仓没有快照机制，靠的是人工比对 diff），
+ * 守卫插不进那些行。判成联合之后，上一行的 `assert.equal(result.opened, true)` 就能把
+ * 类型筛到 `opened: true` 那一支（严格模式下 `assert.equal` 就是 `strictEqual`，带
  * `asserts actual is T` 签名），于是 `ws` 必然存在。
  * 被拒的那一支没有 `ws` —— 与迁移前 `done({ opened: false, code, error })` 的实际形状一致。
  */
@@ -58,7 +58,8 @@ async function startServer(t: TestContext) {
   t.after(() => app.stop());
 
   const port = app.address().port;
-  return { port, http: `http://127.0.0.1:${port}`, ws: `ws://127.0.0.1:${port}${WS_PATH}` };
+  // `app` 一并暴露：有一条用例要**主动关停**去看连接收到什么（其余用例靠 `t.after` 收尾）。
+  return { port, http: `http://127.0.0.1:${port}`, ws: `ws://127.0.0.1:${port}${WS_PATH}`, app };
 }
 
 /** 建立连接并给出结果：`opened` 表示握手是否通过。 */
@@ -149,7 +150,15 @@ test("已登录的 WS 握手通过，ping 能收到 pong", async (t) => {
   assert.deepEqual(frame, { type: "pong" });
 });
 
-test("登出后既有 WS 连接仍在线，但新握手被拒", async (t) => {
+/**
+ * 登出要把**这条登录会话**的连接以 `unauthorized` 收尾并关掉。
+ *
+ * 这条以前写的是反面的预期（「旧连接不会被动断开，本例未做心跳踢出」），而那正是漏洞本身：
+ * `verifyClient` 只在握手时鉴权，握手之后的连接**无条件继续收全量 `message` 帧**，
+ * 令牌死了也照收 —— 也就是「在另一个窗口登出之后，这个窗口还读得到全部对话内容」。
+ * 现在帧只发给用同一个令牌握手的那批连接，发完即关。
+ */
+test("登出：该令牌的连接收到 unauthorized 并被关闭，新握手被拒", async (t) => {
   const { http, ws } = await startServer(t);
   const cookie = await loginCookie(http);
 
@@ -157,10 +166,98 @@ test("登出后既有 WS 连接仍在线，但新握手被拒", async (t) => {
   assert.equal(first.opened, true);
   t.after(() => first.ws.terminate());
 
-  await fetch(`${http}${API_PREFIX}/auth/logout`, { method: "POST", headers: { cookie } });
+  const frames: { type?: string }[] = [];
+  first.ws.on("message", (raw) => frames.push(JSON.parse(raw.toString()) as { type?: string }));
+  const closed = new Promise<void>((resolve) => {
+    first.ws.once("close", () => resolve());
+  });
 
-  // 旧连接不会被动断开（本例未做心跳踢出），但复用同一 Cookie 已无法再握手。
+  await fetch(`${http}${API_PREFIX}/auth/logout`, { method: "POST", headers: { cookie } });
+  await closed;
+
+  assert.deepEqual(
+    frames.map((f) => f.type),
+    ["unauthorized"],
+    "关闭之前必须先给一帧 unauthorized（只 close 不说是「页面自己跳的」还是「被登出的」，客户端分不出来）",
+  );
+  assert.equal(first.ws.readyState, WebSocket.CLOSED);
+
+  // 复用同一 Cookie 已经建不起新连接（这条是既有语义，没变）。
   const second = await tryConnect(ws, { cookie });
   assert.equal(second.opened, false, "登出后旧令牌不得再建立连接");
   assert.equal(second.code, 401);
+});
+
+/**
+ * 登出只影响**它自己那条会话**。
+ *
+ * 通知是按 token 匹配的，而判据是「这条会话原本还活着、被我们主动弄死了」：
+ * 用一个不存在的令牌去登出（重复点了一次退出按钮、或一个假 Cookie）如果也触发广播，
+ * 症状就是任何人都能把别人的控制台踢下线。
+ */
+test("用别人的（或不存在的）令牌登出，不得动到在线连接", async (t) => {
+  const { http, ws } = await startServer(t);
+  const cookie = await loginCookie(http);
+
+  const live = await tryConnect(ws, { cookie });
+  assert.equal(live.opened, true);
+  t.after(() => live.ws.terminate());
+
+  const frames: { type?: string }[] = [];
+  live.ws.on("message", (raw) => frames.push(JSON.parse(raw.toString()) as { type?: string }));
+
+  await fetch(`${http}${API_PREFIX}/auth/logout`, {
+    method: "POST",
+    headers: { cookie: `${DEFAULT_AUTH_COOKIE_NAME}=does-not-exist` },
+  });
+  // 登出是幂等的：这条请求不会报错，也不该有副作用。给它一点时间走到监听器。
+  await new Promise((r) => setTimeout(r, 150));
+
+  assert.equal(live.ws.readyState, WebSocket.OPEN, "不相干的登出不得关掉别人的连接");
+  // 用 `length` 而不是 `deepEqual(frames, [])`：严格模式的 `deepEqual` 带断言签名，
+  // 拿空数组去比会把 `frames` 收窄成 `never[]`，于是下面那句 `frames.map((f) => f.type)`
+  // 直接 TS2339 —— 类型检查在告「你的量法把变量说死了」，不是告实现坏了。
+  assert.equal(frames.length, 0, "也不该收到任何帧");
+
+  // 而真令牌登出时，同一条连接会立刻被收尾 —— 证明上面那个「没动」是判据在生效，不是时序巧合。
+  await fetch(`${http}${API_PREFIX}/auth/logout`, { method: "POST", headers: { cookie } });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(
+    frames.map((f) => f.type),
+    ["unauthorized"],
+  );
+});
+
+/**
+ * 服务关停只断连接，**不发** `unauthorized`。
+ *
+ * 这条与上面那条成对：`unauthorized` 的含义是「你的登录会话没了」，而不是一次发版。
+ * 把它挂在 `close()` 上看起来像是「顺手补全通知」，后果是每个开着控制台的浏览器在每次
+ * 重启后被弹回登录页，而操作者读成「我被踢了」—— 那是把非鉴权事件伪装成鉴权事件。
+ * 客户端在这条路径上靠的是「连接断了 + 下一次请求 401」，走的仍是同一条路。
+ */
+test("服务关停不发 unauthorized，只关连接", async (t) => {
+  const { http, ws, app } = await startServer(t);
+  const cookie = await loginCookie(http);
+
+  const live = await tryConnect(ws, { cookie });
+  assert.equal(live.opened, true);
+  t.after(() => live.ws.terminate());
+
+  const frames: { type?: string }[] = [];
+  const closed = new Promise<void>((resolve) => {
+    live.ws.once("close", () => resolve());
+  });
+  live.ws.on("message", (raw) => frames.push(JSON.parse(raw.toString()) as { type?: string }));
+
+  // 主动关停（`t.after` 里那一次是幂等的兜底，见 `sessions.close()` 的同类处理）。
+  await app.stop();
+  await closed;
+
+  assert.deepEqual(
+    frames.map((f) => f.type),
+    [],
+    "关停不该发出任何帧，尤其不该是 unauthorized",
+  );
+  assert.equal(live.ws.readyState, WebSocket.CLOSED);
 });
