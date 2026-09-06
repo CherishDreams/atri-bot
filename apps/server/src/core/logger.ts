@@ -16,8 +16,14 @@ export interface Logger {
   info(msg: string, meta?: unknown): void;
   warn(msg: string, meta?: unknown): void;
   error(msg: string, meta?: unknown): void;
-  child(): Logger;
 }
+
+/*
+ * 这里**没有** `child()`。它以前有（`() => Logger`，返回同级别的新实例），而全仓零调用点 ——
+ * 留着它的代价不是那两行实现，是**每一个**测试替身都得替一个没人走的路径补上方法
+ *（本仓有 6 份 silentLogger/quietLogger，各多写 3 行）。AGENTS.md 的口径是
+ * 「确定没用就整个删」；真需要按请求/插件分频道时再加，那时它至少有一个调用方来定形状。
+ */
 
 export function createLogger(level: string = "info"): Logger {
   // 未知级别退化成 info 是既有行为（`ATRI_LOG_LEVEL=verbose` 今天不会让启动失败）。
@@ -38,6 +44,5 @@ export function createLogger(level: string = "info"): Logger {
     info: (msg, meta) => emit("info", msg, meta),
     warn: (msg, meta) => emit("warn", msg, meta),
     error: (msg, meta) => emit("error", msg, meta),
-    child: () => createLogger(level),
   };
 }

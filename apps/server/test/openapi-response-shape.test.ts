@@ -35,11 +35,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AdapterInfo } from "@atri/shared";
 import { AdapterManager } from "#adapters/manager.ts";
-import { AgentEngine } from "#core/agent/engine.ts";
-import { ProviderRegistry } from "#core/provider/registry.ts";
-import { ToolConfigStore } from "#core/tool/store.ts";
-import { ToolRegistry } from "#core/tool/registry.ts";
-import { SessionManager } from "#core/session/manager.ts";
 import { createLogger } from "#core/logger.ts";
 import { createApp } from "#app.ts";
 import { makeTestConfig } from "./helpers/config.ts";
@@ -474,28 +469,12 @@ test("每个端点的真实响应与规格逐字段一致", async (t) => {
 });
 
 /** `GET /adapters` 恒空：没有适配器实现，`register()` 无调用方。 */
-test("GET /adapters 的元素形状（经进程内 AdapterManager 核对）", (t) => {
-  // 真实协作者而不是桩：AdapterManager 只把 engine 存起来（没有任何读取点），
-  // 传 `undefined as never` 能过编译但会把「它其实没被用」这件事藏起来。
-  const logger = createLogger("error");
-  // 引擎要一个真的 SessionManager —— 本仓不留「内存版存储」这条第二路径，所以给它一座
-  // 临时目录里的库。这里既不发消息也不读会话，库只是被创建出来，但句柄仍须关掉。
-  const root = mkdtempSync(join(tmpdir(), "atri-shape-adapters-"));
-  const sessions = new SessionManager({ dataDir: join(root, "data") });
-  t.after(() => {
-    sessions.close();
-    rmSync(root, { recursive: true, force: true });
-  });
-  const engine = new AgentEngine({
-    sessions,
-    providers: new ProviderRegistry(),
-    // 引擎现在真的会读这两样（选本轮工具、执行调用），所以给真的空注册表与空开关，
-    // 而不是 `undefined as never` —— 后者会把「这里没接线」伪装成类型正确。
-    tools: new ToolRegistry(),
-    toolConfig: new ToolConfigStore({ tools: {} }, logger),
-    logger,
-  });
-  const manager = new AdapterManager({ config: { adapters: {} }, engine, logger });
+test("GET /adapters 的元素形状（经进程内 AdapterManager 核对）", () => {
+  // `AdapterManager` 只读 `config.adapters` 与它自己那份 `#adapters`，所以这里只需要一个
+  // logger。这条用例以前要构造**一整条真实依赖链**（一座临时目录里的 sqlite、一个引擎、
+  // 两个注册表），唯一的原因是那个 `engine` 字段 —— 它被存起来而从未被读，却要求所有
+  // 靠近它的测试替它把下游补齐。删掉之后这里回到了它本来该有的大小。
+  const manager = new AdapterManager({ config: { adapters: {} }, logger: createLogger("error") });
   manager.register("spec-x", { name: "X", start() {}, stop() {} });
   const listed: AdapterInfo[] = manager.list();
   const problems: string[] = [];

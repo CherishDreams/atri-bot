@@ -48,9 +48,6 @@ function silentLogger(sink?: string[]): Logger {
     info: (m) => push(m),
     warn: (m) => push(m),
     error: (m) => push(m),
-    child() {
-      return this;
-    },
   };
 }
 

@@ -1,6 +1,5 @@
 import type { AdapterInfo } from "@atri/shared";
 import { errorMessage } from "#core/errors.ts";
-import type { AgentEngine } from "#core/agent/engine.ts";
 import type { Logger } from "#core/logger.ts";
 import type { AdapterToggle } from "#config/file.ts";
 
@@ -18,12 +17,6 @@ export interface AdapterManagerConfig {
 
 export interface AdapterManagerDeps {
   config: AdapterManagerConfig;
-  /**
-   * 目前只有持有、没有读取点：仓库里还没有任何适配器实现（`register()` 无调用方），
-   * 等第一个接入端落地时它会经 `register()` 交给适配器自己。保留这个字段是为了
-   * 不改动既有装配形状 —— 接线方式该由真实的适配器来决定。
-   */
-  engine: AgentEngine;
   logger: Logger;
 }
 
@@ -31,16 +24,20 @@ export interface AdapterManagerDeps {
  * 适配器把外部界面（HTTP webhook、QQ、Discord、CLI…）接入 agent 引擎。
  * 它们是可选启用的：`config.adapters.<id>.enabled` 打开某一个。
  * 纯 agent 部署可以不启用任何一个。
+ *
+ * 这里**不注入 `engine`**。以前有一个「持有但从不读取」的 `engine` 字段，理由是
+ * 「等第一个接入端落地时它会经 `register()` 交给适配器自己」—— 与本仓删掉
+ * `AgentEngine` 的 `config` / `plugins` 那两个注入了却没人读的字段是同一条判断
+ *（见 architecture.md 的依赖方向一节）：一个不工作的接缝不会自己变有用，只会让类型标注
+ * 先一步说谎。真做适配器时按它实际需要的东西注入，那时这个形状才有依据。
  */
 export class AdapterManager {
   #adapters = new Map<string, Adapter>();
   config: AdapterManagerConfig;
-  engine: AgentEngine;
   logger: Logger;
 
-  constructor({ config, engine, logger }: AdapterManagerDeps) {
+  constructor({ config, logger }: AdapterManagerDeps) {
     this.config = config;
-    this.engine = engine;
     this.logger = logger;
   }
 

@@ -35,9 +35,6 @@ const quietLogger: Logger = {
   info() {},
   warn() {},
   error() {},
-  child() {
-    return quietLogger;
-  },
 };
 
 /** 用内存流拼出 fetch 的 Response，避免测试依赖真实网络。 */
@@ -966,14 +963,13 @@ function logSink(): { lines: [level: string, msg: string][]; logger: Logger } {
   const lines: [level: string, msg: string][] = [];
   return {
     lines,
-    // `debug` / `child` 在这些用例里不会被调用（factory 只走 info），补上只为满足
+    // `debug` 在这些用例里不会被调用（factory 只走 info），补上只为满足
     // `Logger` 的完整形状——少一个字段就是「不合法的 logger」，那是另一个错误。
     logger: {
       info: (m) => lines.push(["info", m]),
       warn: () => {},
       error: () => {},
       debug: () => {},
-      child: () => quietLogger,
     },
   };
 }

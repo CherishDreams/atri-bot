@@ -71,8 +71,9 @@ async function makeNamedPlugin(
 /**
  * 静默 logger。
  *
- * 五个方法一个都不能少：`Logger` 的 `debug / info / warn / error / child` 全是必填
- * （见 `src/core/logger.ts`），少写一个就是「不合法的 logger」而不是「没被调用的字段」。
+ * 四个方法一个都不能少：`Logger` 的 `debug / info / warn / error` 全是必填
+ *（见 `src/core/logger.ts`），少写一个就是「不合法的 logger」而不是「没被调用的字段」。
+ * 这里以前还得写第五个 `child()` —— 它在全仓没有任何调用点，只为了满足类型。
  */
 function silentLogger(): Logger {
   return {
@@ -80,9 +81,6 @@ function silentLogger(): Logger {
     info() {},
     warn() {},
     error() {},
-    child() {
-      return this;
-    },
   };
 }
 

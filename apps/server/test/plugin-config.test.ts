@@ -87,9 +87,6 @@ function silentLogger(): Logger {
     info() {},
     warn() {},
     error() {},
-    child() {
-      return this;
-    },
   };
 }
 

@@ -143,7 +143,7 @@ export function createProviders(
       const provider = new Impl(options);
       providers.push(provider);
       // `logger` 本身可以是 undefined（工厂被单测直接调用时不传），所以留 `logger?.`；
-      // 但**方法上不再写 `?.`**：`Logger` 的四个方法与 child 都是必填的，
+      // 但**方法上不再写 `?.`**：`Logger` 的四个方法都是必填的，
       // 那一级可选链在今天已经是不可达分支，留着会让读者以为「传个半套 logger 也没事」，
       // 而那种输入现在由编译期直接拒绝。
       logger?.info(

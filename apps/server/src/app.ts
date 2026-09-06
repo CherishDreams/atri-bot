@@ -96,7 +96,7 @@ export async function createApp(config: AppConfig) {
 
   const engine = new AgentEngine({ sessions, providers, tools, toolConfig, logger });
 
-  const adapters = new AdapterManager({ config, engine, logger });
+  const adapters = new AdapterManager({ config, logger });
 
   const http = createHttpServer({
     config,

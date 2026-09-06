@@ -12,18 +12,14 @@ import { makeTestConfig } from "./helpers/config.ts";
 /**
  * 静默 logger，避免测试输出被日志刷屏。
  *
- * 五个方法一个都不能少：`Logger` 的 `debug / info / warn / error / child` 全是必填
- * （见 `src/core/logger.ts`）。迁移前只写四个也能跑，是因为 `AuthManager` 恰好不调
- * `child`——但「少一个必填成员」在类型上就是不合法的 logger，那是另一种错误。
+ * 四个方法一个都不能少：`Logger` 的 `debug / info / warn / error` 全是必填
+ *（见 `src/core/logger.ts`）。少写一个在类型上就是不合法的 logger，那是另一种错误。
  */
 const silentLogger: Logger = {
   debug() {},
   info() {},
   warn() {},
   error() {},
-  child() {
-    return silentLogger;
-  },
 };
 
 /**
@@ -83,7 +79,7 @@ async function makeAuth(t: TestContext, opts: AuthFixtureOptions = {}) {
  * 「凭证校验已通过 ⇒ 必然签发令牌」这条运行时事实的类型写法。
  *
  * 为什么需要它：最后一条断言写成 `auth.login("atri", "secret-pw").user.username`，
- * 而断言序列在本次迁移中逐字冻结（有快照比对），无法在那一行前插 `assert.ok`：
+ * 而断言序列在本次迁移中逐字冻结（本仓没有快照机制，靠的是人工比对迁移前后的输出），无法在那一行前插 `assert.ok`：
  * 守卫只能收窄「引用」（变量与属性路径），收窄不了每次重新发出的调用表达式，
  * 于是 `login()` 的返回类型仍是 `LoginResult | null`，点 `.user` 就是 TS2531。
  * 这里只覆盖 `login` 一个成员（其余成员由 `AuthManager` 原样提供），运行时仍是同一个
@@ -198,7 +194,12 @@ test("超过绝对有效期后失效，即使期间一直活跃", async (t) => {
   const login = auth.login("admin", "secret-pw");
   assert.ok(login, "口令正确时必须签发令牌");
   const { token } = login;
-  assert.ok(ABSOLUTE_TTL_MS > IDLE_TTL_MS, "绝对有效期必须严于空闲有效期才有意义");
+  // 方向要说对：**绝对期限比空闲期限长**，这条用例才有「期间一直活跃」这种东西可演。
+  // 写成「严于」会让人以为 15 天 < 7 天，而下一个人可能会照那个意思去「修」常量。
+  assert.ok(
+    ABSOLUTE_TTL_MS > IDLE_TTL_MS,
+    "绝对有效期必须长于空闲有效期，否则「一直活跃也躲不过绝对上限」根本做不到",
+  );
 
   // 每 6 天续期一次，足以躲开空闲超时，但躲不过 15 天的绝对上限。
   for (let i = 0; i < 3; i += 1) {
