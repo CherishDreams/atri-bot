@@ -19,7 +19,7 @@ const distIndex = join(staticDir, "index.html");
  * 为什么要给 `Response` 单独标一个类型：`Response.json()` 在 undici 的类型里是
  * `Promise<unknown>`（JSON 里可以有任何东西），而有一条断言写成
  * `assert.equal((await bad.json()).error, "账号或密码错误")`——断言序列在本次迁移中
- * 逐字冻结（有快照比对），收窄插不进那一行，只能标在**取到响应的那一行**（不是断言行）。
+ * 逐字冻结（本仓没有快照机制，靠的是人工比对迁移前后的输出），收窄插不进那一行，只能标在**取到响应的那一行**（不是断言行）。
  * `error` 这个键名来自 `src/api/http.ts` 的 `sendError`：所有失败响应都是
  * `{ error: "<中文说明>" }`。
  */

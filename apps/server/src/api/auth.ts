@@ -1,10 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { LoginResponse } from "@atri/shared";
+import { ABSOLUTE_TTL_MS } from "#core/auth/manager.ts";
 import type { AuthManager } from "#core/auth/manager.ts";
 import { sendError } from "./http.ts";
 
-/** Cookie 的最大存活秒数，与 AuthManager 的 15 天绝对有效期保持一致。 */
-const MAX_AGE_SECONDS = 15 * 24 * 60 * 60;
+/**
+ * Cookie 的存活秒数，**从绝对有效期派生**而不是抄一份 `15 * 24 * 60 * 60`。
+ *
+ * 那两个数字原先住在两个文件里，注释写着「与 AuthManager 的 15 天保持一致」—— 也就是
+ * 靠人记得。改 `ABSOLUTE_TTL_MS` 而忘了这里，症状是浏览器揣着一个服务端已经判死的令牌
+ * 15 天：每次请求都 401，而 Cookie 还在，看起来像登录逻辑坏了。派生让它不可能发生。
+ */
+const MAX_AGE_SECONDS = ABSOLUTE_TTL_MS / 1000;
 
 interface CookieFlags {
   secure?: boolean;

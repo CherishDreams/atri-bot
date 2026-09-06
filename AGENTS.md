@@ -75,7 +75,10 @@ plugins/  ─> 只依赖注入给它的 ctx
 ```
 
 - **`core/` 不得 import `api/`、`adapters/`、`plugins/` 里的任何东西。**
-- **没有任何模块 import `api/`**。传输层是最外层、可整体替换（换 gRPC / CLI 不碰业务逻辑）。
+- **除测试外没有任何模块 import `api/`**。传输层是最外层、可整体替换（换 gRPC / CLI 不碰业务逻辑）。
+  测试是唯一的例外，而且是刻意的：`resolveStaticPath`（目录穿越那道 403）与 `Router`
+  要能被直接单测，architecture.md 里「导出它以便测试」就是这条许可的来源；
+  把规则写成绝对的一句，会让那三个 import 看起来像违规 —— 它确实曾经是（那句话与仓内事实不符）。
 - `app.ts` 是**唯一**的组合根。装配只在那一处发生；其余模块不知道别人是谁。
 - 依赖一律走**构造参数**。不要引入全局单例、模块级可变状态、或「import 一下就自动注册」的副作用。
   这条是测试能直接 `createApp(config)` 起真服务、而不必 mock 掉半个世界的原因。
@@ -285,9 +288,24 @@ Vue 3 + vue-router + Pinia + UnoCSS(presetWind4) + naive-ui，`<script setup lan
   （`stores/sessions.ts` 的 `ingestInto` / `dropPending` 就是这么来的）。
 - **UnoCSS 必须 import `virtual:uno.css`**（在 `main.ts` 里，且要在本地 `./uno.css` 之后）。
   少了它，产物里一个工具类都不生成，样式层**静默失效**——症状是 CSS 从 ~12 kB 掉到 ~3 kB，没有任何报错。
-- 主题色在 `uno.config.ts` 的 `theme.colors`（`bg` / `panel` / `fg` / `muted` / `accent` / `danger`），
-  不是旧 `styles.css`。注意这套是**暗色 token**，落在浅色外壳上会显得「丑」——按设计稿写具体值。
-- 顶栏高度 `--atri-header-h` 定义在 `src/uno.css` 的 `:root`，顶栏与内容区偏移共用它，**不要写死 60px**。
+- 主题色在 `apps/dashboard/uno.config.ts` 的 `theme.colors`，取值全部是 `var(--atri-*)`：
+  底色 `canvas` / `surface` / `raised` / `tint`，分隔 `line` / `line-strong`，
+  文字 `ink` / `ink-muted` / `ink-faint`，强调 `primary`(+`-hover`/`-pressed`/`-soft`) / `ring`，
+  语义色 `info` / `success` / `warning` / `danger`(+`-hover`)。**名字以那份文件为准**：
+  这里列出的每一个键都要能在 `theme.colors` 里找到，反之亦然 —— 照一个不存在的 token 名写
+  （历史上这里列的是 `bg`/`panel`/`fg`/`muted`/`accent`）不会报错，只会**静默不生成那条 CSS**，
+  与上面 `virtual:uno.css` 那一条是同一种失效形态。深浅两套值在 `src/theme/`
+  （`tokens.ts` 出常量、`css-vars.ts` 出 `:root` 与深色覆盖，`ThemeToggle` 翻转），
+  所以**不存在「只有暗色」这套 token** 了：按设计稿写具体值时要说清在哪一套下成立。
+- 顶栏高度用 `--atri-header-h`，**不要写死 60px**。它的真源是 `src/theme/tokens.ts`，
+  经 `src/theme/css-vars.ts` 变成 CSS 变量、再由 `uno.config.ts` 的 preflight 注入；
+  `src/uno.css` 里那份 `:root` 已经删掉并留了说明 —— 再抄一份就是第二个真源，深浅翻转时它不跟着翻。
+- **两个包的 import 别名不是一套，别去「统一」它**：`apps/dashboard` 用 `@/...`
+  （`tsconfig.json` 的 `paths` + `vite.config.ts` 的 `alias`，两边都得配是因为 vue-tsc 读前者、
+  Vite 读后者），而 `apps/server` 刻意用 `#...`。判据还是那一条 —— **谁来解析这个说明符**：
+  dashboard 先经 Vite 编译，`paths` 骗不过运行时是因为运行时根本不看 tsconfig，而 Vite 会看；
+  服务端直接由 Node 跑 `.ts` 源码，只有 `package.json` 的 `imports` 才可能被 Node 解析（见上面
+  「代码风格」那条）。给其中一个包加另一种写法，就是给下一个「顺手统一」的人留坑。
 - **状态若能从路由推出，就不要存本地**。平台切换的高亮是 `computed(() => route.path...)`，
   写成 `ref` 会立刻出现「停在 chat 但按钮显示 bot」——刷新、前进后退、直接粘贴深链时局部状态都不跟着走。
 - `src/api/client.ts` 是**唯一的** HTTP/WS 出口。401 在那里统一转成 `UnauthorizedError`，

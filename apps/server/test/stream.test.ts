@@ -38,7 +38,7 @@ interface SseEvent {
  * `string`。这里用交叉类型**向下收窄**（不替换掉 `Response` 的其余成员）：断言的本意就是
  * 「这个头必须存在并且匹配」，头缺失时运行时传进去的还是 null，`assert.match` 照样抛
  * ERR_ASSERTION，语义没有放宽。之所以在取到响应的那一刻收窄，而不是在断言里加 `!` 或
- * `String(...)`：断言行在本次迁移里逐字冻结（有快照比对）。
+ * `String(...)`：断言行在本次迁移里逐字冻结（本仓没有快照机制，靠的是人工比对迁移前后的输出）。
  */
 type ResponseWithContentType = Response & { headers: { get(name: "content-type"): string } };
 

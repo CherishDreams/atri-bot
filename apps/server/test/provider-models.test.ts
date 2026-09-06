@@ -40,7 +40,7 @@ interface StubRequest {
 /**
  * 桩上游的请求日志：一个「至少已经收到一次请求」的数组。
  *
- * 为什么不是 `StubRequest[]`：断言行在本次迁移里逐字冻结（有快照比对），而
+ * 为什么不是 `StubRequest[]`：断言行在本次迁移里逐字冻结（本仓没有快照机制，靠的是人工比对迁移前后的输出），而
  * `noUncheckedIndexedAccess` 会让 `seen[0]` 与 `const [req] = seen` 的读法带
  * `undefined`，那些直接按下标读日志的断言就加不了守卫。这几个用例读首项时上游必然已被
  * provider 打过一次（就在上一行），所以类型上写成首项必填；真的空了（用例自己写错）

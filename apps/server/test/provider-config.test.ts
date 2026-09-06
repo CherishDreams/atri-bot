@@ -30,9 +30,6 @@ const quietLogger: Logger = {
   info() {},
   warn() {},
   error() {},
-  child() {
-    return quietLogger;
-  },
 };
 
 /**

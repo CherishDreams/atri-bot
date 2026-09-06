@@ -10,7 +10,7 @@ import { openSessionDb, type RawMessageRow, type RawSessionRow } from "./db.ts";
  * `ToolStoreConfig` 同一规矩），而不是收一个 `Partial<AppConfig>`。
  *
  * **不采用** `ProviderConfigStore` 那条「root 缺省时退化为只读内存视图」的先例：`dataDir` 在
- * `AppConfig` 里必填且永远有值（`config/config.ts:80` 有 `"data"` 兜底），那条分支在真实运行里
+ * `AppConfig` 里必填且永远有值（`loadConfig()` 那一侧有 `"data"` 兜底），那条分支在真实运行里
  * 永远不会走到；而多一条内存路径就是多一份会漂移的实现 —— 这里的差别不是「能不能写」这种
  * 一眼看得见的东西，而是「顺序对不对、游标对不对」这种要靠测试才看得见的东西。
  */
@@ -110,10 +110,10 @@ function decodeCursor(kind: CursorKind, raw: string): number {
  * - **行的顺序就是插入序，唯一真相是 `messages.seq`**（`INTEGER PRIMARY KEY`，即 rowid 别名）。
  *   不能按 `created_at` 排：那是毫秒 ISO，同一轮多步循环里可以完全相同，而 `randomUUID` 不可排序；
  *   更要命的是 `ORDER BY created_at` 在 SQLite 上常因「相同 key 按 rowid 兜底」而**碰巧给对结果**，
- *   是一条能穿过大半测试的坏实现。`engine.ts:159-160` 那条「助手这条必须先进 history，再排它的
- *   结果」的注释就是这个不变量的文档，两家上游都靠它配对。
+ *   是一条能穿过大半测试的坏实现。`AgentEngine.#runLoop` 里那句「助手这条必须先进 history，
+ *   再排它的结果」就是这个不变量的文档，两家上游都靠它配对。
  * - **`appendMessage` 不做角色校验**，`role` 列也刻意没有 `CHECK`。引擎的 `#historyFor`
- *   （`engine.ts:229-241`）会在读取时把「带 `toolCalls` 却没配到结果」的孤儿调用退化成纯文本，
+ *   会在读取时把「带 `toolCalls` 却没配到结果」的孤儿调用退化成纯文本，
  *   那条兜底存在的前提就是「这样的历史能被写进库、也能被读出来」—— 上游打断留下的半截一轮
  *   是运行期的事实，不是脏数据。加了 CHECK 就把它变成写库失败。
  */
@@ -209,9 +209,9 @@ export class SessionManager {
    * 内存版时代这个方法返回的是 Map 里那份活对象，之后 `appendMessage` 会 push 进同一个数组；
    * 库化后没有活引用可给。**这个差别是真的**：任何「先读这份、再追加、然后又读同一次的结果」
    * 的写法都会看不见刚写进去的消息。引擎已经按新的语义排好顺序 ——
-   * `engine.ts:86-102` 的 `handleMessage` 是**先 append 用户消息、再读历史**，
-   * 而 `#historyFor` 在一轮循环里只调用一次（`engine.ts:131`），之后每步只往自己那份
-   * `history` 上 push（`:161`/`:185`），从不再回读存储。
+   * `AgentEngine.handleMessage` 是**先 append 用户消息、再读历史**，
+   * 而 `#historyFor` 在一轮循环里只调用一次，之后每步只往自己那份
+   * `history` 上 push（都在 `#runLoop` 里），从不再回读存储。
    *
    * 这条耦合由测试钉住：改成「先读后 append」会立刻撞上
    * `engine-tools.test.ts` 的「回喂的那一次请求里必须同时有 tool_calls 与工具结果」

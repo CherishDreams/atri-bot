@@ -20,7 +20,7 @@ import { openSessionDb, sessionDbPath } from "#core/session/db.ts";
  */
 function useStore(t: TestContext): { open: () => SessionManager; dbPath: string } {
   const root = mkdtempSync(join(tmpdir(), "atri-session-"));
-  // 与 `AppConfig` 的默认值同形（`config.ts:80` 的 `resolve(root, "data")`），
+  // 与 `AppConfig` 的默认值同形（`loadConfig()` 对 `dataDir` 是 `resolve(root, "data")`），
   // 顺带让 `openSessionDb` 的「目录不存在要 mkdir」真的被走到。
   const dataDir = join(root, "data");
   const opened: SessionManager[] = [];
@@ -202,7 +202,8 @@ test("toolCalls 原样往返，读回的行是普通对象", (t) => {
       {
         id: "c1",
         name: "probe",
-        // `arguments` 是模型产出的原始串，全程原样搬运（`registry.ts:97-105` 刻意不解析它）。
+        // `arguments` 是模型产出的原始串，全程原样搬运（`ToolRegistry` 的 `parseArguments` 只把它喂给
+        // 工具的具名参数，刻意不进一步解析）。
         arguments: '{"q":"含 \\\\ 反斜杠、\\"引号\\"、换行\n、emoji 🙂 与 } 本身"}',
       },
     ],
@@ -249,7 +250,7 @@ test("被中断的一轮原样留在库里：不清理、不标记", (t) => {
 
   const messages = open().getDetail(s.id)?.detail.messages ?? [];
   // 这条测的是「某件事**没有**发生」：孤儿调用必须原样可读。配对修复属于 core
-  //（`engine.ts:229-241` 的 `#historyFor`），存储层不替它清理、也不加 incomplete 标记 ——
+  //（`AgentEngine.#historyFor`），存储层不替它清理、也不加 incomplete 标记 ——
   // 而上游打断留下的半截一轮是运行期的事实，不是脏数据。
   assert.equal(messages.length, 1);
   assert.equal(messages[0]?.id, "orphan");

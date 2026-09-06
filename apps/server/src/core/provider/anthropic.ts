@@ -1,3 +1,4 @@
+import { DEFAULT_TIMEOUT_MS } from "./store.ts";
 import { toNetworkError, toProviderError } from "./errors.ts";
 import { normalizeModels } from "./openai.ts";
 import type { ToolCall } from "@atri/shared";
@@ -54,7 +55,7 @@ export class AnthropicProvider {
     version = "2023-06-01",
     maxTokens = 8192,
     headers = {},
-    timeoutMs = 120_000,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
   }: ProviderOptions = {}) {
     if (!id) throw new Error("anthropic provider 必须带有 id");
     this.id = id;

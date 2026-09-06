@@ -1,3 +1,4 @@
+import { DEFAULT_TIMEOUT_MS } from "./store.ts";
 import { toNetworkError, toProviderError } from "./errors.ts";
 import type { ToolCall } from "@atri/shared";
 import type {
@@ -47,7 +48,7 @@ export class OpenAIProvider {
     baseUrl,
     apiKey,
     headers = {},
-    timeoutMs = 120_000,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
   }: ProviderOptions = {}) {
     if (!id) throw new Error("openai provider 必须带有 id");
     this.id = id;

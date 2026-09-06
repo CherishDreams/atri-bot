@@ -162,7 +162,7 @@ v22.13.0 / v23.4.0，而本仓 `engines.node >= 22.18.0` 已经在里面，所�
 于是坏实现能穿过大半测试 —— `session.test.ts` 把 fixture 的 `created_at` 刻意设成与插入顺序**逆序**，
 就是为了杀掉它。也不用 `WITHOUT ROWID`：那会让行序变成 UUID 字典序，插入序直接消失。
 
-顺序不是审美问题：`engine.ts:159-160` 的「助手这条必须先进 history，再排它的结果」是 OpenAI 与
+顺序不是审美问题：`AgentEngine.#runLoop` 里那句「助手这条必须先进 history，再排它的结果」是 OpenAI 与
 Anthropic 配对 `tool_calls` ↔ `tool_result` 的前提。
 
 ### 三条实测出来的 API 形状，与通识相反
@@ -182,9 +182,9 @@ Anthropic 配对 `tool_calls` ↔ `tool_result` 的前提。
 ### `tool_calls` 是 JSON 文本列，不是子表
 
 读路径永远是「整条消息 + 它的全部调用」，而配对这些调用是在内存里做的
-（`engine.ts:229-241` 的 `#historyFor`），SQL 里从不按调用维度查。子表只能靠 JOIN 换回同一个
+（`AgentEngine.#historyFor`），SQL 里从不按调用维度查。子表只能靠 JOIN 换回同一个
 集合，却把「一条消息 + 两颗调用」变成 1+2 次 INSERT，任一步失败就留下「有调用没有消息」这种形状。
-`arguments` 全程原样搬运、不解析（`registry.ts:97-105` 把「不是合法 JSON」当常态处理，
+`arguments` 全程原样搬运、不解析（`ToolRegistry` 的 `parseArguments` 把「不是合法 JSON」当常态处理，
 回喂 `isError` 而不是抛），所以落库的只是我们 `JSON.stringify` 出来的那层信封。
 
 `role` 列**刻意没有 `CHECK`**：加了它，「上游打断留下的孤儿调用」就变成写库失败，
@@ -414,11 +414,11 @@ builtins/    一颗工具一个文件（`currentTime.ts`），只导出自己那
 三条与既有习惯不同的决定：
 
 - **默认关闭。** 判据是 `toggle?.enabled === true`，与 `adapters` 的
-  `?.enabled !== false`（`adapters/manager.ts:55`、`:81`）**正好相反**。理由不是洁癖：
+  适配器那侧的 `?.enabled !== false`（`AdapterManager.startAll` 与 `list()`）**正好相反**。理由不是洁癖：
   适配器没写就启用，最坏结果是少听一个端口；工具没写就启用，最坏结果是**一次版本升级
   静默给模型新增了几件可做的事**。`atri.config.example.json` 里那条 `false` 就是这个语义的示例。
 - **`enabled` 每次现读文件，不缓存在内存里。** `AppConfig` 是 `loadConfig()` 的一次性快照
-  （`index.ts:9` 之后再没有重读点），而控制台的开关改的就是文件。所以 `GET /tools` 与
+  （`main()` 里 `loadConfig()` 之后再没有重读点），而控制台的开关改的就是文件。所以 `GET /tools` 与
   引擎取启用集都走 `ToolConfigStore.#current()`，那里每次 `readConfigFile()` ——
   改完不需要重启，也不需要像 provider 那样重建注册表（注册表根本不知道启用状态）。
   抄 `AdapterManager.list()` 那种「从注入的快照算 enabled」会把这个 bug 一起抄过来。
