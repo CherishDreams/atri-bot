@@ -1,11 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 /**
- * 路由处理函数。`params` 是 `:name` 捕获，永远存在（无命中时压根不会调到这里）。
- *
- * 允许同步返回：`await` 一个非 Promise 是 no-op，今天的调用方就是两种都写。
- */
-/**
  * 路由捕获的参数。
  *
  * 用显式清单而不是 `Record<string, string>`：索引签名在 `noUncheckedIndexedAccess`
@@ -18,6 +13,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
  */
 export type RouteParams = { id: string };
 
+/**
+ * 路由处理函数。`params` 是 `:name` 捕获，永远存在（无命中时压根不会调到这里）。
+ *
+ * 允许同步返回：`await` 一个非 Promise 是 no-op，今天的调用方就是两种都写。
+ */
 export type RouteHandler = (
   req: IncomingMessage,
   res: ServerResponse,

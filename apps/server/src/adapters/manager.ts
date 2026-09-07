@@ -10,9 +10,15 @@ export interface Adapter {
   stop?(): Promise<void> | void;
 }
 
-/** AdapterManager 实际读写的配置键。 */
+/**
+ * AdapterManager 实际读写的配置键。
+ *
+ * `adapters` 必填，与 `AppConfig.adapters` 一致（`loadConfig()` 给的是 `{}` 而不是
+ * undefined）。以前这里写成可选，于是每次读都要补一个 `?? {}`：两处防御，一处不可达，
+ * 而读的人分不清哪个是真可能的形状。
+ */
 export interface AdapterManagerConfig {
-  adapters?: Record<string, AdapterToggle>;
+  adapters: Record<string, AdapterToggle>;
 }
 
 export interface AdapterManagerDeps {
@@ -47,7 +53,7 @@ export class AdapterManager {
   }
 
   async startAll(): Promise<void> {
-    const cfg = this.config.adapters ?? {};
+    const cfg = this.config.adapters;
     for (const [id, adapter] of this.#adapters) {
       if (cfg[id]?.enabled === false) continue;
       try {
@@ -71,7 +77,7 @@ export class AdapterManager {
 
   /** 已启用的适配器，供 dashboard 状态视图使用。 */
   list(): AdapterInfo[] {
-    const cfg = this.config.adapters ?? {};
+    const cfg = this.config.adapters;
     return [...this.#adapters.entries()].map(([id, a]) => ({
       id,
       name: a.name ?? id,

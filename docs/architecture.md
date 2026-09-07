@@ -74,17 +74,26 @@ const sessions = new SessionManager(config, logger); // 会话库落在 config.d
 const providers = new ProviderRegistry();
 const providerConfig = new ProviderConfigStore(config, logger);
 // 工具：注册表只管「存在与执行」，启用与否由 ToolConfigStore 每次现读文件
+// `list_plugins` 要读插件列表，所以构造顺序是「插件管理器在前、工具在后」。
+// 传的是 **getter 而不是 `plugins.list()` 的结果**：此刻还没 `loadAll()`，
+// 而插件能在运行期被加载/重载/启停 —— 快照会把这颗工具冻在装配那一刻。
+// 第三个参数是框架私有的数据根：插件只经 `ctx.dataDir` 看到 `<dataDir>/plugins/<自己的 id>`，
+// 拿不到 `dataDir` 本体（那下面躺着 `sessions.sqlite`）。
+const plugins = new PluginManager(pluginRuntimeConfig(config), logger, {
+  dataRoot: join(config.dataDir, "plugins"),
+});
 const tools = new ToolRegistry();
-for (const tool of createBuiltinTools()) tools.register(tool);
+for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) tools.register(tool);
 const toolConfig = new ToolConfigStore(config, logger);
-// 插件看到的是白名单视图，不是整份 AppConfig（见「插件可见的配置」一节）
-const plugins = new PluginManager(pluginRuntimeConfig(config), logger);
 // 引擎吃五样：会话、provider、工具注册表、工具开关存储、日志器。
 // 曾经这里还注入过 config 与 plugins，两个字段全仓没有任何读取点，于是被删掉；
 // tools / toolConfig 是**先有读取点**（选本轮工具、执行调用）才加进来的。
 const engine = new AgentEngine({ sessions, providers, tools, toolConfig, logger });
-const adapters = new AdapterManager({ config, engine, logger });
-const http = await createHttpServer({
+// 适配器不注入 engine：那个字段以前只存不读，已按「注入了但没人读」的同一条判断删掉。
+const adapters = new AdapterManager({ config, logger });
+// `createHttpServer` **不是** async（它只构造 server 与路由，`listen` 才是异步的那一步），
+// 所以这里不 await —— `app.start()` 里才 `await http.listen(...)`。
+const http = createHttpServer({
   config,
   logger,
   sessions,

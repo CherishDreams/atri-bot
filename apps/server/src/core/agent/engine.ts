@@ -289,10 +289,10 @@ export class AgentEngine {
    * `SessionManager.appendMessage` 不做角色校验，所以兜底只能放在这里。
    */
   #historyFor(session: SessionDetail): ChatMessage[] {
+    // 用 flatMap 而不是 `filter(...).map(m => m.toolCallId as string)`：filter 不窄化类型，
+    // 那个 `as` 就落在**真边界之外**（AGENTS.md 的 `as` 白名单里没有它这一类）。
     const answered = new Set(
-      session.messages
-        .filter((m) => m.role === "tool" && m.toolCallId)
-        .map((m) => m.toolCallId as string),
+      session.messages.flatMap((m) => (m.role === "tool" && m.toolCallId ? [m.toolCallId] : [])),
     );
 
     return session.messages.map((m) => {

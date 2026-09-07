@@ -16,7 +16,7 @@ import { errorMessage } from "#core/errors.ts";
 export const CONFIG_FILE_NAME = "atri.config.json";
 
 /**
- * 适配器段里的单项。带索引签名是因为适配器插件可能往自己的段落里放任意配置键，
+ * 适配器段里的单项。带索引签名是因为适配器实现可能往自己的段落里放任意配置键，
  * 读-改-写必须把它们原样带回，所以这份类型不能是封闭的。
  */
 export interface AdapterToggle {

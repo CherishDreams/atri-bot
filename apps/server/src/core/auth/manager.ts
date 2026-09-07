@@ -32,7 +32,13 @@ export type AuthSessionLostReason = "logout" | "revoked";
 export interface AuthManagerConfig {
   root: string;
   auth: {
-    adminUser?: string;
+    /**
+     * 必填，且**不在这里给默认值**。管理员用户名的默认值只有一个真源，在
+     * `loadConfig()`（`adminUser: env.ATRI_ADMIN_USER ?? fileConfig.auth?.adminUser ?? "admin"`）；
+     * 这里再写一遍 `?? "admin"` 就是第二个真源，于是「改默认用户名」要改两处，
+     * 而少改的那一处不会报错，只会让某些调用方悄悄用另一个账号名去比对口令。
+     */
+    adminUser: string;
     adminPassword?: string | null;
     cookieName: string;
     cookieSecure: boolean;
@@ -97,7 +103,7 @@ export class AuthManager {
     this.#config = config;
     this.#logger = logger;
     this.#now = now;
-    this.#username = config.auth?.adminUser ?? "admin";
+    this.#username = config.auth.adminUser;
     this.#usernameHash = digest(this.#username);
   }
 
@@ -127,7 +133,9 @@ export class AuthManager {
    * 并打印一次到日志——这是运维拿到初始密码的唯一途径。
    */
   async init(): Promise<void> {
-    let password: string | null = this.#config.auth?.adminPassword ?? null;
+    // `auth` 在类型上是必填，所以这里不写 `?.`：那条分支在真实运行里不可达，
+    // 留着会让读者以为「传一个没有 auth 段的配置也没事」，而它现在由编译期拒绝。
+    let password: string | null = this.#config.auth.adminPassword ?? null;
 
     if (typeof password !== "string" || password.length === 0) {
       password = randomBytes(GENERATED_PASSWORD_BYTES).toString("base64url");
