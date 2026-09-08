@@ -48,19 +48,24 @@ pnpm --filter @atri/shared build   # 必须。shared 的 dist 不入库，没有
 
 ## 命令
 
-| 命令                           | 说明                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------ |
-| `pnpm check`                   | **提交前必须跑**：typecheck → lint → format:check → codegen:check → test |
-| `pnpm lint` / `lint:fix`       | `oxlint --deny-warnings .` / `oxlint --fix .`                            |
-| `pnpm format` / `format:check` | oxfmt 改写 / 只校验                                                      |
-| `pnpm codegen`                 | 按 `apps/server/openapi.json` 重新生成前端 SDK                           |
-| `pnpm test`                    | 全部包；服务端是 `node --test "test/**/*.test.ts"`                       |
-| `pnpm build`                   | `packages/shared` + `apps/dashboard`（服务端不产出构建物）               |
-| `pnpm start`                   | 起服务端（= `pnpm --filter @atri/server start`）                         |
+| 命令                           | 说明                                                                                      |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| `pnpm check`                   | **提交前必须跑**：typecheck → lint → format:check → static:check → codegen:check → test   |
+| `pnpm static:check`            | 三道「编译器与测试都看不见」的检查：分层方向 + 说明符写法、按行号的交叉引用、内置工具登记 |
+| `pnpm lint` / `lint:fix`       | `oxlint --deny-warnings .` / `oxlint --fix .`                                             |
+| `pnpm format` / `format:check` | oxfmt 改写 / 只校验                                                                       |
+| `pnpm codegen`                 | 按 `apps/server/openapi.json` 重新生成前端 SDK                                            |
+| `pnpm test`                    | 全部包；服务端是 `node --test "test/**/*.test.ts"`                                        |
+| `pnpm build`                   | `packages/shared` + `apps/dashboard`（服务端不产出构建物）                                |
+| `pnpm start`                   | 起服务端（= `pnpm --filter @atri/server start`）                                          |
 
-三条容易踩的规则：
+四条容易踩的规则：
 
 - **仓库没有 CI**，`pnpm check` 没人替你跑。**你就是 CI**——没跑过就不要说「改好了」。
+- `static:check` 的三道检查都只认**结构性事实**（谁 import 谁、注释里的行号形态、文件与清单是否
+  一一对应）。它们各自都带一条「防空跑」断言：本仓初版的两条检查把 `fileURLToPath` 返回的
+  尾斜杠算进了字符串切片，于是遍历到 0 个文件却打印「通过」。**写检查的人必须试着让该检查变红一次**，
+  这条判据对 `pnpm check` 里的任何一项都成立。
 - `pnpm lint` 带 `--deny-warnings`，**告警即失败**。而 `oxlint` 单独运行时仅有 warning 会退出 0，
   直接跑 `oxlint` 看到 0 退出码就以为通过了是错的，用 `pnpm lint`。
 - `codegen:check` 用 `git status --porcelain` 判断生成物漂移，**改了接口就必须先 commit 生成物**。
@@ -199,9 +204,10 @@ architecture.md 与 README 里各有一句「重启即全部失效」只在前�
 
 被否定的方案要留下痕迹——否则下一个人会把已经踩过的坑再踩一次。
 引用别的代码时**写符号名而不是行号**（`AgentEngine.#historyFor`、`AdapterManager.startAll`、
-`loadConfig()`），也不要写 `engine.ts:159-160` 这种形式。理由不是审美：行号在一次 +70 行的
-改动后会全部指错，而指错的引用**比不写更坏** —— 它会被当成事实读，且没有任何检查在告诉你它断了。
-这一条由 `pnpm check` 里的 `scripts/check-refs.mjs` 守着（仓内一旦出现 `.ts:数字` 就红）。
+`loadConfig()`），不要写「文件名 + `:` + 行号」那种形态（形如 `engine.ts:NN`，别照抄这个例子）。
+理由不是审美：一次 +70 行的改动会让它们全部指错，而指错的引用**比不写更坏** ——
+它会被当成事实读，且没有任何编译器或测试会告诉你它断了。
+这一条由 `pnpm check` 里的 `scripts/check-refs.mjs` 守着（仓内一旦出现那种形态就红）。
 如果某处写法看起来多余或奇怪，它**几乎一定是有原因的**：先读注释和 `git log`，不要先动手「简化」。
 
 用户可见的字符串（HTTP 错误、日志、UI 文案）一律中文。
