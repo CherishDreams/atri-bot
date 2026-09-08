@@ -27,13 +27,33 @@ apps/server/src/
 api/ ─────┐
 adapters/ ┴─> core/ ─> (无)
 plugins/  ─> 仅依赖注入给它的 ctx，不 import core/ 之外的具体实现
+config/   ── 与 core/ 双向，见下面那一段
 ```
 
 `core/` 不依赖 `api/`、`adapters/`、`plugins/` 中任何东西。
-**没有任何模块依赖 `api/`**——传输层是可替换的最外层。
+**除测试外没有任何模块依赖 `api/`** —— 传输层是可替换的最外层；那三个测试 import
+`resolveStaticPath` / `Router` 是刻意的（目录穿越那道 403 要能被直接单测，规则本身见
+[静态托管](#静态托管)一节），所以规则要说成「除测试外」，否则它与仓内事实不符。
 两个 app 都依赖 `packages/shared`，共享类型、常量与线协议。
 
 这条规则的实际好处：`api/` 可以整体换掉（换成 gRPC、CLI）而不碰业务逻辑。
+
+#### `config/` 与 `core/` 之间是双向的，这不是违规而是这张图的分辨率不够
+
+按目录画会看到两条方向相反的边，按**文件**画就没有环：
+
+- `core/ → config/file.ts`：`provider/store.ts`、`auth/manager.ts`、`tool/store.ts`、
+  `provider/factory.ts` 都要读-改-写那个 JSON 配置文件，而「保留我们不认识的键」这件事
+  只有 `config/file.ts` 知道怎么做。这一侧依赖的是**文件读写层**。
+- `config/config.ts → core/tool/store.ts`：只为了一个常量 `DEFAULT_MAX_TOOL_STEPS`。
+  默认值住在「读它的那个模块」里，这样改上限只需要改一处；把常量抄到 `shared/` 或
+  `config/` 都会造出第二个真源。这一侧依赖的是**工具开关存储**。
+
+两个方向落在不同的文件上，所以没有真正的循环依赖，Node 的模块图也不会为此做多一层延迟求值。
+`core/session/manager.ts` 里那句 `import type { AppConfig } from "#config/index.ts"`
+**不算一条边**：类型导入在擦除后不存在，运行时没有任何依赖。
+（如果哪天要按目录做机械检查，判据得是「同一对目录之间只允许一个方向」而不是「不允许双向」，
+否则这张图会一检查就红 —— 而红的原因不是有环。）
 
 ### 模块说明符为什么是相对路径 + `#` 别名
 

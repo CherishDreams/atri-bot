@@ -72,9 +72,14 @@ pnpm --filter @atri/shared build   # 必须。shared 的 dist 不入库，没有
 api/ ─────┐
 adapters/ ┴─> core/ ─> (无)
 plugins/  ─> 只依赖注入给它的 ctx
+config/   ── 与 core/ 双向（按文件看没有环）
 ```
 
 - **`core/` 不得 import `api/`、`adapters/`、`plugins/` 里的任何东西。**
+- `config/` 与 `core/` 互相依赖是既成事实，别把它当违规：`core/` 里要读-改-写配置文件的模块
+  依赖 `config/file.ts`，而 `config/config.ts` 只为一个默认值依赖 `core/tool/store.ts`
+  —— 两条边落在**不同文件**上，所以没有循环依赖。要按目录做机械检查时，判据必须是
+  「同一对目录只允许一个方向」而不是「不允许双向」。原理见 architecture.md 的依赖方向一节。
 - **除测试外没有任何模块 import `api/`**。传输层是最外层、可整体替换（换 gRPC / CLI 不碰业务逻辑）。
   测试是唯一的例外，而且是刻意的：`resolveStaticPath`（目录穿越那道 403）与 `Router`
   要能被直接单测，architecture.md 里「导出它以便测试」就是这条许可的来源；
