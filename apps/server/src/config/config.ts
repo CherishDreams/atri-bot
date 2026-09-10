@@ -1,15 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { DEFAULT_AUTH_COOKIE_NAME, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT } from "@atri/shared";
 import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
-import type {
-  AdapterToggle,
-  FileConfig,
-  ProvidersFileConfig,
-  ProviderSourceEntryConfig,
-  ToolToggle,
+import {
+  readConfigFile,
+  type AdapterToggle,
+  type ProvidersFileConfig,
+  type ProviderSourceEntryConfig,
+  type ToolToggle,
 } from "./file.ts";
-import { errorMessage } from "#core/errors.ts";
 
 /**
  * `loadConfig()` 的产物：每个键都有值（内置默认 → 配置文件 → 环境变量，后者覆盖前者）。
@@ -57,18 +55,11 @@ export interface AppConfig {
 
 export function loadConfig(): AppConfig {
   const root = resolve(process.env.ATRI_ROOT ?? process.cwd());
-  const filePath = join(root, "atri.config.json");
-
-  let fileConfig: FileConfig = {};
-  if (existsSync(filePath)) {
-    try {
-      // 边界收窄：JSON 的顶层形状在这里只由 `FileConfig` 声明，不逐键校验
-      // （配置文件允许出现我们不认识的键，见 `FileConfig` 的索引签名）。
-      fileConfig = JSON.parse(readFileSync(filePath, "utf8")) as FileConfig;
-    } catch (err) {
-      throw new Error(`解析 ${filePath} 失败: ${errorMessage(err)}`, { cause: err });
-    }
-  }
+  // 读法只有一处：`readConfigFile()`。以前这里自己 `existsSync` + 自己 `JSON.parse`，
+  // 于是同一个文件有两套失败语义 —— 它少掉了「顶层必须是对象」那一条，所以
+  // `[]` 或 `"x"` 这样的文件能顺利启动（每个键都走默认值），等到第一次界面保存时
+  // 才由 `updateConfigFile` 抛出来。那是「安静地起、稍后地炸」，本仓不接受。
+  const fileConfig = readConfigFile(root);
 
   const env = process.env;
 
