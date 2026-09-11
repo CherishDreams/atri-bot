@@ -265,3 +265,26 @@ test("非法开关值与没有落盘位置都明确报错，而不是静默", as
     (err) => err instanceof ApiError && err.status === 400 && /没有落盘位置/.test(err.message),
   );
 });
+
+test("开关落盘失败：包成 500 并带上原始错误作为 cause", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "atri-tool-fail-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(configFilePath(root), "{ 这不是 JSON", "utf8");
+
+  const store = new ToolConfigStore({ root });
+  assert.throws(
+    () => store.setEnabled("current_time", true),
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, `应是 ApiError，实际是 ${String(err)}`);
+      assert.equal(err.status, 500);
+      // 对外只有这一句：`readConfigFile` 的原文带着配置文件绝对路径，不能顺原路发出去。
+      assert.equal(err.message, "保存工具开关失败，详情见服务端日志");
+      assert.doesNotMatch(err.message, /atri-tool-fail|atri\.config\.json/);
+      // AGENTS.md 要求包装错误必须带 cause。这句以前是缺的（全仓仅此一处），
+      // 缺了它，堆栈里只剩包装那一句，「为什么写不进去」重新变成猜。
+      assert.ok(err.cause instanceof Error, "必须带上原始错误");
+      assert.match(err.cause.message, /不是合法 JSON/);
+      return true;
+    },
+  );
+});

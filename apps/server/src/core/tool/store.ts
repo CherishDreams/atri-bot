@@ -151,7 +151,8 @@ export class ToolConfigStore {
       if (err instanceof ApiError) throw err;
       // 细节只进日志，不回客户端：`readConfigFile` 的错误消息里带着配置文件绝对路径。
       this.#logger?.error(`写入 ${filePath} 失败: ${errorMessage(err)}`);
-      throw new ApiError("保存工具开关失败，详情见服务端日志", 500);
+      // `cause` 不能省：文案里明说「详情见服务端日志」，堆栈丢了原始错误就无从可查。
+      throw new ApiError("保存工具开关失败，详情见服务端日志", 500, { cause: err });
     }
   }
 }
