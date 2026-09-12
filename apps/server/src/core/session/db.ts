@@ -1,7 +1,8 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { errorMessage } from "#core/errors.ts";
+import { ensurePrivateDir } from "#config/file.ts";
 import type { Logger } from "#core/logger.ts";
 
 /**
@@ -106,15 +107,9 @@ export function openSessionDb(dataDir: string, logger?: Logger): DatabaseSync {
   // `-wal` / `-shm` 由 SQLite 按 umask 创建，并在每次 checkpoint 后重建，逐文件收紧是一次性的
   // 假安全感；而 `synchronous = NORMAL` 下 checkpoint 是惰性的，也就是说**最新的、最敏感的
   // 那批对话内容**会以 0644 躺在磁盘上。目录 0700 之后文件自身的 mode 就无关紧要了
-  // （别人连 stat 都做不到）。`mode` 与 `chmodSync` 两道都要：`mkdir` 的 mode 对**已存在**
-  // 的目录不起作用，也不受 `recursive` 建的中间层继承。
-  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  try {
-    // 不支持 POSIX 权限的环境忽略即可（照 `config/file.ts` 与 `plugins/context.ts` 的先例）。
-    chmodSync(dataDir, 0o700);
-  } catch {
-    /* 忽略 */
-  }
+  // （别人连 stat 都做不到）。两道权限动作都在 `ensurePrivateDir` 里，它的注释写着
+  // 为什么 `mkdir` 的 mode 单独不够。
+  ensurePrivateDir(dataDir);
 
   let db: DatabaseSync;
   try {

@@ -1,14 +1,23 @@
 /**
- * `atri.config.json` 的读写。
+ * `atri.config.json` 与配置档文件的读写。
  *
- * 单独成文件是因为有两条写入路径——自动生成的管理员口令（AuthManager）
- * 与运行时 provider 配置（ProviderConfigStore）。两处如果各写一份
+ * 单独成文件是因为有多条写入路径——自动生成的管理员口令（AuthManager）、
+ * 运行时 provider 配置（ProviderConfigStore）、工具开关（ToolConfigStore），
+ * 以后还有每份配置档自己的 `config.json`。各处如果各写一份
  * 「读文件 → 改键 → 写回 → chmod」，迟早会在权限位或换行符这类细节上走散。
  *
- * 所有写入都是**读-改-写**：只动调用方指定的键，配置文件里其余内容
+ * 所有写入都是**读-改-写**：只动调用方指定的键，文件里其余内容
  * （包括人写下的注释性字段、别的段落）原样保留。
+ *
+ * ## 两层 API
+ *
+ * `*At(filePath)` 是真正干活的那一层，收的是**具体文件**；`*File(root)` 是它的
+ * 一行包装，只负责「root 下的 `atri.config.json`」这一种寻址。分成两层的唯一理由
+ * 是配置档不在这个 root 下（它们在 `<dataDir>/profiles/<pid>/config.json`），
+ * 而**读取与校验规则必须只有一份** —— 两处各写一遍，就会有其中一处少掉某条检查
+ * （`loadConfig()` 曾经就是这么漏掉「顶层必须是对象」的，见它的提交正文）。
  */
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { errorMessage } from "#core/errors.ts";
 
@@ -100,14 +109,34 @@ export function configFilePath(root: string): string {
 }
 
 /**
- * 读取配置文件。
+ * 建目录并把它收到 0700，已存在时同样收紧。
+ *
+ * **两道都要**：`mkdir` 的 `mode` 对**已存在**的目录不起作用，也不受 `recursive`
+ * 建的中间层继承；而只靠 `mkdir` 的 mode，第一次之后的每次启动就都不再设权限了。
+ * `chmodSync` 在不支持 POSIX 权限的环境里会抛，忽略即可（与 `writeConfigFileAt` 同例）。
+ *
+ * 为什么保护要落在**目录**而不是文件：`dataDir` 下面躺着 SQLite 的 WAL 边车
+ * `-wal` / `-shm`，它们由 SQLite 按 umask 创建、并在每次 checkpoint 后重建，
+ * 逐文件 chmod 是一次性的假安全感；目录 0700 之后文件自身的 mode 就无关紧要了
+ * （别人连 stat 都做不到）。完整理由见 `core/session/db.ts` 里的那段注释。
+ */
+export function ensurePrivateDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(dir, 0o700);
+  } catch {
+    /* 不支持 POSIX 权限的环境：忽略 */
+  }
+}
+
+/**
+ * 读取指定路径的配置文件。
  *
  * 文件不存在返回 `{}`（首次启动、或全部配置都来自环境变量），
  * 但**解析失败必须抛错**：把坏文件当成空配置，下一次写入就会
  * 把用户丢失的配置永久覆盖掉。
  */
-export function readConfigFile(root: string): FileConfig {
-  const filePath = configFilePath(root);
+export function readConfigFileAt(filePath: string): FileConfig {
   if (!existsSync(filePath)) return {};
 
   let raw: string;
@@ -132,9 +161,13 @@ export function readConfigFile(root: string): FileConfig {
   return parsed as FileConfig;
 }
 
+/** 读取 root 下的 `atri.config.json`。见文件顶部的「两层 API」。 */
+export function readConfigFile(root: string): FileConfig {
+  return readConfigFileAt(configFilePath(root));
+}
+
 /** 写入配置文件，并尽量收紧权限（口令与密钥都在里面）。 */
-export function writeConfigFile(root: string, config: FileConfig): string {
-  const filePath = configFilePath(root);
+export function writeConfigFileAt(filePath: string, config: FileConfig): string {
   writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   try {
     // Windows 等不支持 POSIX 权限的环境：忽略即可。
@@ -145,15 +178,30 @@ export function writeConfigFile(root: string, config: FileConfig): string {
   return filePath;
 }
 
+/** 写入 root 下的 `atri.config.json`。 */
+export function writeConfigFile(root: string, config: FileConfig): string {
+  return writeConfigFileAt(configFilePath(root), config);
+}
+
 /**
  * 读 → 就地改 → 写。`mutate` 抛错则完全不落盘，
  * 因此调用方可以放心地把「校验」放在里面。
  *
+ * **中间永远不许出现 `await`**：`node:fs` 的同步调用让「读—改—写」在单线程里
+ * 是一段不可打断的序列，于是同一个文件上有多个写入者（配置档文件上就同时躺着
+ * provider 段与 tools 段）也不会交错。一旦把它改成异步，两个写入者就会各读各写、
+ * 后者把前者的段落整个抹掉 —— 而那是一句 `201` 之后的静默数据丢失。
+ *
  * @returns mutate 的返回值
  */
-export function updateConfigFile<T>(root: string, mutate: (config: FileConfig) => T): T {
-  const config = readConfigFile(root);
+export function updateConfigFileAt<T>(filePath: string, mutate: (config: FileConfig) => T): T {
+  const config = readConfigFileAt(filePath);
   const result = mutate(config);
-  writeConfigFile(root, config);
+  writeConfigFileAt(filePath, config);
   return result;
+}
+
+/** 读-改-写 root 下的 `atri.config.json`。 */
+export function updateConfigFile<T>(root: string, mutate: (config: FileConfig) => T): T {
+  return updateConfigFileAt(configFilePath(root), mutate);
 }

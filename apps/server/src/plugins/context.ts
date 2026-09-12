@@ -1,8 +1,8 @@
-import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Logger } from "#core/logger.ts";
 import type { PluginInfo } from "@atri/shared";
 import { ApiError, errorMessage } from "#core/errors.ts";
+import { ensurePrivateDir } from "#config/file.ts";
 
 /**
  * 传给插件上下文的配置：插件可见的运行期配置（`PluginRuntimeConfig` 那份白名单视图）
@@ -138,14 +138,10 @@ export class PluginContext {
     if (this.#dataDir !== undefined) return this.#dataDir;
     assertPluginDirName(this.id);
     const dir = join(this.#dataRoot, this.id);
-    mkdirSync(dir, { recursive: true });
-    try {
-      // 里面可能有 token、缓存与用户数据：与配置文件（`config/file.ts`）、
-      // 会话库（`core/session/db.ts`）同一先例。不支持 POSIX 权限的环境忽略。
-      chmodSync(dir, 0o700);
-    } catch {
-      /* 忽略 */
-    }
+    // 里面可能有 token、缓存与用户数据：与配置文件（`config/file.ts`）、
+    // 会话库（`core/session/db.ts`）用同一份 `ensurePrivateDir`，而不是各写一遍
+    // 「mkdir + chmod」—— 三遍里必有一遍漏掉 `mode`，而漏掉的那条没人会 notice。
+    ensurePrivateDir(dir);
     this.#dataDir = dir;
     return dir;
   }
