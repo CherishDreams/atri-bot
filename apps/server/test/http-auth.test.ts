@@ -7,6 +7,7 @@ import { join, sep } from "node:path";
 import { createApp } from "#app.ts";
 import { resolveStaticPath } from "#api/server.ts";
 import type { AppConfig } from "#config/index.ts";
+import { configFilePath } from "#config/file.ts";
 import { DEFAULT_AUTH_COOKIE_NAME, API_PREFIX } from "@atri/shared";
 import type { LoginResponse, Session, SessionDetail } from "@atri/shared";
 import { makeTestConfig } from "./helpers/config.ts";
@@ -386,7 +387,7 @@ test("下发 Secure 属性后带上它（前置 HTTPS 场景）", async (t) => {
 test("未配置口令时，落盘生成的密码可以直接登录", async (t) => {
   const { base, config } = await startServer(t, { auth: { adminPassword: null } });
 
-  const saved = JSON.parse(readFileSync(join(config.root, "atri.config.json"), "utf8"));
+  const saved = JSON.parse(readFileSync(configFilePath(config.root), "utf8"));
   const password = saved.auth.adminPassword;
   assert.ok(password, "应当生成并落盘一个密码，否则重启后没人知道密码");
 

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { ABSOLUTE_TTL_MS, IDLE_TTL_MS, AuthManager } from "#core/auth/manager.ts";
 import type { LoginResult } from "#core/auth/manager.ts";
 import type { Logger } from "#core/logger.ts";
+import { configFilePath } from "#config/file.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**
@@ -233,7 +234,7 @@ test("未配置口令时生成随机口令，写入配置文件并回填运行�
   assert.ok(generated, "回填后的运行期口令必须存在");
   assert.equal(generated.length, 24, "18 字节 base64url 应为 24 个字符");
 
-  const filePath = join(config.root, "atri.config.json");
+  const filePath = configFilePath(config.root);
   assert.ok(existsSync(filePath), "生成的密码必须落盘，否则重启即丢失");
   const saved = JSON.parse(readFileSync(filePath, "utf8"));
   assert.equal(saved.auth.adminPassword, generated);
@@ -252,14 +253,14 @@ test("两次自动生成的口令不相同", async (t) => {
 test("落盘时保留配置文件里原有的其它键", async (t) => {
   const config = makeConfig(t, { password: null });
   writeFileSync(
-    join(config.root, "atri.config.json"),
+    configFilePath(config.root),
     JSON.stringify({ port: 6185, pluginDirs: ["./plugins"] }),
     "utf8",
   );
 
   await new AuthManager(config, silentLogger).init();
 
-  const saved = JSON.parse(readFileSync(join(config.root, "atri.config.json"), "utf8"));
+  const saved = JSON.parse(readFileSync(configFilePath(config.root), "utf8"));
   assert.equal(saved.port, 6185);
   assert.deepEqual(saved.pluginDirs, ["./plugins"]);
   assert.equal(saved.auth.adminPassword, config.auth.adminPassword);
@@ -267,7 +268,7 @@ test("落盘时保留配置文件里原有的其它键", async (t) => {
 
 test("配置文件损坏时不覆盖它，改为只存内存", async (t) => {
   const config = makeConfig(t, { password: null });
-  const filePath = join(config.root, "atri.config.json");
+  const filePath = configFilePath(config.root);
   writeFileSync(filePath, "{ 这不是 JSON", "utf8");
 
   const auth = new AuthManager(config, silentLogger);
