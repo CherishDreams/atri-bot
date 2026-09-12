@@ -13,6 +13,7 @@ import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
 import { AdapterManager } from "./adapters/manager.ts";
 import { createHttpServer } from "./api/server.ts";
 import type { AppConfig } from "./config/index.ts";
+import { configFilePath } from "./config/file.ts";
 
 /**
  * 组合根（composition root）：唯一知道各部件如何拼装的地方。
@@ -31,7 +32,17 @@ export async function createApp(config: AppConfig) {
   const providers = new ProviderRegistry();
 
   // provider 配置的读写入口。启动时读一次，之后每次界面改动都经由它落盘。
-  const providerConfig = new ProviderConfigStore(config, logger);
+  // 这里显式算出 `filePath` 而不是把 `config` 整个递过去：存储的类型现在要求写出
+  // 「写在哪个文件上」（`null` 也要写出来），漏传不再是「安静地退化成只读」。
+  const configPath = configFilePath(config.root);
+  const providerConfig = new ProviderConfigStore(
+    {
+      filePath: configPath,
+      providers: config.providers,
+      providerSources: config.providerSources,
+    },
+    logger,
+  );
 
   // 插件是磁盘上用户手写的代码，`ctx.config` / `shared.config` 会直接交到它手上，
   // 所以在这里就投影成白名单视图（理由见 `plugins/manager.ts` 的 `PluginRuntimeConfig`）。
@@ -51,7 +62,10 @@ export async function createApp(config: AppConfig) {
   for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) {
     tools.register(tool);
   }
-  const toolConfig = new ToolConfigStore(config, logger);
+  const toolConfig = new ToolConfigStore(
+    { filePath: configPath, tools: config.tools, maxToolSteps: config.maxToolSteps },
+    logger,
+  );
 
   /**
    * 按当前配置装配 provider。

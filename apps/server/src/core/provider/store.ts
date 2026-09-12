@@ -31,7 +31,7 @@ import type {
   ProvidersFileConfig,
   ProviderSourceEntryConfig,
 } from "#config/file.ts";
-import { configFilePath, readConfigFile, updateConfigFile } from "#config/file.ts";
+import { readConfigFileAt, updateConfigFileAt } from "#config/file.ts";
 import { ApiError, errorMessage } from "#core/errors.ts";
 
 /** 认得的 provider 实现类型。与 factory.ts 的 TYPES 保持同步。 */
@@ -107,10 +107,14 @@ export type ProviderEntry = ProviderEntryConfig & { id: string };
 /** ProviderConfigStore 实际读写的配置键（不直接用 AppConfig，见 config/config.ts 的说明）。 */
 export interface ProviderStoreConfig {
   /**
-   * 可以缺省：直接用代码构造 config 的调用方（测试、嵌入式使用）没有配置文件可写，
-   * 此时整个存储退化为**只读内存视图**。
+   * 这份配置**写在哪个文件上**。必填，且 `null` 是一个要写出来的决定：
+   * 没有落盘位置时整个存储退化为**只读内存视图**（测试、嵌入式使用），写操作明确报错。
+   *
+   * 为什么不写成 `filePath?: string` —— 缺省即 null 那种写法：调用方一旦漏传，
+   * 服务会「正常运行但任何保存都失败」，而失败原因是那句「没有落盘位置」，
+   * 读的人只会以为是自己没配好。让参数必填，就是把这种漏传交给类型检查。
    */
-  root?: string;
+  filePath: string | null;
   providers?: ProvidersFileConfig;
   providerSources?: Record<string, ProviderSourceEntryConfig>;
 }
@@ -184,16 +188,17 @@ function pick(raw: WriteInput, keys: readonly string[]): WriteInput {
  *
  * ## 读的是哪一份配置
  *
- * 以**文件**为准，因为界面改的就是文件。但有个例外必须处理：调用方
- * 直接用代码构造 config（测试、嵌入使用）时根本没有那个文件，
- * 此时退回**注入的** `config.providers` / `config.providerSources`。
+ * 以 `filePath` 指向的那个文件为准，因为界面改的就是文件。**规则只有一句**：
+ * `filePath` 为 `null` 时才读注入的 `config.providers` / `config.providerSources`
+ * （所谓 baseline）；给了 `filePath`，那个文件就是唯一真相，文件不存在即读空。
  *
- * 判据是「文件里是否出现了这两个键之一」而不是「文件是否存在」，
- * 这样在同一个 root 下从零创建配置（文件存在但还没写 provider 段）
- * 仍然以注入值为起点，不会把配置凭空读空。
+ * 后半句是本次改动，以前不是这样：那时判据是「文件里是否出现了这两个键之一」，
+ * 没有就退回 baseline。多配置档之下那是一台静默串档的机器 —— 配置档 B 的文件
+ * 还没写过 provider 段，于是它读出 A 的那一份。今天每个 profile 的存储都只带
+ * 自己那个文件、不带任何 baseline，所以「B 看见 A 的 provider」在结构上不可能发生。
  */
 export class ProviderConfigStore {
-  #root: string | null;
+  #filePath: string | null;
   #logger: Logger | undefined;
   #baseline: {
     providerSources: Record<string, ProviderSourceEntryConfig>;
@@ -201,7 +206,7 @@ export class ProviderConfigStore {
   };
 
   constructor(config: ProviderStoreConfig, logger?: Logger) {
-    this.#root = config.root ?? null;
+    this.#filePath = config.filePath;
     this.#logger = logger;
     this.#baseline = {
       providerSources: config.providerSources ?? {},
@@ -209,26 +214,23 @@ export class ProviderConfigStore {
     };
   }
 
-  /** 配置文件绝对路径；没有 `root` 时为 null（只读模式）。 */
+  /** 配置文件绝对路径；`null` 表示没有落盘位置（只读模式）。 */
   get filePath(): string | null {
-    return this.#root ? configFilePath(this.#root) : null;
+    return this.#filePath;
   }
 
-  /** 是否可写。没有 `root` 时只能读注入进来的配置。 */
+  /** 是否可写。只读模式下只能读注入进来的配置。 */
   get writable(): boolean {
-    return this.#root !== null;
+    return this.#filePath !== null;
   }
 
-  /** 当前生效的 `{providerSources, providers}`。 */
+  /** 当前生效的 `{providerSources, providers}`。见类注释里那句「规则只有一句」。 */
   #current(): {
     providerSources: Record<string, ProviderSourceEntryConfig>;
     providers: ProvidersFileConfig;
   } {
-    if (!this.#root) return { ...this.#baseline };
-    const file = readConfigFile(this.#root);
-    const hasProviders = Object.hasOwn(file, "providers");
-    const hasSources = Object.hasOwn(file, "providerSources");
-    if (!hasProviders && !hasSources) return { ...this.#baseline };
+    if (this.#filePath === null) return { ...this.#baseline };
+    const file = readConfigFileAt(this.#filePath);
     return {
       providerSources: file.providerSources ?? {},
       providers: file.providers ?? {},
@@ -481,33 +483,24 @@ export class ProviderConfigStore {
   /**
    * 一次读-改-写。`mutate` 里的校验失败会直接抛出，文件完全不被触碰。
    *
-   * 起点是 `#current()` 而不是直接读文件：注入式配置（测试、嵌入式使用）
-   * 下没有配置文件，从空对象起步会把调用方给的 provider 全部写没。
+   * 起点就是那个文件本身：以前还会在「文件里还没有 provider 段」时把 baseline 合进来，
+   * 而那条合并正是配置档之间会串味的通道（见类注释）。只读模式没有文件，直接拒绝写。
    */
   #write<T>(mutate: (config: FileConfig) => T): T {
-    if (!this.#root) {
+    if (this.#filePath === null) {
       // 只读模式下的写操作是调用方的用法错误，明确报错而不是静默丢弃。
       throw new ProviderConfigError(
-        "root",
-        "当前配置没有落盘位置（config.root 未设置），无法保存 provider 配置",
+        "filePath",
+        "当前配置没有落盘位置（config.filePath 为 null），无法保存 provider 配置",
         400,
       );
     }
     try {
-      return updateConfigFile(this.#root, (file) => {
-        const base =
-          Object.hasOwn(file, "providers") || Object.hasOwn(file, "providerSources")
-            ? file
-            : { ...file, ...this.#baseline };
-        // 就地改：让 mutate 看到的是同一份合并后的配置，因此校验
-        // （例如「引用的源存在吗」）能看到注入进来的那一层。
-        Object.assign(file, base);
-        return mutate(file);
-      });
+      return updateConfigFileAt(this.#filePath, mutate);
     } catch (err) {
       if (err instanceof ProviderConfigError) throw err;
       // 细节只进日志，不回客户端：`errorMessage(err)` 里带着**配置文件的绝对路径**
-      // （`readConfigFile` / `updateConfigFile` 的错误消息都把它拼进去了），而这个异常会
+      // （`readConfigFileAt` / `updateConfigFileAt` 的错误消息都把它拼进去了），而这个异常会
       // 一路走到 `api/server.ts` 的 handler。与 `core/tool/store.ts` 同一条纪律，
       // 也与「SQLite 的错不外传」同一条理由 —— 判据是**出口**：模型与客户端不可信，
       // 操作者侧的日志与鉴权闸门内的接口可信，所以这里只换掉对外那一句。

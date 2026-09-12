@@ -78,7 +78,14 @@ async function harness(
   const root = await mkdtemp(join(tmpdir(), "atri-engine-"));
   const registry = new ToolRegistry();
   for (const tool of tools) registry.register(tool);
-  const toolConfig = new ToolConfigStore({ root, tools: enabled, maxToolSteps });
+  // 开关与步数**写进文件**，不再靠注入 baseline：存储现在的规则是「给了 filePath，
+  // 那个文件就是唯一真相」。这也让这个 helper 走的正是生产那条路径（`app.ts` 同样传 filePath）。
+  const filePath = configFilePath(root);
+  const preset: Record<string, unknown> = {};
+  if (enabled !== undefined) preset.tools = enabled;
+  if (maxToolSteps !== undefined) preset.maxToolSteps = maxToolSteps;
+  if (Object.keys(preset).length > 0) writeFileSync(filePath, JSON.stringify(preset), "utf8");
+  const toolConfig = new ToolConfigStore({ filePath });
   const sessions = new SessionManager({ dataDir: join(root, "data") });
   const providers = new ProviderRegistry();
   const provider = scriptedProvider(replies);
@@ -325,7 +332,7 @@ test("工具集在一次运行内固定：中途改配置文件不影响在途�
 
   const registry = new ToolRegistry();
   registry.register(timeTool);
-  const toolConfig = new ToolConfigStore({ root });
+  const toolConfig = new ToolConfigStore({ filePath: configFilePath(root) });
   const sessions = new SessionManager({ dataDir: join(root, "data") });
   // 清理与 `harness()` 同一处置：句柄先关，再删临时目录。
   t.after(() => {

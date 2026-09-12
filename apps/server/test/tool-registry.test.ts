@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolCall } from "@atri/shared";
 import { ToolRegistry } from "#core/tool/registry.ts";
-import { ToolConfigStore } from "#core/tool/store.ts";
+import { DEFAULT_MAX_TOOL_STEPS, ToolConfigStore } from "#core/tool/store.ts";
 import { createBuiltinTools } from "#core/tool/builtins.ts";
 import type { PluginSummary } from "#core/tool/builtins/listPlugins.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
@@ -200,7 +200,7 @@ test("开关只认 === true：没写、写 false、写字符串都算禁用", as
     "utf8",
   );
 
-  const store = new ToolConfigStore({ root });
+  const store = new ToolConfigStore({ filePath: configFilePath(root) });
   assert.equal(store.isEnabled("on"), true);
   assert.equal(store.isEnabled("off"), false);
   assert.equal(store.isEnabled("missing"), false);
@@ -210,11 +210,32 @@ test("开关只认 === true：没写、写 false、写字符串都算禁用", as
   assert.deepEqual(store.enabledIds(), ["on"]);
 });
 
-test("没有 tools 键时以注入的 baseline 为准", () => {
-  const store = new ToolConfigStore({ tools: { injected: { enabled: true } } });
-  assert.equal(store.isEnabled("injected"), true);
-  assert.equal(store.writable, false);
-  assert.equal(store.filePath, null);
+test("baseline 只在 `filePath: null` 时生效：给了文件就以文件为唯一真相", () => {
+  // 这条测试记录一次**语义变更**。以前即使给了 root，只要文件里还没写过 `tools` 键，
+  // `#current()` 就退回注入的 baseline —— 多配置档下那意味着「新配置档 B 一打开就
+  // 带着 default 的开关」。现在这道门删了，两个半边都在这里钉住。
+  const injected = { injected: { enabled: true } };
+  const readonly = new ToolConfigStore({ filePath: null, tools: injected });
+  assert.equal(readonly.isEnabled("injected"), true, "只读模式要读得到注入的那份");
+  assert.equal(readonly.writable, false);
+  assert.equal(readonly.filePath, null);
+
+  const empty = new ToolConfigStore({ filePath: null, maxToolSteps: 9 });
+  assert.equal(empty.maxSteps(), 9, "maxToolSteps 同理");
+});
+
+test("给了 filePath 而文件不存在：读空，不抄注入的开关", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "atri-tool-empty-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ToolConfigStore({
+    filePath: configFilePath(root),
+    tools: { ghost: { enabled: true } },
+  });
+  assert.equal(store.isEnabled("ghost"), false, "文件不存在时不得读出注入的开关");
+  assert.deepEqual(store.enabledIds(), []);
+  assert.equal(store.writable, true);
+  // `maxToolSteps` 也一样：读不到就是走内置默认，而不是注入值。
+  assert.equal(store.maxSteps(), DEFAULT_MAX_TOOL_STEPS);
 });
 
 test("写开关只动 tools 段，且保留工具自己的其它键", async (t) => {
@@ -229,7 +250,7 @@ test("写开关只动 tools 段，且保留工具自己的其它键", async (t) 
   };
   await writeFile(configFilePath(root), JSON.stringify(preset, null, 2), "utf8");
 
-  const store = new ToolConfigStore({ root });
+  const store = new ToolConfigStore({ filePath: configFilePath(root) });
   assert.deepEqual(store.setEnabled("current_time", true), { id: "current_time", enabled: true });
 
   const saved = JSON.parse(readFileSync(configFilePath(root), "utf8")) as FileConfig & {
@@ -248,7 +269,7 @@ test("非法开关值与没有落盘位置都明确报错，而不是静默", as
   const root = await mkdtemp(join(tmpdir(), "atri-tool-bad-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  const store = new ToolConfigStore({ root });
+  const store = new ToolConfigStore({ filePath: configFilePath(root) });
   for (const bad of [undefined, "yes", 1, {}]) {
     assert.throws(
       () => store.setEnabled("current_time", bad),
@@ -256,10 +277,10 @@ test("非法开关值与没有落盘位置都明确报错，而不是静默", as
       `${String(bad)} 不该被当成布尔值`,
     );
   }
-  // 文件完全没被写过：校验发生在落盘之前，mutate 抛错时 updateConfigFile 根本不碰文件。
+  // 文件完全没被写过：校验发生在落盘之前，mutate 抛错时 updateConfigFileAt 根本不碰文件。
   assert.equal(existsSync(configFilePath(root)), false, "失败的写入不该创建配置文件");
 
-  const readonly = new ToolConfigStore({ tools: {} });
+  const readonly = new ToolConfigStore({ filePath: null });
   assert.throws(
     () => readonly.setEnabled("current_time", true),
     (err) => err instanceof ApiError && err.status === 400 && /没有落盘位置/.test(err.message),
@@ -271,13 +292,13 @@ test("开关落盘失败：包成 500 并带上原始错误作为 cause", async 
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(configFilePath(root), "{ 这不是 JSON", "utf8");
 
-  const store = new ToolConfigStore({ root });
+  const store = new ToolConfigStore({ filePath: configFilePath(root) });
   assert.throws(
     () => store.setEnabled("current_time", true),
     (err: unknown) => {
       assert.ok(err instanceof ApiError, `应是 ApiError，实际是 ${String(err)}`);
       assert.equal(err.status, 500);
-      // 对外只有这一句：`readConfigFile` 的原文带着配置文件绝对路径，不能顺原路发出去。
+      // 对外只有这一句：`readConfigFileAt` 的原文带着配置文件绝对路径，不能顺原路发出去。
       assert.equal(err.message, "保存工具开关失败，详情见服务端日志");
       assert.doesNotMatch(err.message, /atri-tool-fail|atri\.config\.json/);
       // AGENTS.md 要求包装错误必须带 cause。这句以前是缺的（全仓仅此一处），
@@ -287,4 +308,20 @@ test("开关落盘失败：包成 500 并带上原始错误作为 cause", async 
       return true;
     },
   );
+});
+
+test("本类没有任何 async 方法：读-改-写之间不许出现 await", () => {
+  // 与 `provider-config.test.ts` 的同名用例是一对：provider 段与 tools 段住在同一份
+  // 配置档文件上，键集互不相交是唯一的隔离，而它只在「整段读-改-写不可打断」时成立。
+  // 同步 I/O 就是那个不可打断 —— 有人改成 async（哪怕只是想 `await` 一下别的东西），
+  // 两次写入就会各读各写、后者抹掉前者的段落，两边都回 201。
+  const proto = ToolConfigStore.prototype as unknown as Record<string, unknown>;
+  const asyncNames = Object.getOwnPropertyNames(proto).filter((name) => {
+    const d = Object.getOwnPropertyDescriptor(proto, name);
+    return (
+      typeof d?.value === "function" &&
+      Object.prototype.toString.call(d.value) === "[object AsyncFunction]"
+    );
+  });
+  assert.deepEqual(asyncNames, [], `这些方法不该是 async：${asyncNames.join(", ")}`);
 });

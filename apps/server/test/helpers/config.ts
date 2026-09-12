@@ -1,6 +1,8 @@
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_AUTH_COOKIE_NAME } from "@atri/shared";
 import type { AppConfig } from "#config/index.ts";
+import { configFilePath, readConfigFileAt, writeConfigFileAt } from "#config/file.ts";
 // 默认值从 store 取，不在测试里重抄一遍数字：否则「代码默认 5、测试默认 6」这种漂移
 // 会让用例证的不再是生产行为。
 import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
@@ -19,6 +21,13 @@ import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
  *    这样静态托管天然走 404 分支，不会意外读到仓库里的 `apps/dashboard/dist`。
  * 3. 这里不替任何测试补「它今天没有生效」的键 —— 需要别的行为就显式传参，
  *    让差异留在 diff 里可看。
+ *
+ * 第四条是随着「存储按 `filePath` 寻址」加进来的：**`providers` / `providerSources` /
+ * `tools` / 非默认的 `maxToolSteps` 会真的写进 `<root>/atri.config.json`**。
+ * 因为那两个存储现在的规则是「给了 `filePath`，那个文件就是唯一真相」，注入的
+ * baseline 只在 `filePath: null` 时生效 —— 测试想「启动时就有这些 provider」，
+ * 就得让它们躺在文件里，这才是生产的那条路径。仍然**只写非默认的那几键**：
+ * 全写会让每一个测试都凭空多出一配置文件，而「文件不存在」本身是要被某些用例覆盖的状态。
  */
 export interface TestConfigInput {
   /** 临时根目录。provider 配置的落盘位置与 `dataDir` 都从它算出来。 */
@@ -53,6 +62,35 @@ export function makeTestConfig({
   adminPassword = "pw",
   dataDir = join(root, "data"),
 }: TestConfigInput): AppConfig {
+  // 见文件头第四条：结构性配置的真源是文件，所以把这些键落盘，而不是指望注入值生效。
+  //
+  // 这里是**读-改-写**，且**不覆盖文件里已经写过的键**：有些测试（`tool-stream.test.ts`、
+  // `provider-routes.test.ts`）在调本函数之前就把自己的场景预置进了那个文件，
+  // 覆盖过去等于替测试改掉它要验的前提。
+  const filePath = configFilePath(root);
+  const file = readConfigFileAt(filePath);
+  let changed = false;
+  if (Object.keys(providers).length > 0 && !Object.hasOwn(file, "providers")) {
+    file.providers = providers;
+    changed = true;
+  }
+  if (Object.keys(providerSources).length > 0 && !Object.hasOwn(file, "providerSources")) {
+    file.providerSources = providerSources;
+    changed = true;
+  }
+  if (Object.keys(tools).length > 0 && !Object.hasOwn(file, "tools")) {
+    file.tools = tools;
+    changed = true;
+  }
+  if (maxToolSteps !== DEFAULT_MAX_TOOL_STEPS && !Object.hasOwn(file, "maxToolSteps")) {
+    file.maxToolSteps = maxToolSteps;
+    changed = true;
+  }
+  if (changed) {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    writeConfigFileAt(filePath, file);
+  }
+
   return {
     root,
     host: "127.0.0.1",

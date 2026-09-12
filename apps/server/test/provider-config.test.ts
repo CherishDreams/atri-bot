@@ -95,7 +95,7 @@ function withRoot(preset?: FileConfig) {
   const root = mkdtempSync(join(tmpdir(), "atri-store-"));
   // store 提到外面构造，是因为 `strict` 要包**同一个**实例。构造只存基线、不读盘
   // （读发生在 `#current()`），所以放在写预置文件之前不改变行为。
-  const store = new ProviderConfigStore({ root }, quietLogger);
+  const store = new ProviderConfigStore({ filePath: configFilePath(root) }, quietLogger);
   if (preset !== undefined) {
     writeFileSync(configFilePath(root), JSON.stringify(preset, null, 2) + "\n", "utf8");
   }
@@ -424,7 +424,9 @@ test("落盘：写进 atri.config.json 后能原样读回", async () => {
     assert.equal(file.providers.p.model, "deepseek-chat");
 
     // 换一个 store 实例读同一份文件，结果应完全一致（这才是「落盘成功」）。
-    const fresh = strictStore(new ProviderConfigStore({ root }, quietLogger));
+    const fresh = strictStore(
+      new ProviderConfigStore({ filePath: configFilePath(root) }, quietLogger),
+    );
     assert.equal(fresh.getSource("deepseek").apiKey, "sk-1");
   });
 });
@@ -470,7 +472,7 @@ test("落盘：配置文件损坏时拒绝写入，而不是当成空配置覆�
   };
   try {
     writeFileSync(configFilePath(root), "{ 这不是 JSON", "utf8");
-    const store = new ProviderConfigStore({ root }, recordingLogger);
+    const store = new ProviderConfigStore({ filePath: configFilePath(root) }, recordingLogger);
     assert.throws(
       () => store.createSource({ id: "s" }),
       (err: unknown) => {
@@ -490,11 +492,56 @@ test("落盘：配置文件损坏时拒绝写入，而不是当成空配置覆�
   }
 });
 
-test("落盘：注入式配置（没有 root）退化为只读，写操作明确报错", async () => {
-  const store = new ProviderConfigStore({ providers: { p: { type: "openai", models: ["m"] } } });
+test("落盘：`filePath: null` 退化为只读内存视图，写操作明确报错", async () => {
+  const store = new ProviderConfigStore({
+    filePath: null,
+    providers: { p: { type: "openai", models: ["m"] } },
+  });
   assert.equal(store.writable, false);
   assert.equal(store.filePath, null);
   // 读得到注入的那份：直接构造 config 的调用方（测试、嵌入式使用）靠这个。
   assert.equal(store.providers.length, 1);
   assert.throws(() => store.createSource({ id: "s" }), /没有落盘位置/);
+});
+
+test("给了 filePath 就以那个文件为唯一真相：文件不存在即读空，绝不退回注入的 baseline", async () => {
+  // 这是多配置档的一条结构性前提。以前 `#current()` 的判据是「文件里有没有 providers /
+  // providerSources 键」，没有就退回注入的 baseline —— 于是**还没配过任何模型的配置档 B**
+  // 会答出 A 的那一份，而界面上看得到、日志里没有任何异常。
+  // 现在规则收成一句：baseline 只在 `filePath` 为 null 时生效。
+  const root = mkdtempSync(join(tmpdir(), "atri-store-empty-"));
+  try {
+    const store = new ProviderConfigStore({
+      filePath: configFilePath(root),
+      providers: { p: { type: "openai", models: ["m"] } },
+      providerSources: { s: { type: "openai" } },
+    });
+    assert.equal(store.providers.length, 0, "文件不存在时不得读出注入的 provider");
+    assert.equal(store.sources.length, 0, "文件不存在时不得读出注入的 source");
+    assert.equal(store.writable, true, "有落盘位置就应当可写（只读与否只看 filePath）");
+    // 而且第一次写入不会顺手把 baseline 抄进文件（那会让「B 抄 A」换一种形式活下来）。
+    store.createSource({ id: "mine", type: "openai", baseUrl: "https://x/v1", apiKey: "sk-1" });
+    const written = JSON.parse(readFileSync(configFilePath(root), "utf8"));
+    assert.deepEqual(Object.keys(written.providerSources), ["mine"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("本类没有任何 async 方法：读-改-写之间不许出现 await", () => {
+  // 落盘的安全性质是「`readConfigFileAt` 与 `writeConfigFileAt` 之间不可能被别的请求插进来」，
+  // 而这**完全依赖 `node:fs` 是同步 I/O** —— 单线程里一段同步代码不可打断。
+  // 一旦有人把某个写方法改成 async（哪怕只是想 `await` 一下别的东西），两次写入就会
+  // 各读各写、后者把前者的段落整个抹掉，而两边都回 `201`。
+  // 从本阶段起 provider 段与 tools 段住在**同一个配置档文件**里，这条不等式没有别的守护者，
+  // 所以由测试守着而不是由注释守着。与 `tool-registry.test.ts` 的同名用例是一对。
+  const proto = ProviderConfigStore.prototype as unknown as Record<string, unknown>;
+  const asyncNames = Object.getOwnPropertyNames(proto).filter((name) => {
+    const d = Object.getOwnPropertyDescriptor(proto, name);
+    return (
+      typeof d?.value === "function" &&
+      Object.prototype.toString.call(d.value) === "[object AsyncFunction]"
+    );
+  });
+  assert.deepEqual(asyncNames, [], `这些方法不该是 async：${asyncNames.join(", ")}`);
 });

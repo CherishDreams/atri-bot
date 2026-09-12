@@ -13,8 +13,9 @@ import {
  * `loadConfig()` 的产物：每个键都有值（内置默认 → 配置文件 → 环境变量，后者覆盖前者）。
  *
  * 这是**唯一**的完整配置类型。各模块的构造参数不要用它，而是声明自己实际读写的那几个键
- * （例如 `ProviderStoreConfig { root?: string }`）——否则测试里只传 `{ root }` 这类
- * 最小配置就过不了类型检查，而那是它们的既有前提。密钥走环境变量，结构性设置走文件。
+ * （例如 `ProviderStoreConfig { filePath: string | null }`）——否则测试里只传
+ * `{ filePath: null }` 这类最小配置就过不了类型检查，而那是它们的既有前提。
+ * 密钥走环境变量，结构性设置走文件。
  */
 export interface AppConfig {
   root: string;

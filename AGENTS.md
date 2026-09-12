@@ -168,9 +168,12 @@ architecture.md 与 README 里各有一句「重启即全部失效」只在前�
   `fileURLToPath(new URL("../openapi.json", import.meta.url))` 这类**URL 解析**不归别名管，
   也永远不能写成 `#` —— `#` 在 URL 里是片段分隔符，会静默得到错路径而不报错。
 - 类型标注不许「替测试降强度」：各模块的构造参数声明**自己实际读写的那几个配置键**
-  （`ProviderStoreConfig { root?: string }` 这种），而不是收一个 `Partial<AppConfig>` 或
-  拿 `as unknown as AppConfig` 糊过去。前者让 `config.root` 之类必然存在的读取也变成可选、
+  （`ProviderStoreConfig { filePath: string | null }` 这种），而不是收一个 `Partial<AppConfig>` 或
+  拿 `as unknown as AppConfig` 糊过去。前者让 `config.filePath` 之类必然存在的读取也变成可选、
   把 `?? undefined` 一路传染下去；后者是把 `noUncheckedIndexedAccess` 的好处整个丢掉。
+  **必填不代表「调用方必须传真值」**：那个 `| null` 恰恰是它必填的理由 —— 可选参数让「漏传」
+  和「故意只读」长得一模一样，而漏传的后果是「服务照跑、任何保存都失败」，
+  失败信息还写着「没有落盘位置」，读的人会以为是自己没配好。
   `as` 只用在真边界上（`JSON.parse`、`response.json()`、动态 import 的插件模块、
   配置文件读回来的顶层对象），并且必须写清「为什么这里只能是这个形状」。
   **但这条只适用于仓内代码**：窄标注只是强度问题，不改变运行时那个对象。配置真要交到插件手上时，
