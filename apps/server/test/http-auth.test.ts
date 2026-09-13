@@ -228,7 +228,7 @@ test("登录后 provider 配置接口可达（证明上一条测的是这些路�
 
   // 没有这条正向断言，上面的用例即使把路径拼错（打到不存在的路径上，
   // fail-closed 也会回 401）看起来照样是绿的。
-  const listed = await call(base, "/provider-sources", { cookie });
+  const listed = await call(base, "/provider-sources?profile=default", { cookie });
   assert.equal(listed.status, 200);
   assert.deepEqual(listed.body, { sources: [] });
 });
@@ -312,7 +312,7 @@ test("会话详情回带消息历史，未知 id 返回 404", async (t) => {
   const id = created.body.session.id;
 
   // 发一条消息，制造历史。
-  const sent = await call(base, `/sessions/${id}/messages`, {
+  const sent = await call(base, `/sessions/${id}/messages?profile=default`, {
     method: "POST",
     body: { content: "你好" },
     cookie,

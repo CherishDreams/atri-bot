@@ -34,6 +34,10 @@ declare global {
   /** 坏插件报告 `setup()` / `teardown()` 各被跑过几次。 */
   var __p9_setup: number | undefined;
   var __p9_teardown: number | undefined;
+  /** 跨配置档那条用例：插件**模块顶层**被求值的次数（两个管理器各一次才算隔离）。 */
+  var __iso_evals: number | undefined;
+  /** 启用清单那条用例：`setup()` 被跑过的次数（被禁用的那颗必须是 0 次）。 */
+  var __p10_setups: number | undefined;
 }
 
 /**
@@ -607,7 +611,10 @@ test("坏插件不拖垮启动：同一根下 good 是 active、broken 是 faile
   assert.equal(loginRes.status, 200);
   const [cookie] = (loginRes.headers.get("set-cookie") ?? "").split(";");
 
-  const res = await fetch(`${origin}/api/v1/plugins`, { headers: { cookie: cookie ?? "" } });
+  // `?profile=default`：`/plugins` 属于某一份配置档（插件是全局安装的，这份档决定开不开）。
+  const res = await fetch(`${origin}/api/v1/plugins?profile=default`, {
+    headers: { cookie: cookie ?? "" },
+  });
   assert.equal(res.status, 200);
   const { plugins } = (await res.json()) as { plugins: PluginView[] };
   const byId = new Map(plugins.map((p) => [p.id, p]));
@@ -720,4 +727,115 @@ test("两个目录声明同一个 id 时，后来那个被拒绝 —— 数据�
   const again = await mgr.reload("shared");
   assert.equal(again.name, "受害者", "按 id 找到的应该是先登记的那一个");
   assert.equal(again.status, "active");
+});
+
+/**
+ * R1：跨配置档的**模块身份**隔离。
+ *
+ * `PluginManager.#revision` 是每个实例各自从 0 开始数的，所以两个管理器扫**同一个安装目录**时
+ * 会造出**完全相同**的 `?v=1`。Node 的 ESM 缓存按 URL 键：命中就意味着第二个管理器拿到的
+ * 是第一个管理器**已经求值过的那个模块对象**，于是插件的**模块级状态**（`let captured`、
+ * 连接池、缓存）由两份配置档共享，而最后一次 `setup(ctx)` 赢者通吃。
+ * 症状不是报错，是**写错目录**：A 那份配置档的插件把 token 存进 B 的数据根里。
+ *
+ * 所以这里的探针要看的不是「两个 `ctx.dataDir` 不同名」（那必然不同名，`dataRoot` 是
+ * 各传各的，抓不到这个 bug），而是**A 释放时读到的那份模块级状态属于谁**。
+ */
+test("两份配置档各求值一次插件模块：模块级状态不跨实例共享", async (t) => {
+  delete globalThis.__iso_evals;
+  t.after(() => {
+    delete globalThis.__iso_evals;
+  });
+  const install = await mkdtemp(join(tmpdir(), "atri-plugin-install-"));
+  await makeNamedPlugin(
+    t,
+    install,
+    "iso",
+    `
+    import { writeFileSync } from "node:fs";
+    // **模块顶层**的计数：只有真的重新求值才会再加一次。
+    globalThis.__iso_evals = (globalThis.__iso_evals ?? 0) + 1;
+    let captured = null;
+    export default {
+      id: "iso",
+      version: "1",
+      setup(ctx) {
+        captured = ctx.dataDir;
+        // effect 在释放时跑：此刻读到的 captured 是**这个模块实例**的最后一次赋值。
+        // 两份配置档共享模块时，A 释放读到的是 B 的目录 —— 那正是「A 的数据写进 B」的形状。
+        ctx.effect(() => {
+          writeFileSync(captured + "/marker", captured);
+        });
+      },
+    };
+  `,
+  );
+  const dataA = useDataRoot(t);
+  const dataB = useDataRoot(t);
+  // 两个管理器、同一份安装目录、各自的数据根 —— 这就是多配置档下的常态形状。
+  const mgrA = new PluginManager({ pluginDirs: [install] }, silentLogger(), { dataRoot: dataA });
+  const mgrB = new PluginManager({ pluginDirs: [install] }, silentLogger(), { dataRoot: dataB });
+  await mgrA.loadAll();
+  await mgrB.loadAll();
+
+  assert.equal(
+    globalThis.__iso_evals,
+    2,
+    "同一个插件模块被两个管理器共用了一次求值 —— cache-busting 的 nonce 丢了",
+  );
+
+  await mgrA.unloadAll();
+  await mgrB.unloadAll();
+  const markerA = readFileSync(join(dataA, "iso", "marker"), "utf8");
+  const markerB = readFileSync(join(dataB, "iso", "marker"), "utf8");
+  assert.equal(markerA, join(dataA, "iso"), "A 那份插件实例写到了别人的数据根");
+  assert.equal(markerB, join(dataB, "iso"), "B 那份插件实例写到了别人的数据根");
+
+  // 白名单那条键**没有**被配置档污染：插件看到的 `pluginDirs` 仍是部署级那一份，
+  // 两份配置档逐元素相等（安装是全局的，档只决定开不开）。
+  assert.deepEqual(mgrA.config, mgrB.config, "两个管理器看到的运行期配置不该不同");
+  assert.deepEqual(mgrA.config, { pluginDirs: [install] });
+});
+
+/** 启用清单是**每份配置档**的：装一次、各档自己决定开不开，且默认启用。 */
+test("配置档的启用清单：默认开，disabledIds 里的那些不跑 setup", async (t) => {
+  delete globalThis.__p10_setups;
+  t.after(() => {
+    delete globalThis.__p10_setups;
+  });
+  const install = await mkdtemp(join(tmpdir(), "atri-plugin-enable-"));
+  await makeNamedPlugin(
+    t,
+    install,
+    "onandoff",
+    `
+    export default {
+      id: "onandoff",
+      version: "1",
+      setup() { globalThis.__p10_setups = (globalThis.__p10_setups ?? 0) + 1; },
+    };
+  `,
+  );
+  const dataRoot = useDataRoot(t);
+  const off = new PluginManager({ pluginDirs: [install] }, silentLogger(), {
+    dataRoot,
+    disabledIds: ["onandoff"],
+  });
+  await off.loadAll();
+  assert.equal(globalThis.__p10_setups, undefined, "被禁用的插件跑到了 setup()");
+  // 但仍要**看得见**：操作者要能分辨「没装」与「装了但这份档没开」。
+  const view = off.list().find((p) => p.id === "onandoff");
+  assert.equal(view?.status, "disabled");
+  assert.equal(view?.enabled, false);
+
+  // 重新启用走 `setEnabled`：加载它，并且 `setup()` 这一次要跑。
+  const on = await off.setEnabled("onandoff", true);
+  assert.equal(on.status, "active");
+  assert.equal(globalThis.__p10_setups, 1);
+  // 禁用的一条也**不许**留下可释放的东西：`unload()` 不会把 `teardown()` 调给从没 setup 过的实例。
+  assert.deepEqual(
+    await off.unload("onandoff"),
+    { id: "onandoff", unloaded: true },
+    "disabled 记录应该可以卸载",
+  );
 });

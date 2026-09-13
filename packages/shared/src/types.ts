@@ -147,7 +147,7 @@ export interface PluginInfo {
  * 一颗可被模型调用的工具，以及它当前的启用状态。
  *
  * `enabled` 的默认语义与 `AdapterInfo` **相反**：适配器没写就启用（少听一个端口而已），
- * 工具是能力授予，必须在 `atri.config.json` 里显式写 `{"enabled": true}` 才生效 ——
+ * 工具是能力授予，必须在**这份配置档的文件**里显式写 `{"enabled": true}` 才生效 ——
  * 一次升级不该静默给模型新增能力。
  */
 export interface ToolInfo {
@@ -157,6 +157,40 @@ export interface ToolInfo {
   enabled: boolean;
   /** 给模型看的说明。控制台用它解释这颗工具是干什么的。 */
   description?: string;
+}
+
+/**
+ * 一份配置档的**加载状态**。
+ *
+ * 只有两个取值，而且 `failed` 的含义很窄：**这份档自己的文件读不出 / 校验不过 /
+ * 对象图建不起来**。档内部的失败不算 —— 源配的引用不存在的 provider 是
+ * `ProviderInfo.loaded: false` + `error`，`setup()` 抛错的插件是 `PluginStatus: "failed"`。
+ * 发明第三种「档整体红色」会把「你有一个模型没配好」也表达成「这份档坏了」，
+ * 而那是两件必须分开说的事（`GET /providers` 带着失败条目就是同一个先例）。
+ *
+ * 与 `openapi.json` 的 `components.schemas.ProfileStatus` 是同一份，**改一处必须改两处**
+ *（理由与 `PluginStatus` 那条完全一样：形状测试只管「实际发出的值 ⊂ 规格 enum」这一个方向）。
+ */
+export type ProfileStatus = "ready" | "failed";
+
+/**
+ * `GET /profiles` 的一项。
+ *
+ * `path` 是给操作者看的落盘位置（`<dataDir>/profiles/<id>/config.json`），
+ * 而 `error` **只给操作者**：它来自配置文件读取的原文，里面带着绝对路径，
+ * 所以任何走 5xx 或客户端的出口都不得直接把它发出去（见 `api/server.ts` 的 `fail()`）。
+ *
+ * 这里**没有** owner / 权限一类的字段：本仓只有单一管理员，加上那种字段会让人
+ * 以为存在按配置档的细粒度授权，而它并不存在。
+ */
+export interface ProfileRecord {
+  id: string;
+  /** 给人看的名字；配置档没写 `name` 时等于 id。 */
+  name: string;
+  path: string;
+  status: ProfileStatus;
+  /** 加载失败的原因；正常为 `null`（不是「没有错误所以键缺席」）。 */
+  error: string | null;
 }
 
 /**

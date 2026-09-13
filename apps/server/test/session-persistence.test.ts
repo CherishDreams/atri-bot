@@ -82,7 +82,7 @@ function listenPort(server: Server): number {
  * 桩上游：把给定分段回成助手内容。
  *
  * 按请求里的 `stream` 旗标分派两种报文 —— 本文件的用例都走**非流式**的
- * `POST /sessions/:id/messages`（引擎调 `chat()` 而不是 `chatStream()`），
+ * `POST /sessions/:id/messages?profile=default`（引擎调 `chat()` 而不是 `chatStream()`），
  * 而照 `stream.test.ts` 那样无条件吐 SSE 会让 provider 解析不出内容、
  * 端点回 400：那是桩写错了，不是被测行为。
  */
@@ -180,7 +180,7 @@ async function send(
   id: string,
   content: string,
 ): Promise<Response> {
-  return fetch(`${origin}/api/v1/sessions/${id}/messages`, {
+  return fetch(`${origin}/api/v1/sessions/${id}/messages?profile=default`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
     body: JSON.stringify({ content, model: "m" }),

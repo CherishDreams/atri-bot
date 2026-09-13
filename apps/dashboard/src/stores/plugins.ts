@@ -2,10 +2,14 @@ import { defineStore } from "pinia";
 import type { PluginInfo } from "../api/generated/index.js";
 import * as api from "../api/client.js";
 
-type PluginActions = { error: string | null; refresh: () => Promise<void> };
+type PluginActions = { error: string | null; refresh: (profile: string) => Promise<void> };
 
 /** 无论成败都刷新列表（旧版 finally 里也是这么做的）。 */
-async function runAction(store: PluginActions, op: () => Promise<unknown>): Promise<void> {
+async function runAction(
+  store: PluginActions,
+  profile: string,
+  op: () => Promise<unknown>,
+): Promise<void> {
   store.error = null;
   try {
     await op();
@@ -13,7 +17,7 @@ async function runAction(store: PluginActions, op: () => Promise<unknown>): Prom
     store.error = (err as Error).message;
   } finally {
     try {
-      await store.refresh();
+      await store.refresh(profile);
     } catch (err) {
       store.error ??= (err as Error).message;
     }
@@ -31,21 +35,24 @@ export const usePluginsStore = defineStore("plugins", {
   }),
 
   actions: {
-    async refresh(): Promise<void> {
-      const { plugins } = await api.listPlugins();
+    // 每个动作都**显式收 profile**，不从 store 里猜当前档：
+    // 「在 B 页面上把 default 的插件关了」这种错只有在调用处可见才拦得住。
+    async refresh(profile: string): Promise<void> {
+      const { plugins } = await api.listPlugins(profile);
       this.plugins = plugins;
     },
 
-    async reload(id: string): Promise<void> {
-      await runAction(this, () => api.reloadPlugin(id));
+    async reload(profile: string, id: string): Promise<void> {
+      await runAction(this, profile, () => api.reloadPlugin(profile, id));
     },
 
-    async unload(id: string): Promise<void> {
-      await runAction(this, () => api.unloadPlugin(id));
+    async unload(profile: string, id: string): Promise<void> {
+      await runAction(this, profile, () => api.unloadPlugin(profile, id));
     },
 
-    async setEnabled(id: string, enabled: boolean): Promise<void> {
-      await runAction(this, () => api.setPluginEnabled(id, enabled));
+    /** 切的是**这份配置档开不开它**；插件本身是全局安装的，这里不卸载代码。 */
+    async setEnabled(profile: string, id: string, enabled: boolean): Promise<void> {
+      await runAction(this, profile, () => api.setPluginEnabled(profile, id, enabled));
     },
 
     clearError(): void {

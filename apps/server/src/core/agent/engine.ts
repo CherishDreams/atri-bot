@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { Message, ServerFrame, SessionDetail } from "@atri/shared";
+import type { Message, SessionDetail } from "@atri/shared";
 import { ApiError } from "#core/errors.ts";
 import type { Logger } from "#core/logger.ts";
 import type { ProviderRegistry } from "#core/provider/registry.ts";
 import type { ChatMessage, ChatTool } from "#core/provider/types.ts";
 import type { SessionManager } from "#core/session/manager.ts";
+import { SESSION_BUSY_MESSAGE, type SessionLock } from "#core/session/lock.ts";
+import type { SessionEvents } from "./events.ts";
 import type { ToolConfigStore } from "#core/tool/store.ts";
 import type { ToolRegistry } from "#core/tool/registry.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
@@ -16,8 +18,12 @@ import type { ToolDefinition } from "#core/tool/types.ts";
  * 而 `core/` 按分层约束不得 import `plugins/` —— 也就是说那个接缝既不工作、
  * 又会让类型标注变成一次违规。要接插件钩子时，应该按当时的真实需求重新接线。
  *
- * `tools` 与 `toolConfig` 是这次真有了读取点才加进来的：前者负责执行，
+ * `tools` 与 `toolConfig` 是真有了读取点才加进来的：前者负责执行，
  * 后者负责「本轮到底允许用哪几颗」（每次现读文件，见 `tool/store.ts`）。
+ *
+ * `lock` / `events` / `profileId` 属于**这个引擎之外**的共享状态，理由是它们必须跨配置档：
+ * 每个配置档一个引擎，而「同一个会话不能同时跑两轮」与「一条消息只广播一次」都不是
+ * 单个配置档内部的事。详见 `core/session/lock.ts` 与 `core/agent/events.ts`。
  */
 export interface EngineDeps {
   sessions: SessionManager;
@@ -25,16 +31,11 @@ export interface EngineDeps {
   tools: ToolRegistry;
   toolConfig: ToolConfigStore;
   logger: Logger;
+  lock: SessionLock;
+  events: SessionEvents;
+  /** 这个引擎代表哪一份配置档 —— 只用来在共享锁里登记持有者。 */
+  profileId: string;
 }
-
-/**
- * 「这个会话正忙」的对外文案。
- *
- * 导出的理由：两个出口要说同一句话 —— 非流式端点拿到的是 `handleMessage` 抛出的 409，
- * 流式端点拿到的是 `api/server.ts` 在开流前的预检。同一个意思两种写法迟早走散，
- * 所以句子只留一份。
- */
-export const SESSION_BUSY_MESSAGE = "这个会话有一次对话还没结束，请等它完成后再发下一条";
 
 export interface HandleMessageOptions {
   sessionId: string;
@@ -68,53 +69,28 @@ export class AgentEngine {
   tools: ToolRegistry;
   toolConfig: ToolConfigStore;
   logger: Logger;
-  /** 出站事件的订阅者。公开是既有形状（`subscribe` 返回的退订函数也引用它）。 */
-  listeners = new Set<(frame: ServerFrame) => void>();
+  lock: SessionLock;
+  events: SessionEvents;
+  profileId: string;
 
-  /**
-   * 正在处理消息的会话 id。
-   *
-   * 挡的是「一轮对话的读-改-写」被另一个请求插队：`handleMessage` 会先读全量历史、
-   * 再 await 上游几十秒、然后逐步 append。同会话两个请求各自拿到的快照都不含对方，
-   * 交错落库后会出现「A 的助手消息与它的工具结果之间插进 B 的消息」这种历史。
-   *
-   * 三条边界要说清：
-   * - 这是**进程内**的 Set，多进程各自有各自的（与「一个数据目录只跑一个实例」一致，
-   *   见 README 的生产部署一节）。
-   * - 锁加在引擎而不是存储层：SQLite 只能给「两条 INSERT 串行」，而缺的是「一整轮的
-   *   读-改-写串行」；放存储层还会迫使 `appendMessage` 变 async，波及引擎与六个 handler。
-   * - 释放写在 `finally`，所以**上游报错与客户端断开都不会把会话永久锁死**。
-   */
-  #running = new Set<string>();
-
-  constructor({ sessions, providers, tools, toolConfig, logger }: EngineDeps) {
+  constructor({
+    sessions,
+    providers,
+    tools,
+    toolConfig,
+    logger,
+    lock,
+    events,
+    profileId,
+  }: EngineDeps) {
     this.sessions = sessions;
     this.providers = providers;
     this.tools = tools;
     this.toolConfig = toolConfig;
     this.logger = logger;
-  }
-
-  /** API/适配器订阅出站事件（流式增量、消息）。 */
-  subscribe(fn: (frame: ServerFrame) => void): () => boolean {
-    this.listeners.add(fn);
-    return () => this.listeners.delete(fn);
-  }
-
-  /**
-   * 这个会话此刻有没有一轮对话在跑。
-   *
-   * 只给流式端点做**预检**：`api/server.ts` 在写 SSE 响应头之前问一次，好回一个标准的
-   * 409 JSON。权威判定仍然在 `handleMessage` 里，两者之间必然留一个窗口 —— 真撞上时的表现是
-   * 「流已经开了，409 只能作为 error 帧出去」。这修不掉：响应头一发出就没法再改状态码
-   *（与「未知会话要在开流前 404」是同一条约束）。
-   */
-  isBusy(sessionId: string): boolean {
-    return this.#running.has(sessionId);
-  }
-
-  #emit(frame: ServerFrame): void {
-    for (const fn of this.listeners) fn(frame);
+    this.lock = lock;
+    this.events = events;
+    this.profileId = profileId;
   }
 
   /**
@@ -129,12 +105,11 @@ export class AgentEngine {
     onMessage,
     signal,
   }: HandleMessageOptions): Promise<Message> {
-    // 同一个会话只允许一轮对话在跑（为什么加在引擎而不是存储层，见 `#running` 的注释）。
-    // 非流式端点直接吃这个 409；流式端点靠 `isBusy()` 在开流前预检。
-    if (this.#running.has(sessionId)) {
+    // 同一个会话只允许一轮对话在跑（为什么这把锁在引擎之外，见 `SessionLock` 的类注释）。
+    // 非流式端点直接吃这个 409；流式端点靠 `lock.has()` 在开流前预检。
+    if (!this.lock.tryEnter(sessionId, this.profileId)) {
       throw new ApiError(SESSION_BUSY_MESSAGE, 409);
     }
-    this.#running.add(sessionId);
     try {
       // 顺序是有意义的，而且是为了兼容库化后的读取语义：**先追加、再读历史**。
       // 内存版的 `getWithMessages` 返回 Map 里那份活对象，先读后追加也看得见这条用户消息；
@@ -148,14 +123,14 @@ export class AgentEngine {
       // （`api/server.ts` 的 `sessions.has` 与这里之间必然有窗口），那不是「客户端请求写错了」
       // 400，也不是服务端故障 500，而是一个说得出名的 404。
       if (!session) throw new ApiError("会话不存在", 404);
-      this.#emit({ type: "message", message: userMessage });
+      this.events.emit({ type: "message", message: userMessage });
 
       const reply = await this.#runLoop({ session, model, onDelta, onMessage, signal });
       return reply;
     } finally {
       // 写在 finally 是这条锁的全部要点：上游报错、工具抛错、客户端断开、撞步数上限
       // 都在这条链上，任何一处漏了释放，那个会话就**永久**发不出消息了。
-      this.#running.delete(sessionId);
+      this.lock.release(sessionId);
     }
   }
 
@@ -257,7 +232,10 @@ export class AgentEngine {
   ): Message {
     const message = this.#newMessage(session.id, fields);
     this.sessions.appendMessage(session.id, message);
-    this.#emit({ type: "message", message });
+    // 帧里**不带配置档**，这不是漏了字段：对话历史是全局一份 sqlite（第一期决定），
+    // 所以「哪个会话多了这条消息」已经说全了客户端要知道的事。真加上 profileId，
+    // 反而会让人以为两份配置档的历史是隔开的。
+    this.events.emit({ type: "message", message });
     return message;
   }
 

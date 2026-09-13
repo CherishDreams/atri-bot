@@ -94,7 +94,7 @@ test("同会话并发：非流式与流式都在开流前拿到 409，结束后�
   });
   assert.equal(created.status, 201);
   const { session } = (await created.json()) as { session: Session };
-  const messagesUrl = `${origin}/api/v1/sessions/${session.id}/messages`;
+  const messagesUrl = `${origin}/api/v1/sessions/${session.id}/messages?profile=default`;
 
   const send = (content: string, path = messagesUrl) =>
     fetch(path, {
@@ -116,7 +116,12 @@ test("同会话并发：非流式与流式都在开流前拿到 409，结束后�
 
   // 这一条是本文件存在的理由：流式端点必须在**写 SSE 响应头之前**判，
   // 否则状态码就定死在 200，409 这个语义客户端再也拿不到。
-  const streamConflict = await send("走流式", `${messagesUrl}/stream`);
+  const streamConflict = await send(
+    "走流式",
+    // 完整写出来而不是 `messagesUrl + "/stream"`：查询串必须落在路径之后，
+    // 拼成 `…/messages?profile=default/stream` 只会得到 404，这条用例就变成在测路由表。
+    `${origin}/api/v1/sessions/${session.id}/messages/stream?profile=default`,
+  );
   assert.equal(streamConflict.status, 409);
   const contentType = streamConflict.headers.get("content-type") ?? "";
   assert.match(contentType, /application\/json/);
@@ -229,7 +234,7 @@ test("非流式端点：客户端中途断开时中断上游并释放会话锁",
     body: JSON.stringify({ title: "断开" }),
   });
   const { session } = (await created.json()) as { session: Session };
-  const messagesUrl = `${origin}/api/v1/sessions/${session.id}/messages`;
+  const messagesUrl = `${origin}/api/v1/sessions/${session.id}/messages?profile=default`;
   const send = (content: string, signal?: AbortSignal) =>
     fetch(messagesUrl, {
       method: "POST",

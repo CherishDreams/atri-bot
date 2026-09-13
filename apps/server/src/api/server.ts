@@ -11,10 +11,18 @@ import type { ProviderEntry } from "#core/provider/store.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
 import type { PageOptions } from "#core/session/manager.ts";
 import { Router } from "./router.ts";
-import { readJson, sendError, sendJson, sendSse, startSse, type HttpDeps } from "./http.ts";
+import {
+  readJson,
+  sendError,
+  sendJson,
+  sendSse,
+  startSse,
+  type HttpDeps,
+  type ProfileBundle,
+} from "./http.ts";
 import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from "./auth.ts";
 import { errorMessage, errorStack, statusForError, ApiError } from "#core/errors.ts";
-import { SESSION_BUSY_MESSAGE } from "#core/agent/engine.ts";
+import { SESSION_BUSY_MESSAGE } from "#core/session/lock.ts";
 
 /**
  * provider 实例在 `GET /providers` 里的元素：磁盘条目 + 这一条路由额外补上的运行时标注。
@@ -122,11 +130,45 @@ const CONTENT_TYPES: Record<string, string> = {
  * 不含任何业务逻辑。路由处理函数直接委托给各个 manager。
  */
 export function createHttpServer(deps: HttpDeps) {
-  const { config, logger, sessions, providers, plugins, adapters, engine, auth } = deps;
-  const { providerConfig, reloadProviders, tools, toolConfig } = deps;
+  const { config, logger, sessions, lock, events, profiles, adapters, auth } = deps;
 
   const cookieName = auth.cookieName;
   const router = new Router();
+
+  /**
+   * 从查询串里选出**这次请求要用哪一份配置档**，并把不可用的那些直接回掉。
+   *
+   * 三条判据分开，是因为它们是三件不同的事，而合成一句「用不了」会让人猜：
+   * - 没带 `profile` → **400**。绝不回落到 `default`：那正是「错了也看不出来」的那类默认，
+   *   而控制台的界面会在一次写错档的操作上显示绿勾。
+   * - 这个 id 压根不存在 → **404**（「没这东西」）。
+   * - 存在但加载失败 → **503**（「你配坏了」）。两者分开是仓内一贯的选择，
+   *   `GET /providers` 带着失败条目同是一条决定。
+   *
+   * 503 那句刻意**不带原因原文**：`readConfigFileAt` 的消息里躺着配置文件的绝对路径，
+   * 而 5xx 的固定文案纪律只写在 `fail()` 里 —— 从守卫直接 `sendError` 会绕过它。
+   * 原因由 `GET /profiles` 的 `error` 字段给操作者看（那是鉴权闸门内的出口）。
+   *
+   * @returns 可用的一份对象图；已经回完响应时返回 `null`，调用方直接 `return`
+   */
+  function scopedProfile(req: IncomingMessage, res: ServerResponse): ProfileBundle | null {
+    const id = searchOf(req).get("profile");
+    if (id === null || id === "") {
+      sendError(res, 400, "缺少 profile 参数（要操作哪一份配置档）");
+      return null;
+    }
+    const status = profiles.status(id);
+    if (status === null) {
+      sendError(res, 404, `没有这份配置档: ${id}`);
+      return null;
+    }
+    const bundle = profiles.get(id);
+    if (bundle === null) {
+      sendError(res, 503, `配置档「${id}」当前不可用，原因见 GET /profiles`);
+      return null;
+    }
+    return bundle;
+  }
 
   /**
    * 进行中的**一轮回复**（SSE 与非流式都往里放），值就是各自的 abort 入口。
@@ -241,6 +283,8 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   router.post(`${API_PREFIX}/sessions/:id/messages`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     const body = await readJson(req);
     if (typeof body.content !== "string" || body.content.length === 0) {
       return sendError(res, 400, "必须提供 `content`（字符串）");
@@ -249,14 +293,14 @@ export function createHttpServer(deps: HttpDeps) {
     // 于是「发消息给一个已经被删掉的会话」和「content 写错了」共用同一个状态码。
     if (!sessions.has(params.id)) return sendError(res, 404, "会话不存在");
     // 客户端断开要能中止这一轮 —— 与流式端点同一个理由，但这里的后果更严重：
-    // 会话锁按会话持有（`AgentEngine.#running`），没人等的轮次跑完之前，用户下一条
+    // 会话锁按会话持有（`SessionLock`），没人等的轮次跑完之前，用户下一条
     // 消息只会得到 409；而 `http.close()` 也拦不住它 —— `openStreams` 此前只装 SSE 控制器。
     const controller = new AbortController();
     const onClose = () => controller.abort();
     res.on("close", onClose);
     openStreams.add(controller);
     try {
-      const reply = await engine.handleMessage({
+      const reply = await bundle.engine.handleMessage({
         sessionId: params.id,
         content: body.content,
         model: readModel(body),
@@ -287,6 +331,8 @@ export function createHttpServer(deps: HttpDeps) {
    * 落库内容一致。
    */
   router.post(`${API_PREFIX}/sessions/:id/messages/stream`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     let body;
     try {
       body = await readJson(req);
@@ -303,8 +349,9 @@ export function createHttpServer(deps: HttpDeps) {
 
     // 「这个会话正忙」同样要在开流之前预检，理由与上一行完全一样。
     // 这只是**预检**：权威判定在 `engine.handleMessage` 里，两者之间必然留一个窗口，
-    // 真撞上时那句 409 只能以 error 帧出去（`engine.isBusy` 的注释记录了这件事）。
-    if (engine.isBusy(params.id)) return sendError(res, 409, SESSION_BUSY_MESSAGE);
+    // 真撞上时那句 409 只能以 error 帧出去（`SessionLock` 的注释记录了这件事）。
+    // 问的是**共享锁**而不是某个引擎：占着这个会话的那一轮可能属于另一份配置档。
+    if (lock.has(params.id)) return sendError(res, 409, SESSION_BUSY_MESSAGE);
 
     startSse(res);
 
@@ -316,7 +363,7 @@ export function createHttpServer(deps: HttpDeps) {
     openStreams.add(controller);
 
     try {
-      const reply = await engine.handleMessage({
+      const reply = await bundle.engine.handleMessage({
         sessionId: params.id,
         content: body.content,
         model: readModel(body),
@@ -362,7 +409,10 @@ export function createHttpServer(deps: HttpDeps) {
    * 拼错而加载失败的），而不是只返回注册表里活着的那些。配置页需要看见
    * 「我配了但它没生效」，旧语义下那种条目会凭空消失。
    */
-  router.get(`${API_PREFIX}/providers`, async (_req, res) => {
+  router.get(`${API_PREFIX}/providers`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    const { providerConfig, providers } = bundle;
     // 单独跑一遍工厂，只为拿到「谁没加载成功、为什么」——注册表里没有这个信息，
     // 而配置页恰恰最需要它。注意取的是 `errors` 不是 `providers`：后者是**成功
     // 构造出来的实例**，键名写反了会得到一个恒空的错误表，于是失败原因永远不显示。
@@ -392,31 +442,39 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   router.post(`${API_PREFIX}/providers`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const provider = providerConfig.createProvider(body);
-      reloadProviders();
-      sendJson(res, 201, { provider: viewProvider(provider, providerConfig.defaultId) });
+      const provider = bundle.providerConfig.createProvider(body);
+      bundle.reloadProviders();
+      sendJson(res, 201, {
+        provider: viewProvider(provider, bundle.providerConfig.defaultId),
+      });
     } catch (err) {
       fail(res, err);
     }
   });
 
   router.post(`${API_PREFIX}/providers/:id`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const provider = providerConfig.updateProvider(params.id, body);
-      reloadProviders();
-      sendJson(res, 200, { provider: viewProvider(provider, providerConfig.defaultId) });
+      const provider = bundle.providerConfig.updateProvider(params.id, body);
+      bundle.reloadProviders();
+      sendJson(res, 200, { provider: viewProvider(provider, bundle.providerConfig.defaultId) });
     } catch (err) {
       fail(res, err);
     }
   });
 
-  router.delete(`${API_PREFIX}/providers/:id`, async (_req, res, params) => {
+  router.delete(`${API_PREFIX}/providers/:id`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     try {
-      const result = providerConfig.deleteProvider(params.id);
-      reloadProviders();
+      const result = bundle.providerConfig.deleteProvider(params.id);
+      bundle.reloadProviders();
       sendJson(res, 200, result);
     } catch (err) {
       fail(res, err);
@@ -428,15 +486,19 @@ export function createHttpServer(deps: HttpDeps) {
    * 与 AstrBot 的行为一致。该接口在鉴权闸门之内，仅管理员可取。
    * 若日后要收紧，改成 `hasApiKey` + 掩码即可，不影响其它设计。
    */
-  router.get(`${API_PREFIX}/provider-sources`, async (_req, res) => {
-    sendJson(res, 200, { sources: providerConfig.sources });
+  router.get(`${API_PREFIX}/provider-sources`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    sendJson(res, 200, { sources: bundle.providerConfig.sources });
   });
 
   router.post(`${API_PREFIX}/provider-sources`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const source = providerConfig.createSource(body);
-      reloadProviders();
+      const source = bundle.providerConfig.createSource(body);
+      bundle.reloadProviders();
       sendJson(res, 201, { source });
     } catch (err) {
       fail(res, err);
@@ -444,10 +506,12 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   router.post(`${API_PREFIX}/provider-sources/:id`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const source = providerConfig.updateSource(params.id, body);
-      reloadProviders();
+      const source = bundle.providerConfig.updateSource(params.id, body);
+      bundle.reloadProviders();
       sendJson(res, 200, { source });
     } catch (err) {
       fail(res, err);
@@ -456,11 +520,13 @@ export function createHttpServer(deps: HttpDeps) {
 
   /** 删除源。默认拒绝删除仍被引用的源，`?cascade=1` 才连带删掉引用者。 */
   router.delete(`${API_PREFIX}/provider-sources/:id`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     const cascade = searchOf(req).get("cascade");
     const isCascade = cascade === "1" || cascade === "true";
     try {
-      const result = providerConfig.deleteSource(params.id, { cascade: isCascade });
-      reloadProviders();
+      const result = bundle.providerConfig.deleteSource(params.id, { cascade: isCascade });
+      bundle.reloadProviders();
       sendJson(res, 200, result);
     } catch (err) {
       fail(res, err);
@@ -474,7 +540,10 @@ export function createHttpServer(deps: HttpDeps) {
    * 访问任意地址」的转发器。用户要先保存，再获取——与 AstrBot 的
    * 「保存并获取模型」按钮同一语义。
    */
-  router.post(`${API_PREFIX}/provider-sources/:id/models`, async (_req, res, params) => {
+  router.post(`${API_PREFIX}/provider-sources/:id/models`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    const { providerConfig } = bundle;
     const source = providerConfig.getSource(params.id);
     if (!source) return sendError(res, 404, `未找到 id 为「${params.id}」的 provider source`);
 
@@ -501,32 +570,47 @@ export function createHttpServer(deps: HttpDeps) {
     }
   });
 
-  router.get(`${API_PREFIX}/plugins`, async (_req, res) => {
-    sendJson(res, 200, { plugins: plugins.list() });
+  router.get(`${API_PREFIX}/plugins`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    sendJson(res, 200, { plugins: bundle.plugins.list() });
   });
 
-  router.post(`${API_PREFIX}/plugins/:id/reload`, async (_req, res, params) => {
+  router.post(`${API_PREFIX}/plugins/:id/reload`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     try {
-      const plugin = await plugins.reload(params.id);
+      const plugin = await bundle.plugins.reload(params.id);
       sendJson(res, 200, { plugin });
     } catch (err) {
       fail(res, err);
     }
   });
 
-  router.post(`${API_PREFIX}/plugins/:id/unload`, async (_req, res, params) => {
+  router.post(`${API_PREFIX}/plugins/:id/unload`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     try {
-      const result = await plugins.unload(params.id);
+      const result = await bundle.plugins.unload(params.id);
       sendJson(res, 200, result);
     } catch (err) {
       fail(res, err);
     }
   });
 
+  /**
+   * 启用/禁用**这份配置档**里的某个插件。
+   *
+   * 插件是全局安装的（部署级 `pluginDirs`），所以这个开关不是「装不装」而是
+   * 「这份档开不开它」—— 界面上要说清，否则操作者会以为在卸载。
+   * 它现在也是第一次真正落盘的启用状态（以前只在管理器内存里，重启即忘）。
+   */
   router.post(`${API_PREFIX}/plugins/:id/enable`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const result = await plugins.setEnabled(params.id, body.enabled !== false);
+      const result = await bundle.plugins.setEnabled(params.id, body.enabled !== false);
       sendJson(res, 200, { plugin: result });
     } catch (err) {
       fail(res, err);
@@ -542,21 +626,88 @@ export function createHttpServer(deps: HttpDeps) {
   // 与 provider 那组不同：这里**不需要重建任何东西**。注册表只回答「这颗工具存在吗」，
   // 启用与否每次现读文件，所以写完开关下一条消息看到的就已是新状态（`GET /tools` 同理）。
 
-  router.get(`${API_PREFIX}/tools`, async (_req, res) => {
+  router.get(`${API_PREFIX}/tools`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     sendJson(res, 200, {
-      tools: tools.list().map((tool) => viewTool(tool, toolConfig.isEnabled(tool.id))),
+      tools: bundle.tools
+        .list()
+        .map((tool) => viewTool(tool, bundle.toolConfig.isEnabled(tool.id))),
     });
   });
 
   router.post(`${API_PREFIX}/tools/:id/enable`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
     // readJson 在 try 之外：畸形 JSON 由顶层分派成 400，与其余写操作一致
     //（`test/openapi-request.test.ts` 的畸形体用例就是打这条路径的）。
     const body = await readJson(req);
     try {
-      const tool = tools.get(params.id);
+      const tool = bundle.tools.get(params.id);
       if (!tool) return sendError(res, 404, `未知工具: ${params.id}`);
-      const { enabled } = toolConfig.setEnabled(params.id, body.enabled);
+      const { enabled } = bundle.toolConfig.setEnabled(params.id, body.enabled);
       sendJson(res, 200, { tool: viewTool(tool, enabled) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  // --- 配置档 -------------------------------------------------------------
+  //
+  // 这一组**不带 `profile` 参数**：它们操作的是「有哪些档」，而不是「某档里的东西」。
+  // 唯一带 `?profile=` 语义的是「这份档现在能不能用」，而那由 `records()` 的 status 说。
+
+  router.get(`${API_PREFIX}/profiles`, async (_req, res) => {
+    sendJson(res, 200, { profiles: profiles.records() });
+  });
+
+  router.post(`${API_PREFIX}/profiles`, async (req, res) => {
+    const body = await readJson(req);
+    try {
+      const record = await profiles.create(
+        typeof body.id === "string" ? body.id : "",
+        typeof body.name === "string" ? body.name : undefined,
+      );
+      sendJson(res, 201, { profile: record });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/profiles/:id/rename`, async (req, res, params) => {
+    const body = await readJson(req);
+    if (typeof body.name !== "string" || body.name.length === 0) {
+      return sendError(res, 400, "必须提供 `name`（非空字符串）");
+    }
+    try {
+      sendJson(res, 200, { profile: await profiles.rename(params.id, body.name) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/profiles/:id/reload`, async (_req, res, params) => {
+    try {
+      sendJson(res, 200, { profile: await profiles.reload(params.id) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * 摘掉一份配置档。**不删文件、不删它的插件数据目录**（框架从不删它，
+   * 清理是操作者的 `rm -rf`），所以这里说的是「下线」而不是「删除」。
+   */
+  router.delete(`${API_PREFIX}/profiles/:id`, async (_req, res, params) => {
+    try {
+      if (profiles.status(params.id) === null) {
+        return sendError(res, 404, `没有这份配置档: ${params.id}`);
+      }
+      const removed = await profiles.remove(params.id);
+      if (!removed) {
+        return sendError(res, 409, "这个配置档正被某个会话使用，等那轮对话结束后再下线");
+      }
+      sendJson(res, 200, { id: params.id, removed: true });
     } catch (err) {
       fail(res, err);
     }
@@ -653,7 +804,10 @@ export function createHttpServer(deps: HttpDeps) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
   };
-  const unsubscribeEngine = engine.subscribe(broadcast);
+  // 订阅的是**共享总线**而不是某个引擎：N 份配置档各接一次的话，同一个 WebSocket
+  // 会把每条消息收到 N 遍；而删掉一份配置档时那个订阅会泄在已卸载的对象图上。
+  // 一次订阅、一次退订，代价是「引擎不知道谁在听」——正是我们要的性质。
+  const unsubscribeEvents = events.subscribe(broadcast);
 
   /**
    * 登录会话被显式作废时，只通知**用它握手的那批连接**，然后关掉它们。
@@ -708,7 +862,9 @@ export function createHttpServer(deps: HttpDeps) {
 
         // 两个订阅都要退掉。`engine.subscribe` 以前把退订函数丢了，于是关停之后
         // 引擎上一直挂着这个闭包；`auth.onSessionLost` 同一条规矩。
-        unsubscribeEngine();
+        // 现在接的是共享总线，`events.listenerCount` 归零是这条退订可被断言的证据
+        //（见 `test/stream.test.ts` 的关停用例）。
+        unsubscribeEvents();
         unsubscribeAuth();
 
         // **关停不发 `unauthorized`**：一次例行发版会让每个开着控制台的浏览器跳回登录页，

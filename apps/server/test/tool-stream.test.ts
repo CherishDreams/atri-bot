@@ -113,11 +113,14 @@ interface SseFrame {
 }
 
 async function readSse(origin: string, cookie: string, sessionId: string): Promise<SseFrame[]> {
-  const res = await fetch(`${origin}/api/v1/sessions/${sessionId}/messages/stream`, {
-    method: "POST",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ content: "现在几点" }),
-  });
+  const res = await fetch(
+    `${origin}/api/v1/sessions/${sessionId}/messages/stream?profile=default`,
+    {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ content: "现在几点" }),
+    },
+  );
   assert.equal(res.status, 200);
   const frames: SseFrame[] = [];
   const buffer = await res.text();
@@ -189,7 +192,7 @@ test("启用工具后：一次对话真的跑完「调用 → 执行 → 回喂 
 
   // 开关确实是被读出来的，不是测试自己造的：GET /tools 与这轮行为必须同源
   const listed = (await (
-    await fetch(`${origin}/api/v1/tools`, { headers: { cookie } })
+    await fetch(`${origin}/api/v1/tools?profile=default`, { headers: { cookie } })
   ).json()) as { tools: { id: string; enabled: boolean }[] };
   assert.equal(listed.tools[0]?.enabled, true);
 });

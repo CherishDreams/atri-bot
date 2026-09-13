@@ -40,6 +40,11 @@ const menuOptions: MenuOption[] = [
     icon: icon("tool"),
     label: () => h(RouterLink, { to: { name: "toolsConfig" } }, { default: () => "工具" }),
   },
+  {
+    key: "profiles",
+    icon: icon("settings"),
+    label: () => h(RouterLink, { to: { name: "profiles" } }, { default: () => "配置档" }),
+  },
 ];
 
 /** 当前高亮项。只认这些已知路由名，其余情况不高亮，避免误标。 */

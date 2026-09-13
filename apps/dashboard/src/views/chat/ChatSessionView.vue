@@ -6,10 +6,13 @@ import { captureAnchor } from "@/components/shared/scrollAnchor";
 import { useAuthStore } from "@/stores/auth";
 import { useProvidersStore } from "@/stores/providers";
 import { useSessionsStore } from "@/stores/sessions";
+import { useProfile } from "@/composables/useProfile";
 
 const auth = useAuthStore();
 const sessions = useSessionsStore();
 const providers = useProvidersStore();
+/** 发消息是作用域化的：这一轮用哪一套模型与工具，由路由上的那一份档决定。 */
+const { profile } = useProfile();
 const route = useRoute();
 const router = useRouter();
 
@@ -98,8 +101,10 @@ async function submitMessage(text: string): Promise<void> {
   if (!content || !sessions.active) return;
 
   draft.value = "";
-  // 带上顶栏模型选择器选中的实例；没选就交给服务端按自己的默认选路。
-  await sessions.send(content, providers.selection?.model);
+  // 带上顶栏选中的**实例 id**（不是模型名：名字不再跨配置档唯一，见 `stores/providers.ts`
+  // 的 `selection`）；没选就交给服务端按自己的默认选路。
+  if (profile.value === null) return;
+  await sessions.send(profile.value, content, providers.selection?.providerId);
 
   // 发送失败时把内容还回输入框，否则用户白打一遍字。
   // 条件是 draft 仍为空：用户在等回复期间又打了字，不能把人家的字覆盖掉。

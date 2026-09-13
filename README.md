@@ -347,12 +347,21 @@ pnpm start            # 或 node apps/server/src/index.ts
 - `ctx.effect(fn | { dispose() }, label?)`：登记副作用，卸载时逆序自动释放，返回提前释放函数
 - `ctx.subscribe(emitter, event, handler)`：订阅 emitter，并在卸载时自动退订
 - `ctx.dataDir`：这个插件**自己**的数据目录（绝对路径），首次访问时才创建。
+  从这份档的数据目录读回来的东西，换一份档就是另一份（同一个插件被两份档各开一次，
+  就是两份独立的登录态 / 缓存 / 限流预算）。
   存东西请用它，别往插件自己的目录里写 —— 那个目录是用户从上游拷来的代码，
   升级会被整个替换、改名会换目录，写在那儿的数据跟着一起没。
-  目录位置是 `<dataDir>/plugins/<你的 id>`，所以**卸载、禁用、重命名插件目录都不会丢数据**，
-  而框架从不删它（要清理请自己 `rm -rf data/plugins/<id>`）。
+  目录位置是 `<dataDir>/profiles/<配置档 id>/plugins/<你的 id>`，所以**卸载、禁用、
+  重命名插件目录都不会丢数据**，
+  而框架从不删它（要清理请自己 `rm -rf data/profiles/<配置档 id>/plugins/<id>`）。
   id 必须能当目录名用（小写字母/数字开头，只含 `a-z0-9._-`，≤64 字符）——
   不合规的插件在登记那一刻就被拒，见上面的失败表
+- **同一个 `index.js` 会按配置档各求值一次。** 插件安装是全局的（部署级 `pluginDirs`），
+  每份配置档只决定开不开它；而每档拿到的是**自己那份模块实例**，所以模块顶层的
+  一次性副作用（注册全局 handler、起定时器、读文件建缓存）会执行 N 次而不是 1 次。
+  该放在 `setup()` 里的状态就放在 `setup()` 里 —— 那里本来就是一份配置档一次。
+  这样做的理由不是洁癖：不各求值一份，两份配置档的同一个插件就会共享模块级的那个变量，
+  后启动的一方把它盖掉，先启动的那方随后拿着别人的数据目录继续写。
 - `ctx.plugins()`：**实时**列出此刻已登记的插件（含你自己，也含上一次加载失败的那些——
   它们的 `enabled` 为 `false`），每项只有 `id` / `name` / `version` / `description` / `enabled`
   五个键。拿不到同伴的目录，也拿不到它们的失败原因（那是第三方文本，里面可能有绝对路径）；
@@ -378,10 +387,20 @@ pnpm start            # 或 node apps/server/src/index.ts
 | POST         | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                                                          |
 | POST         | `/plugins/:id/reload`                           | 重载插件（销毁旧实例并重新求值代码）                                                    |
 | POST         | `/plugins/:id/unload`                           | 卸载插件（释放副作用并移除）                                                            |
-| POST         | `/plugins/:id/enable`                           | 启用 / 禁用插件，body `{ "enabled": true }`                                             |
+| POST         | `/plugins/:id/enable`                           | 在**这份配置档**里启用 / 禁用插件，body `{ "enabled": true }`（插件本身是全局安装的）   |
 | POST         | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填）                                     |
+| GET          | `/profiles`                                     | 列出全部配置档及其加载状态（含 `failed` 与它的原因）                                    |
+| POST         | `/profiles`                                     | 新建配置档，body `{ id, name? }`                                                        |
+| POST         | `/profiles/:id/rename`、`/profiles/:id/reload`  | 改显示名 / 重读配置文件并换上新的对象图                                                 |
+| DELETE       | `/profiles/:id`                                 | 下线配置档（**不删文件**；它正被某个会话占用时返回 409）                                |
 
 除标注「公开」的路径外，其余接口都需要登录（未登录返回 401）。
+
+**下面这些路径还必须带 `?profile=<配置档 id>`**：`/providers*`、`/provider-sources*`、
+`/tools*`、`/plugins*`、`/sessions/:id/messages[/stream]`。缺了它一律 **400**，
+不会回落到 `default` —— 「界面在 B、写进 A、还回 201」这类错只有在服务端拒绝猜的时候才可能被发现。
+`/health`、`/auth/*`、`/sessions*`（列表与增删会话本身）、`/adapters`、`/profiles*` 不需要：
+对话历史是**全局一份** sqlite，不属于任何一份配置档。
 
 **配置类**写操作落在**配置档文件**（`data/profiles/<id>/config.json`）上，读-改-写、
 文件权限 `0600`，改完立刻生效、**不需要重启**：provider 靠重建注册表生效，工具靠每次现读文件

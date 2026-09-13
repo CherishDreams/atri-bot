@@ -88,6 +88,8 @@ async function startApp(providers: ProvidersFileConfig) {
   await app.start();
   return {
     origin: `http://127.0.0.1:${app.address().port}`,
+    /** 事件总线此刻的订阅数，用于关停后的泄漏断言（见 `app.ts` 的 `listeners`）。 */
+    listeners: () => app.listeners(),
     stop: async () => {
       await app.stop();
       rmSync(root, { recursive: true, force: true });
@@ -148,11 +150,14 @@ test("流式端点：逐段推送增量，末帧带回已落库的消息", async
   const session = await createSession(app.origin, cookie);
 
   // 断言要读 content-type 这个头，所以在这里向下收窄一次（见 ResponseWithContentType）。
-  const res = (await fetch(`${app.origin}/api/v1/sessions/${session.id}/messages/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ content: "嗨", model: "m" }),
-  })) as ResponseWithContentType;
+  const res = (await fetch(
+    `${app.origin}/api/v1/sessions/${session.id}/messages/stream?profile=default`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content: "嗨", model: "m" }),
+    },
+  )) as ResponseWithContentType;
 
   assert.equal(res.status, 200);
   assert.match(res.headers.get("content-type"), /text\/event-stream/);
@@ -187,11 +192,14 @@ test("流式端点：落库内容与流式推送一致，刷新后历史就是�
 
   // 必须把响应体读完：助手消息是在流结束的那一刻才落库的，
   // 只等响应头就回来查详情，会读到还没写入的历史。
-  const res = await fetch(`${app.origin}/api/v1/sessions/${session.id}/messages/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ content: "q", model: "m" }),
-  });
+  const res = await fetch(
+    `${app.origin}/api/v1/sessions/${session.id}/messages/stream?profile=default`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content: "q", model: "m" }),
+    },
+  );
   await res.text();
 
   // 边界收窄：`Response.json()` 的返回是 `unknown`，而这里读的是会话详情
@@ -218,7 +226,7 @@ test("流式端点：未知会话在开流前就 404，而不是用事件报错"
 
   const cookie = await login(app.origin);
   // 断言要读 content-type 这个头，所以在这里向下收窄一次（见 ResponseWithContentType）。
-  const res = (await fetch(`${app.origin}/api/v1/sessions/不存在/messages/stream`, {
+  const res = (await fetch(`${app.origin}/api/v1/sessions/不存在/messages/stream?profile=default`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
     body: JSON.stringify({ content: "q" }),
@@ -239,11 +247,14 @@ test("流式端点：空 content 在开流前 400", async (t) => {
 
   const cookie = await login(app.origin);
   const session = await createSession(app.origin, cookie);
-  const res = await fetch(`${app.origin}/api/v1/sessions/${session.id}/messages/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ content: "" }),
-  });
+  const res = await fetch(
+    `${app.origin}/api/v1/sessions/${session.id}/messages/stream?profile=default`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content: "" }),
+    },
+  );
   assert.equal(res.status, 400);
 });
 
@@ -264,11 +275,14 @@ test("流式端点：上游报错时错误走事件（状态码已是 200），�
   const cookie = await login(app.origin);
   const session = await createSession(app.origin, cookie);
 
-  const res = await fetch(`${app.origin}/api/v1/sessions/${session.id}/messages/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ content: "q", model: "m" }),
-  });
+  const res = await fetch(
+    `${app.origin}/api/v1/sessions/${session.id}/messages/stream?profile=default`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content: "q", model: "m" }),
+    },
+  );
 
   assert.equal(res.status, 200, "响应头已发出，无法再改状态码");
   const events = await readSse(res);
@@ -310,12 +324,15 @@ test("流式端点：客户端中途断开时中断上游，且不按服务端�
   t.after(() => (console.error = originalError));
 
   const controller = new AbortController();
-  const res = await fetch(`${app.origin}/api/v1/sessions/${session.id}/messages/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ content: "q", model: "m" }),
-    signal: controller.signal,
-  });
+  const res = await fetch(
+    `${app.origin}/api/v1/sessions/${session.id}/messages/stream?profile=default`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content: "q", model: "m" }),
+      signal: controller.signal,
+    },
+  );
   assert.equal(res.status, 200);
 
   // 读到第一个增量后断开，模拟关标签页。
@@ -356,12 +373,15 @@ test("关停时不会因为还开着的流而被拖住", async (t) => {
   // server.close() 会等所有连接自然结束，流式响应是长连接，没有主动收尾就会一直挂住。
   const controller = new AbortController();
   t.after(() => controller.abort());
-  const res = await fetch(`${app.origin}/api/v1/sessions/${session.id}/messages/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ content: "q", model: "m" }),
-    signal: controller.signal,
-  });
+  const res = await fetch(
+    `${app.origin}/api/v1/sessions/${session.id}/messages/stream?profile=default`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content: "q", model: "m" }),
+      signal: controller.signal,
+    },
+  );
   assert.equal(res.status, 200);
   // 读到第一个增量，确认流真的已经建立。
   // 运行时守卫（不新增断言行）：`Response.body` 的类型带 null（无体的响才会），
@@ -371,11 +391,18 @@ test("关停时不会因为还开着的流而被拖住", async (t) => {
   await reader.read();
 
   const started = Date.now();
+  // 关停前总线一定有且只有 HTTP 层那一个订阅；拿它当基线，才能把下面那句 0 读成
+  // 「退订发生了」而不是「从来就没人订阅」。
+  assert.equal(app.listeners(), 1, "关停前事件总线应该挂着 HTTP 层那一个订阅");
   await app.stop();
   const elapsed = Date.now() - started;
 
   // 阈值放宽到 3s：这里要证明的是「不会挂到上游超时（原本 120s+）」，不是精确计时。
   assert.ok(elapsed < 3000, `关停应在 3s 内完成，实际 ${elapsed}ms`);
+  // `http.close()` 必须退掉它对总线的订阅。漏掉的后果在功能上完全隐形（没有 WebSocket
+  // 连着就一帧都不发），所以这是那个泄漏唯一会被看见的时刻 —— 曾经真的漏过一次，
+  // 退订函数被丢在了原地。
+  assert.equal(app.listeners(), 0, "关停之后事件总线还挂着订阅者：close() 漏了退订");
 });
 
 test("流式端点：匿名访问被鉴权闸门拦下", async (t) => {
@@ -387,10 +414,13 @@ test("流式端点：匿名访问被鉴权闸门拦下", async (t) => {
   t.after(() => app.stop());
 
   const session = { id: "任意" };
-  const res = await fetch(`${app.origin}/api/v1/sessions/${session.id}/messages/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content: "q" }),
-  });
+  const res = await fetch(
+    `${app.origin}/api/v1/sessions/${session.id}/messages/stream?profile=default`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "q" }),
+    },
+  );
   assert.equal(res.status, 401);
 });

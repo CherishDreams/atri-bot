@@ -19,6 +19,7 @@ import { ApiError } from "#core/errors.ts";
 import {
   ensurePrivateDir,
   readConfigFileAt,
+  updateConfigFileAt,
   writeConfigFileAt,
   type FileConfig,
   type ProvidersFileConfig,
@@ -157,6 +158,44 @@ export function writeProfileConfig(filePath: string, config: ProfileFileConfig):
 /** bootstrap 里还留着哪些「跑法」段（返回键名；空数组表示干净）。 */
 export function runShapeKeysIn(bootstrap: FileConfig): string[] {
   return RUN_SHAPE_KEYS.filter((key) => bootstrap[key] !== undefined);
+}
+
+/**
+ * 读 → 就地改 → 写**一份配置档**。
+ *
+ * 走的是 `updateConfigFileAt` 那同一个实现，所以「mutate 抛错就完全不落盘」与
+ * 「读-改-写保留我们不认识的键」这两条性质自动继承，不需要在配置档这一层再写一遍。
+ */
+export function updateProfileConfig<T>(
+  filePath: string,
+  mutate: (config: ProfileFileConfig) => T,
+): T {
+  return updateConfigFileAt(filePath, (file) =>
+    // 边界收窄：`readConfigFileAt` 已经保证顶层是非 null 的非数组对象，
+    // 而 `FileConfig` 与 `ProfileFileConfig` 都是**开放**类型（带索引签名），
+    // 两者的差异只在「哪些键有名」，不在「能不能多键」。
+    mutate(file as ProfileFileConfig),
+  );
+}
+
+/**
+ * 把某个插件在这份配置档里的启用状态写回文件。
+ *
+ * 由 `PluginManager` 经构造参数调用（`PluginStorage.persistEnabled`），
+ * 所以 `plugins/` 层不需要认识这个文件；写失败会一路抛回 HTTP 层，
+ * 管理器**先落盘再动内存**正是为了让那种失败留下一个自洽的状态。
+ */
+export function setProfilePluginEnabled(
+  filePath: string,
+  pluginId: string,
+  enabled: boolean,
+): void {
+  updateProfileConfig(filePath, (config) => {
+    const plugins = config.plugins ?? {};
+    // 展开保留段落里我们不认识的键（`PluginToggle` 是开放类型，与工具/适配器同一条理由）。
+    plugins[pluginId] = { ...plugins[pluginId], enabled };
+    config.plugins = plugins;
+  });
 }
 
 /**

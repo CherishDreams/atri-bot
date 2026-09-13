@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { onBeforeUnmount, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { connect } from "../api/client.js";
 import { useAuthStore } from "../stores/auth.js";
@@ -8,11 +8,14 @@ import { usePluginsStore } from "../stores/plugins.js";
 import SessionList from "../components/SessionList.vue";
 import Conversation from "../components/Conversation.vue";
 import PluginPanel from "../components/PluginPanel.vue";
+import ProfilePicker from "../components/shared/ProfilePicker.vue";
+import { useProfile } from "../composables/useProfile";
 
 const auth = useAuthStore();
 const sessions = useSessionsStore();
 const plugins = usePluginsStore();
 const router = useRouter();
+const { profile } = useProfile();
 
 async function onLogout(): Promise<void> {
   await auth.logout();
@@ -43,7 +46,14 @@ onMounted(async () => {
     if (frame.type === "message") sessions.ingest(frame.message);
   });
 
-  await Promise.all([sessions.refresh(), plugins.refresh()]);
+  await sessions.refresh();
+  // 插件面板是作用域化的（每份配置档各有一份启用清单），没选档就不去拉它。
+  if (profile.value !== null) await plugins.refresh(profile.value);
+});
+
+// 从选择器里挑了一份档之后（路由 query 变了），把这一档的插件读出来。
+watch(profile, (p) => {
+  if (p !== null) void plugins.refresh(p);
 });
 
 onBeforeUnmount(() => {
@@ -64,7 +74,13 @@ onBeforeUnmount(() => {
     下界必须是 0：`1fr` 等价于 `minmax(auto,1fr)`，auto 仍会被内容顶开。
     窄屏是 1 列 3 行，所以三行都要封。
   -->
+  <!-- 没选配置档时整页换成选择器：会话与插件面板都在这里拿不到有意义的状态，
+       画出来只会是一列空会话 + 一个空面板，与「加载失败」在界面上分不开。 -->
+  <div v-if="profile === null" class="h-full overflow-y-auto bg-canvas">
+    <ProfilePicker />
+  </div>
   <div
+    v-else
     class="grid h-full grid-cols-1 grid-rows-[repeat(3,minmax(0,1fr))] overflow-hidden bg-canvas text-ink lg:grid-cols-[240px_1fr_300px] lg:grid-rows-[minmax(0,1fr)]"
   >
     <SessionList />
@@ -76,9 +92,9 @@ onBeforeUnmount(() => {
         <span class="text-xs">{{ auth.user?.username }}</span>
         <button class="btn-ghost" type="button" title="退出登录" @click="onLogout">登出</button>
       </header>
-      <Conversation class="min-h-0 flex-1" />
+      <Conversation class="min-h-0 flex-1" :profile="profile" />
     </div>
 
-    <PluginPanel />
+    <PluginPanel :profile="profile" />
   </div>
 </template>

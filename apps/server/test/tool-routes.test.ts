@@ -54,7 +54,9 @@ async function call(
   path: string,
   body?: unknown,
 ): Promise<{ status: number; json: Record<string, unknown> }> {
-  const res = await fetch(`${origin}/api/v1${path}`, {
+  // `?profile=default`：工具开关属于配置档。缺参数必须 400 这件事由
+  // `test/openapi-request.test.ts` 的规格派生守卫专门证，不在每个调用点重复钉。
+  const res = await fetch(`${origin}/api/v1${path}?profile=default`, {
     method,
     headers: body === undefined ? { cookie } : { cookie, "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -155,7 +157,9 @@ test("坏请求各有明确的拒绝理由", async (t) => {
   });
   assert.equal(wrongType.status, 400);
 
-  const malformed = await fetch(`${origin}/api/v1/tools/current_time/enable`, {
+  // 带上 `?profile=`：这一条要证的 400 是**畸形 JSON**给的。不带参数的话它同样回 400，
+  // 但那是因为缺配置档 —— 断言会绿，而它已经不在测它想测的那件事了。
+  const malformed = await fetch(`${origin}/api/v1/tools/current_time/enable?profile=default`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: "{这不是 JSON",
@@ -166,6 +170,9 @@ test("坏请求各有明确的拒绝理由", async (t) => {
 test("工具端点默认受保护", async (t) => {
   const { origin } = await startApp(t);
   // 匿名访问必须 401 而不是 404：闸门在路由匹配之前，否则端点存在性会泄露。
+  //
+  // 这里**刻意不带 `?profile=`**，与上面那些用例相反：缺配置档参数是 400（路由级判据），
+  // 而 401 必须在它之前发生。带着参数测反而证不到这一条 —— 那条 400 才是被挡住的东西。
   for (const [method, path, body] of [
     ["GET", "/tools", undefined],
     ["POST", "/tools/current_time/enable", { enabled: true }],

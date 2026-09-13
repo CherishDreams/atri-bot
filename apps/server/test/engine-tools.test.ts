@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message, ServerFrame } from "@atri/shared";
 import { AgentEngine } from "#core/agent/engine.ts";
+import { SessionEvents } from "#core/agent/events.ts";
+import { SessionLock } from "#core/session/lock.ts";
 import { ApiError } from "#core/errors.ts";
 import { ProviderRegistry } from "#core/provider/registry.ts";
 import { SessionManager } from "#core/session/manager.ts";
@@ -90,23 +92,30 @@ async function harness(
   const providers = new ProviderRegistry();
   const provider = scriptedProvider(replies);
   providers.register(provider);
+  // 锁与总线由「组合根」这里构造并注入 —— 引擎不再自己持有它们，
+  // 因为多配置档之下「同一个会话不能同时跑两轮」不是单个引擎的内部事务。
+  const lock = new SessionLock();
+  const events = new SessionEvents();
   const engine = new AgentEngine({
     sessions,
     providers,
     tools: registry,
     toolConfig,
     logger: silentLogger(logLines),
+    lock,
+    events,
+    profileId: "default",
   });
   const session = await engine.sessions.create({ title: "测试" });
   const frames: ServerFrame[] = [];
-  engine.subscribe((frame) => frames.push(frame));
+  events.subscribe((frame) => frames.push(frame));
   // 清理收在这一处（用例里不再有 `t.after`）：句柄先关、再删目录。本仓不留「内存版存储」
   // 这条第二路径，所以这里的会话存储是真库，漏掉 close 就是把库文件一直占着。
   t.after(() => {
     sessions.close();
     return rm(root, { recursive: true, force: true });
   });
-  return { engine, provider, sessions, frames, session };
+  return { engine, provider, sessions, frames, session, lock, events };
 }
 
 /**
@@ -351,6 +360,9 @@ test("工具集在一次运行内固定：中途改配置文件不影响在途�
     tools: registry,
     toolConfig,
     logger: silentLogger(),
+    lock: new SessionLock(),
+    events: new SessionEvents(),
+    profileId: "default",
   });
   const session = await engine.sessions.create({ title: "测试" });
 
@@ -421,7 +433,7 @@ test("同一会话的一次对话没结束时第二次被拒（409），且库�
   // 一轮结束后必须能再发 —— 忘记在 finally 里释放是最容易犯的错。
   const third = await h.engine.handleMessage({ sessionId: h.session.id, content: "三" });
   assert.equal(third.content, "第二响应");
-  assert.equal(h.engine.isBusy(h.session.id), false);
+  assert.equal(h.lock.has(h.session.id), false);
 });
 
 test("上游报错也释放锁：一次失败不会把会话永久锁死", async (t) => {
@@ -434,7 +446,7 @@ test("上游报错也释放锁：一次失败不会把会话永久锁死", async
     () => h.engine.handleMessage({ sessionId: h.session.id, content: "一" }),
     /上游炸了/,
   );
-  assert.equal(h.engine.isBusy(h.session.id), false, "抛错路径也必须走 finally");
+  assert.equal(h.lock.has(h.session.id), false, "抛错路径也必须走 finally");
 
   // 换一个必定成功的上游再发一次：能过，就说明会话没被锁住。
   h.provider.chat = async () => ({ content: "补上的回复" });

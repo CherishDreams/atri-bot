@@ -308,9 +308,10 @@ export const useSessionsStore = defineStore("sessions", {
      * 服务端已经把增量拼好并落库，用它的版本能保证前端显示与数据库一致
      * （也顺带拿到规范的消息 id 与时间戳）。
      *
-     * `model` 为 provider 实例 id；留空则让服务端按自己的三级选路挑一个。
+     * `profile` 决定这一轮用哪一套模型与工具（发消息是作用域化的，而会话本身是全局的）。
+     * `model` 为 provider **实例 id**；留空则让服务端按自己的三级选路挑一个。
      */
-    async send(text: string, model?: string): Promise<void> {
+    async send(profile: string, text: string, model?: string): Promise<void> {
       await this.ensureActive();
       const active = this.active;
       if (!active) return;
@@ -334,7 +335,7 @@ export const useSessionsStore = defineStore("sessions", {
 
       try {
         let sawFinal = false;
-        for await (const chunk of api.sendMessageStream(active.id, text, model)) {
+        for await (const chunk of api.sendMessageStream(profile, active.id, text, model)) {
           if (chunk.error) throw new Error(chunk.error);
           // 增量永远挂在「当前草稿」上，而不是发送时捕获的那个 id：
           // 中间消息到达时草稿会被换成服务端消息并再开一条新的。

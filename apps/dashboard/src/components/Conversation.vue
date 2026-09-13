@@ -5,6 +5,11 @@ import { captureAnchor } from "./shared/scrollAnchor.js";
 import { useSessionsStore } from "../stores/sessions.js";
 
 const sessions = useSessionsStore();
+/**
+ * 由 `ConsoleView` 在配置档闸门**之内**传入，所以它一定是非 null 的字符串。
+ * 不在组件里 `useProfile()`：那会让「没选档」在这里变成一个只能靠猜的静默分支。
+ */
+const props = defineProps<{ profile: string }>();
 const draft = ref("");
 const scrollBox = ref<HTMLElement | null>(null);
 
@@ -12,7 +17,7 @@ async function onSend(): Promise<void> {
   const text = draft.value.trim();
   if (!text) return;
   draft.value = "";
-  await sessions.send(text);
+  await sessions.send(props.profile, text);
 }
 
 /**

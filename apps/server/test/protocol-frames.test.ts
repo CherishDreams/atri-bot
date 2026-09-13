@@ -11,13 +11,15 @@
  * `tool_use` / `text` / `function`，工具的 JSON Schema 里有 `object`，而这类检查取的是
  * **集合**，多余取值会静默通过（假阴），漏掉的会假阳。所以只认两个**闭合**的产生点：
  *
- * - `AgentEngine#emit(...)`：`#emit` 是 private，只有类内调得到；
+ * - `events.emit({ type: "..." })`（在 `AgentEngine` 里）：帧字面量只在这两处内联构造，
+ *   总线自己**不造帧**（它只按引用转发），所以「谁在构造帧」与「谁在分发帧」是两个集合，
+ *   最后一条断言把两者分别钉住；
  * - `ws.send(JSON.stringify({ ... }))`：全仓唯一的 WS 写出形状。
  *
  * 它盖不住什么，写在下面那条断言旁边：**先把帧建在变量里再传**（
- * `const frame: ServerFrame = { type: "x" }; this.#emit(frame)`）锚点抓不到，于是这一帧
+ * `const frame: ServerFrame = { type: "x" }; this.events.emit(frame)`）锚点抓不到，于是这一帧
  * 不进检查集合。两处既有站点都是字面量内联，本文件的最后一条断言要求它们各自至少命中一次
- * —— 有人改名（`#emit` → `broadcast`）时取集合会变空，`⊆` 那一半就假绿通过了。
+ * —— 有人改名（`emit` → `broadcast`）时取集合会变空，`⊆` 那一半就假绿通过了。
  * 彻底封死要让帧构造走 shared 里的三个小工厂再按工厂名抓；那是为一条测试给引擎热路径
  * 加一层间接，本仓的既有风格接受这种 tripwire，所以没做。
  */
@@ -48,8 +50,8 @@ interface Sink {
 const SERVER_SINKS: Sink[] = [
   {
     file: "../src/core/agent/engine.ts",
-    label: "AgentEngine#emit",
-    pattern: /#emit\(\{\s*type:\s*"(\w+)"/g,
+    label: "AgentEngine 的出站广播",
+    pattern: /events\.emit\(\{\s*type:\s*"(\w+)"/g,
   },
   {
     file: "../src/api/server.ts",
@@ -155,8 +157,33 @@ test("每个锚点都真的命中了（改名或换成变量传递会先在这�
 });
 
 test("产生帧的文件没有悄悄增加", () => {
+  // 「提到 ServerFrame」与「构造帧字面量」现在是**两个不同的集合**，这是总线化带来的：
+  // `core/agent/events.ts` 按类型转发而从不造帧（它出现的是形参与 `for...of` 的类型标注），
+  // `core/agent/engine.ts` 造帧却不再写类型名（帧字面量在调用点内联）。
+  // 只钉前一个集合的话，「有人新开了第三个造帧的文件」恰好看不见 —— 那两个方向分开钉。
   assert.deepEqual(filesMentioning("ServerFrame"), [
     "../src/api/server.ts",
-    "../src/core/agent/engine.ts",
+    "../src/core/agent/events.ts",
   ]);
+  assert.deepEqual(filesMatching(/\.emit\(\{\s*type:/), ["../src/core/agent/engine.ts"]);
 });
+
+/** 按**内容正则**遍历 `src/`，用途与 `filesMentioning` 相同：不靠手工清单认识新文件。 */
+function filesMatching(pattern: RegExp): string[] {
+  const root = fileURLToPath(new URL("../src", import.meta.url));
+  const found: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+        continue;
+      }
+      if (entry.name.endsWith(".ts") && pattern.test(readFileSync(abs, "utf8"))) {
+        found.push(relOf(abs));
+      }
+    }
+  };
+  walk(root);
+  return found.toSorted();
+}

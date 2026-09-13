@@ -73,6 +73,7 @@
 
 <script setup lang="ts">
 import { useProvidersStore, type ModelChoice } from "@/stores/providers";
+import { useProfile } from "@/composables/useProfile";
 import type { SelectOption } from "naive-ui";
 import { computed, onMounted, ref, watch } from "vue";
 import { icon } from "./icons.js";
@@ -81,6 +82,9 @@ const CheckIcon = icon("check");
 const ChevronIcon = icon("chevronDown");
 
 const providers = useProvidersStore();
+// 这个下拉只在配置档闸门**之内**渲染（顶栏跟着页面走），所以 null 只可能是直接深链进来、
+// 还没选档的那一刻 —— 那种时候它既不初始化也不写选择，而不是替用户猜一份档。
+const { profile } = useProfile();
 
 const visible = ref(false);
 const keyword = ref("");
@@ -96,7 +100,7 @@ watch(visible, (open) => {
   if (!open) return;
   keyword.value = "";
   sourceFilter.value = "all";
-  void providers.init();
+  if (profile.value !== null) void providers.init(profile.value);
 });
 
 const sourceOptions = computed<SelectOption[]>(() => {
@@ -114,12 +118,15 @@ const filtered = computed<ModelChoice[]>(() => {
 });
 
 function choose(choice: ModelChoice | null): void {
-  providers.selectModel(choice?.model ?? null, choice?.source ?? null);
+  // 记的是**实例 id**，不是模型名：`ProviderRegistry.#resolveFor` 的第一级选路按实例 id，
+  // 而模型名不再跨配置档唯一（两份档都可以有 deepseek-chat）。
+  if (profile.value === null) return;
+  providers.selectModel(profile.value, choice?.providerId ?? null, choice?.model ?? null);
   visible.value = false;
 }
 
 // 顶栏上就显示着当前模型名，所以挂载时就得有数据，不能等用户点开才拉。
 onMounted(() => {
-  void providers.init();
+  if (profile.value !== null) void providers.init(profile.value);
 });
 </script>

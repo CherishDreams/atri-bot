@@ -312,7 +312,9 @@ async function postJson(
   path: string,
   body?: unknown,
 ): Promise<{ res: Response; body: ApiBody }> {
-  const res = await fetch(`${origin}/api/v1${path}`, {
+  // `?profile=default`：这一族端点都属于某一份配置档，不带就是 400。
+  // 收在这一个 helper 里；「缺参数必须 400」由 `openapi-request.test.ts` 专门证。
+  const res = await fetch(`${origin}/api/v1${path}?profile=default`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie },
     body: JSON.stringify(body ?? {}),

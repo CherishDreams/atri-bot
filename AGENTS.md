@@ -126,6 +126,12 @@ config/   ── 与 core/ 双向（按文件看没有环）
   `ctx.dataDir` 是这条规矩的一个样本：它给的是 `<dataDir>/plugins/<自己的 id>`，
   由框架拼、由框架校验、由框架私有参数（`PluginStorage`，**不进白名单**）注入 ——
   插件要一个地方存东西，不等于它该看见 `dataDir` 本体（那下面躺着 `sessions.sqlite`）。
+  多配置档之后它是 `<dataDir>/profiles/<配置档 id>/plugins/<插件 id>`，
+  而 `ctx.config.pluginDirs` 仍是**部署级那一份**（插件全局安装，每档只决定开不开）：
+  这条键的**值没有**跟着配置档变，所以 `test/plugin-config.test.ts` 的键集合断言之外，
+  `test/plugins.test.ts` 还钉了一句「两个管理器的 `pluginDirs` 逐元素相等」。
+  要往 profile 里加「每档私有安装目录」这类键之前，先读 architecture.md 的插件一节：
+  它被否过一次，理由是安装是文件系统动作，多配置档同步不了它。
 - 窄的类型标注**不等于**窄的现实。上面那条「构造参数只声明自己读写的键」只解决强度问题；
   对象真的传出去时，现实由运行时那个对象决定（这里曾经就是这么漏的：类型写的是
   `{ pluginDirs?: string[] }`，运行时交到插件手上的是整个 `AppConfig`）。

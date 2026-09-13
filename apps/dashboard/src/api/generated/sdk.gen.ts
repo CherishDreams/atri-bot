@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client/index.js';
-import type { AuthStatusData, AuthStatusResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
+import type { AuthStatusData, AuthStatusResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, ReloadProfileData, ReloadProfileErrors, ReloadProfileResponses, RenameProfileData, RenameProfileErrors, RenameProfileResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -157,7 +157,7 @@ export const streamMessage = <ThrowOnError extends boolean = false>(options: Opt
  * 返回配置里的**全部** provider 条目，并标注它有没有真正加载成功。
  * 与旧版「只返回运行时已注册的」不同：配置页需要看得见「我配了但它没生效」。
  */
-export const listProviders = <ThrowOnError extends boolean = false>(options?: Options<ListProvidersData, ThrowOnError>): RequestResult<ListProvidersResponses, ListProvidersErrors, ThrowOnError> => (options?.client ?? client).get<ListProvidersResponses, ListProvidersErrors, ThrowOnError>({
+export const listProviders = <ThrowOnError extends boolean = false>(options: Options<ListProvidersData, ThrowOnError>): RequestResult<ListProvidersResponses, ListProvidersErrors, ThrowOnError> => (options.client ?? client).get<ListProvidersResponses, ListProvidersErrors, ThrowOnError>({
     responseType: 'json',
     url: '/providers',
     ...options
@@ -211,7 +211,7 @@ export const updateProvider = <ThrowOnError extends boolean = false>(options: Op
  * **明文返回 `apiKey`**：配置页要能把原值填回输入框，这是有意的取舍。
  * 该接口在鉴权闸门之内，仅管理员可取。
  */
-export const listProviderSources = <ThrowOnError extends boolean = false>(options?: Options<ListProviderSourcesData, ThrowOnError>): RequestResult<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError> => (options?.client ?? client).get<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError>({
+export const listProviderSources = <ThrowOnError extends boolean = false>(options: Options<ListProviderSourcesData, ThrowOnError>): RequestResult<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError> => (options.client ?? client).get<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError>({
     responseType: 'json',
     url: '/provider-sources',
     ...options
@@ -274,7 +274,7 @@ export const fetchProviderModels = <ThrowOnError extends boolean = false>(option
 /**
  * 列出插件
  */
-export const listPlugins = <ThrowOnError extends boolean = false>(options?: Options<ListPluginsData, ThrowOnError>): RequestResult<ListPluginsResponses, ListPluginsErrors, ThrowOnError> => (options?.client ?? client).get<ListPluginsResponses, ListPluginsErrors, ThrowOnError>({
+export const listPlugins = <ThrowOnError extends boolean = false>(options: Options<ListPluginsData, ThrowOnError>): RequestResult<ListPluginsResponses, ListPluginsErrors, ThrowOnError> => (options.client ?? client).get<ListPluginsResponses, ListPluginsErrors, ThrowOnError>({
     responseType: 'json',
     url: '/plugins',
     ...options
@@ -323,7 +323,7 @@ export const listAdapters = <ThrowOnError extends boolean = false>(options?: Opt
 /**
  * 列出可用工具及其启用状态
  */
-export const listTools = <ThrowOnError extends boolean = false>(options?: Options<ListToolsData, ThrowOnError>): RequestResult<ListToolsResponses, ListToolsErrors, ThrowOnError> => (options?.client ?? client).get<ListToolsResponses, ListToolsErrors, ThrowOnError>({
+export const listTools = <ThrowOnError extends boolean = false>(options: Options<ListToolsData, ThrowOnError>): RequestResult<ListToolsResponses, ListToolsErrors, ThrowOnError> => (options.client ?? client).get<ListToolsResponses, ListToolsErrors, ThrowOnError>({
     responseType: 'json',
     url: '/tools',
     ...options
@@ -342,4 +342,57 @@ export const setToolEnabled = <ThrowOnError extends boolean = false>(options: Op
         'Content-Type': 'application/json',
         ...options.headers
     }
+});
+
+/**
+ * 列出全部配置档及其加载状态
+ */
+export const listProfiles = <ThrowOnError extends boolean = false>(options?: Options<ListProfilesData, ThrowOnError>): RequestResult<ListProfilesResponses, ListProfilesErrors, ThrowOnError> => (options?.client ?? client).get<ListProfilesResponses, ListProfilesErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/profiles',
+    ...options
+});
+
+/**
+ * 新建一份配置档
+ */
+export const createProfile = <ThrowOnError extends boolean = false>(options: Options<CreateProfileData, ThrowOnError>): RequestResult<CreateProfileResponses, CreateProfileErrors, ThrowOnError> => (options.client ?? client).post<CreateProfileResponses, CreateProfileErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/profiles',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 下线一份配置档（不删文件）
+ */
+export const deleteProfile = <ThrowOnError extends boolean = false>(options: Options<DeleteProfileData, ThrowOnError>): RequestResult<DeleteProfileResponses, DeleteProfileErrors, ThrowOnError> => (options.client ?? client).delete<DeleteProfileResponses, DeleteProfileErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/profiles/{id}',
+    ...options
+});
+
+/**
+ * 改配置档的显示名
+ */
+export const renameProfile = <ThrowOnError extends boolean = false>(options: Options<RenameProfileData, ThrowOnError>): RequestResult<RenameProfileResponses, RenameProfileErrors, ThrowOnError> => (options.client ?? client).post<RenameProfileResponses, RenameProfileErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/profiles/{id}/rename',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 重读配置文件并换上新的对象图
+ */
+export const reloadProfile = <ThrowOnError extends boolean = false>(options: Options<ReloadProfileData, ThrowOnError>): RequestResult<ReloadProfileResponses, ReloadProfileErrors, ThrowOnError> => (options.client ?? client).post<ReloadProfileResponses, ReloadProfileErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/profiles/{id}/reload',
+    ...options
 });

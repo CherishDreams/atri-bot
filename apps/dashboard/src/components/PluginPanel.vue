@@ -2,6 +2,8 @@
 import { usePluginsStore } from "../stores/plugins.js";
 
 const plugins = usePluginsStore();
+/** 同 `Conversation.vue`：由闸门内的父层传入，切的是**这份配置档**开不开它。 */
+const props = defineProps<{ profile: string }>();
 </script>
 
 <template>
@@ -44,7 +46,13 @@ const plugins = usePluginsStore();
         </div>
 
         <div class="flex gap-1.5">
-          <button class="btn-ghost flex-1" type="button" @click="plugins.reload(p.id)">重载</button>
+          <button
+            class="btn-ghost flex-1"
+            type="button"
+            @click="plugins.reload(props.profile, p.id)"
+          >
+            重载
+          </button>
           <!--
             失败记录上不给「启用」按钮：`setEnabled(id, false)` 对 failed 是刻意 no-op
             （它没有运行期资源可释放，标成 disabled 只会把诊断藏起来），而 `setEnabled(id, true)`
@@ -54,11 +62,15 @@ const plugins = usePluginsStore();
             v-if="p.status !== 'failed'"
             class="btn-ghost flex-1"
             type="button"
-            @click="plugins.setEnabled(p.id, p.status !== 'active')"
+            @click="plugins.setEnabled(props.profile, p.id, p.status !== 'active')"
           >
             {{ p.status === "active" ? "禁用" : "启用" }}
           </button>
-          <button class="btn-ghost flex-1 text-danger" type="button" @click="plugins.unload(p.id)">
+          <button
+            class="btn-ghost flex-1 text-danger"
+            type="button"
+            @click="plugins.unload(props.profile, p.id)"
+          >
             卸载
           </button>
         </div>

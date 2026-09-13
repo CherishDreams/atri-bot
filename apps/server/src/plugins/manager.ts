@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -59,8 +60,23 @@ export interface PluginRuntimeConfig {
  * 在框架内部拼出每个插件自己的目录。
  */
 export interface PluginStorage {
-  /** 插件数据根目录，`app.ts` 传的是 `join(config.dataDir, "plugins")`。 */
+  /**
+   * 插件数据根目录。多配置档之后它是**这份配置档自己的**
+   * `<dataDir>/profiles/<pid>/plugins`，不再是 `<dataDir>/plugins`。
+   *
+   * 这不是可选的隔离：安装是全局的，所以同一个插件 id 会在每份配置档里各出现一次，
+   * 而它们经 `ctx.dataDir` 拿到的是**同一个名字下的不同目录**。共用一个根的话，
+   * 两份配置档的同一个插件会互相覆写 token 与缓存。
+   */
   dataRoot: string;
+  /** 这份配置档显式关掉的插件 id（默认启用，理由见 `PluginManager.#disabled`）。 */
+  disabledIds?: string[];
+  /**
+   * 把启用状态写回配置档文件。**由组合根注入**，`plugins/` 不自己去 import 配置写入器 ——
+   * 与 `list_plugins` 收 `() => plugins.list()` 是同一条理由：分层规则没有检查在守，
+   * 而注入让这条边界在签名上看得见。
+   */
+  persistEnabled?: (id: string, enabled: boolean) => void;
 }
 
 /**
@@ -138,11 +154,24 @@ export class PluginManager {
   #records = new Map<string, PluginRecord>();
   /** 带自增序号的缓存击穿计数器，保证每次重载都能拿到新代码 */
   #revision = 0;
+  /**
+   * 本实例的缓存击穿命名空间。存在的唯一理由是 `#importFresh` 那段注释：
+   * 现在同一份磁盘上会有多个管理器扫同一批目录，光靠 `?v=` 会让它们互相命中模块缓存。
+   */
+  #nonce = randomUUID();
 
   config: PluginRuntimeConfig;
   logger: Logger;
-  /** 框架私有的数据根（`<config.dataDir>/plugins`）。私有字段：注释里那句「从不外传」要在类型上成立。 */
+  /** 框架私有的数据根与启用名单（`<dataDir>/profiles/<pid>/plugins` + 显式禁用的 id）。 */
   #storage: PluginStorage;
+  /**
+   * 这份配置档**显式关掉**的插件 id。
+   *
+   * 存禁用名单而不是允许名单：判据是「默认启用，除非 profile 里写了 `enabled: false`」
+   *（与适配器同侧，而与工具相反）。允许名单会把「profile 还没写过这条插件」读成「不启用」，
+   * 那正好是要装完就能用的新手的第一次体验。
+   */
+  #disabled = new Set<string>();
 
   constructor(config: PluginRuntimeConfig, logger: Logger, storage: PluginStorage) {
     this.config = config;
@@ -150,6 +179,7 @@ export class PluginManager {
     // `dataRoot` 只用来在框架内部拼每个插件自己的目录，永远不进 `ctx.config` 也不进
     // `shared.config`（见 `PluginStorage` 与 `ctx.dataDir`），所以它是私有字段。
     this.#storage = storage;
+    for (const id of storage.disabledIds ?? []) this.#disabled.add(id);
   }
 
   /**
@@ -269,6 +299,19 @@ export class PluginManager {
       const existing = this.#records.get(dir);
       if (existing) await this.#teardown(existing);
 
+      // 这份配置档把它关掉了：**不建 ctx、不跑 `setup()`**，只登记一条 `disabled` 记录，
+      // 让控制台仍然看得见「装是装了，这份配置档没开它」。
+      //
+      // 为什么判据在 import 之后：要用插件**自报的 id**，而 id 只能从模块里拿。
+      // 为什么必须在这里判而不是「先跑 setup 再禁用」：`setup()` 是长驻副作用的起点
+      //（起监听、登录、开定时器），跑过之后再关就得走完整的 teardown 路径，
+      // 而「这份配置档没开这个插件」的第一次启动根本不该有副作用发生。
+      if (this.#disabled.has(id)) {
+        const off = this.#disabledRecord(dir, plugin);
+        this.#records.set(dir, off);
+        return this.#view(off);
+      }
+
       const ctx = new PluginContext({
         id,
         logger: this.logger,
@@ -338,6 +381,31 @@ export class PluginManager {
     };
   }
 
+  /**
+   * 造一条「这份配置档没开它」的记录。
+   *
+   * `plugin: null` 是有意的，而且是 `#teardown()` 那条不变量的另一半：这个实例从没跑过
+   * `setup()`，所以没有任何东西可释放。留着定义对象的话，操作者随后点「卸载」就会把
+   * `teardown()` 调给一个从没启动过的插件。
+   */
+  #disabledRecord(dir: string, plugin: PluginDefinition): PluginRecord {
+    return {
+      dir,
+      id: plugin.id,
+      plugin: null,
+      ctx: null,
+      status: "disabled",
+      error: null,
+      meta: {
+        id: plugin.id,
+        name: plugin.name ?? plugin.id,
+        version: plugin.version ?? "0.0.0",
+        ...(plugin.description === undefined ? {} : { description: plugin.description }),
+        dir: basename(dir),
+      },
+    };
+  }
+
   /** 重载单个插件：销毁旧实例 -> 重新 import 模块 -> 创建新实例。 */
   async reload(id: string): Promise<PluginView> {
     const rec = this.#find(id);
@@ -371,46 +439,74 @@ export class PluginManager {
   }
 
   /**
-   * 启用/禁用插件。
+   * 启用/禁用**这份配置档**的插件。
    * 禁用 = 释放副作用、标记为 disabled（保留元数据以便再启用）；
    * 启用 = 从原目录重新加载。
+   *
+   * 顺序上刻意**先落盘、后动内存**：`persistEnabled` 抛错时（配置档文件坏了、磁盘满了）
+   * 整个操作什么都没发生，调用方拿到 500 而界面下次拉到的还是原状。反过来做会留下
+   * 「内存里开了、文件里没写」的状态，而重启之后它会静默变回去 —— 那比一次失败更难查。
    */
   async setEnabled(id: string, enabled: boolean): Promise<PluginView> {
     const rec = this.#find(id);
     if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
+    this.#storage.persistEnabled?.(id, enabled);
 
     if (enabled) {
+      this.#disabled.delete(id);
       if (rec.status === "active") return this.#view(rec);
       return this.#retryLoad(rec);
     }
 
+    this.#disabled.add(id);
     // 已经是 disabled 就原样返回；**failed 也原样返回**：它没有运行期资源可释放，
     // 把它标成 disabled 只是把诊断信息藏起来，而控制台上那条记录的按钮本来就该是「重载」。
+    // （`#disabled` 里已经记下这份配置档不要它，所以它的 error 只在**这一次**运行里可见，
+    // 下一次启动它会以 disabled 出现 —— 不必为了「立刻看起来像禁用」而牺牲诊断。）
     if (rec.status !== "active") return this.#view(rec);
     await this.#teardown(rec);
     rec.status = "disabled";
-    rec.ctx = null;
     this.logger.info(`插件已禁用: ${id}`);
     return this.#view(rec);
   }
 
-  /** 释放一个记录的运行时资源（teardown + 逆序 effect），保留记录本身。 */
+  /**
+   * 释放一个记录的运行时资源（teardown + 逆序 effect），保留记录本身。
+   *
+   * **调完就把 `rec.plugin` 清空**，这是一条结构保证而不是清理：`PluginRecord.plugin`
+   * 的注释写着「插件作者有理由假设 `teardown()` 至多跑一次、且只在成功 `setup()` 之后跑」，
+   * 而 `#retryLoad()` 会先 `#teardown(rec)` 再 `load(rec.dir)`，`load()` 里那道
+   * `existing` 检查又 `#teardown` 一次 —— 同一次重载以前会把 `teardown()` 调两遍。
+   * 清空之后第二次进来就是个空操作。`rec.plugin` 全仓**只**被这里读，所以清掉不丢信息。
+   */
   async #teardown(rec: PluginRecord): Promise<void> {
-    // `plugin === null` 是「从没构造成功」的类型级事实：没有实例就没有 teardown 可调。
-    // 少了这道守卫，`unload()` 一条失败记录会当场 TypeError。
+    // `plugin === null` 是「从没构造成功，或者已经释放过」的类型级事实：
+    // 没有实例就没有 teardown 可调。少了这道守卫，`unload()` 一条失败记录会当场 TypeError。
     if (rec.plugin) {
+      const plugin = rec.plugin;
+      rec.plugin = null;
       try {
-        await rec.plugin.teardown?.();
+        await plugin.teardown?.();
       } catch (err) {
         this.logger.warn(`插件 ${rec.meta.id} teardown 失败: ${errorMessage(err)}`);
       }
     }
     await rec.ctx?.dispose();
+    rec.ctx = null;
   }
 
   /** 用带版本参数的 URL 重新 import，绕过 ESM 模块缓存。 */
   async #importFresh(entryPath: string): Promise<Record<string, unknown>> {
-    const url = `${pathToFileURL(entryPath).href}?v=${++this.#revision}`;
+    // **`atri` 那一段是跨实例唯一的，不是装饰**。`#revision` 每个实例各自从 0 开始数，
+    // 而现在同一个磁盘上有 N 个管理器（每份配置档一个），并且它们扫的是**同一批**
+    // `pluginDirs` —— 于是两个管理器会对同一个 `index.js` 算出**完全相同**的 `?v=1`。
+    // Node 的 ESM 缓存按 URL 键，命中就意味着 B 拿到的是「A 求值过的那个模块对象」：
+    // 插件模块级的那些可变状态（连接池、缓存、`let bot`）由 A 与 B 共享，而最后一次
+    // `setup(ctx)` 赢者通吃 —— B 的插件会往 **A** 的数据目录里写。
+    // 加了 nonce，每个管理器的 URL 都不同，每个配置档拿到自己那份求值结果。
+    // 代价要写在 README 的插件契约里：同一个 `index.js` 被求值 N 次，
+    // 所以模块顶层的一次性副作用会执行 N 次，该进 `setup()` 的状态要进 `setup()`。
+    const url = `${pathToFileURL(entryPath).href}?atri=${this.#nonce}&v=${++this.#revision}`;
     // 动态 import 的返回类型在这里就是未定的：插件是用户手写的 JS。
     // 真正的收窄发生在下面（`module.default ?? module` + `!plugin?.id` 守卫）。
     return import(url);

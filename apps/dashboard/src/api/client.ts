@@ -10,7 +10,11 @@ import {
   deleteSession as deleteSessionOp,
   fetchProviderModels as fetchProviderModelsOp,
   getSession as getSessionOp,
+  createProfile as createProfileOp,
+  deleteProfile as deleteProfileOp,
   listPlugins as listPluginsOp,
+  listProfiles as listProfilesOp,
+  reloadProfile as reloadProfileOp,
   listProviderSources as listProviderSourcesOp,
   listProviders as listProvidersOp,
   listSessions as listSessionsOp,
@@ -18,6 +22,7 @@ import {
   login as loginOp,
   logout as logoutOp,
   me as meOp,
+  renameProfile as renameProfileOp,
   reloadPlugin as reloadPluginOp,
   setPluginEnabled as setPluginEnabledOp,
   setToolEnabled as setToolEnabledOp,
@@ -182,6 +187,7 @@ export async function deleteSession(id: string) {
  * 自行改用带凭证的 fetch。
  */
 export async function* sendMessageStream(
+  profile: string,
   sessionId: string,
   content: string,
   model?: string,
@@ -203,6 +209,7 @@ export async function* sendMessageStream(
   const fetchOverride = { fetch: sseFetch };
   const { stream } = await streamMessage({
     path: { id: sessionId },
+    query: { profile },
     body: { content, model },
     signal,
     ...fetchOverride,
@@ -219,64 +226,68 @@ export async function* sendMessageStream(
 
 // --- 插件 -------------------------------------------------------------------
 
-export async function listPlugins() {
-  return body(await listPluginsOp());
+export async function listPlugins(profile: string) {
+  return body(await listPluginsOp({ query: { profile } }));
 }
 
-export async function reloadPlugin(id: string) {
-  return body(await reloadPluginOp({ path: { id } }));
+export async function reloadPlugin(profile: string, id: string) {
+  return body(await reloadPluginOp({ path: { id }, query: { profile } }));
 }
 
-export async function unloadPlugin(id: string) {
-  return body(await unloadPluginOp({ path: { id } }));
+export async function unloadPlugin(profile: string, id: string) {
+  return body(await unloadPluginOp({ path: { id }, query: { profile } }));
 }
 
-export async function setPluginEnabled(id: string, enabled: boolean) {
-  return body(await setPluginEnabledOp({ path: { id }, body: { enabled } }));
+export async function setPluginEnabled(profile: string, id: string, enabled: boolean) {
+  return body(await setPluginEnabledOp({ path: { id }, body: { enabled }, query: { profile } }));
 }
 
 // --- 工具（function calling）-------------------------------------------------
 
-export async function listTools() {
-  return body(await listToolsOp());
+export async function listTools(profile: string) {
+  return body(await listToolsOp({ query: { profile } }));
 }
 
 /**
  * 启用 / 禁用一颗工具。`enabled` 是必填参数（不是可选补丁）：
  * 服务端刻意不接受「省略即启用」，UI 也不该有那种调用方式。
  */
-export async function setToolEnabled(id: string, enabled: boolean) {
-  return body(await setToolEnabledOp({ path: { id }, body: { enabled } }));
+export async function setToolEnabled(profile: string, id: string, enabled: boolean) {
+  return body(await setToolEnabledOp({ path: { id }, body: { enabled }, query: { profile } }));
 }
 
 // --- 模型 provider -----------------------------------------------------------
 
-export async function listProviders() {
-  return body(await listProvidersOp());
+export async function listProviders(profile: string) {
+  return body(await listProvidersOp({ query: { profile } }));
 }
 
-export async function createProvider(input: ProviderInput) {
-  return body(await createProviderOp({ body: input }));
+export async function createProvider(profile: string, input: ProviderInput) {
+  return body(await createProviderOp({ body: input, query: { profile } }));
 }
 
-export async function updateProvider(id: string, patch: ProviderUpdate) {
-  return body(await updateProviderOp({ path: { id }, body: patch }));
+export async function updateProvider(profile: string, id: string, patch: ProviderUpdate) {
+  return body(await updateProviderOp({ path: { id }, body: patch, query: { profile } }));
 }
 
-export async function deleteProvider(id: string) {
-  return body(await deleteProviderOp({ path: { id } }));
+export async function deleteProvider(profile: string, id: string) {
+  return body(await deleteProviderOp({ path: { id }, query: { profile } }));
 }
 
-export async function listProviderSources() {
-  return body(await listProviderSourcesOp());
+export async function listProviderSources(profile: string) {
+  return body(await listProviderSourcesOp({ query: { profile } }));
 }
 
-export async function createProviderSource(input: ProviderSourceInput) {
-  return body(await createProviderSourceOp({ body: input }));
+export async function createProviderSource(profile: string, input: ProviderSourceInput) {
+  return body(await createProviderSourceOp({ body: input, query: { profile } }));
 }
 
-export async function updateProviderSource(id: string, patch: ProviderSourceUpdate) {
-  return body(await updateProviderSourceOp({ path: { id }, body: patch }));
+export async function updateProviderSource(
+  profile: string,
+  id: string,
+  patch: ProviderSourceUpdate,
+) {
+  return body(await updateProviderSourceOp({ path: { id }, body: patch, query: { profile } }));
 }
 
 /**
@@ -285,8 +296,8 @@ export async function updateProviderSource(id: string, patch: ProviderSourceUpda
  * 不传 cascade 时，若还有 provider 引用该源，服务端回 400 并列出引用者——
  * 这里不替调用方做决定，让它把服务端的解释原样展示给用户。
  */
-export async function deleteProviderSource(id: string, cascade = false) {
-  return body(await deleteProviderSourceOp({ path: { id }, query: { cascade } }));
+export async function deleteProviderSource(profile: string, id: string, cascade = false) {
+  return body(await deleteProviderSourceOp({ path: { id }, query: { cascade, profile } }));
 }
 
 /**
@@ -295,8 +306,8 @@ export async function deleteProviderSource(id: string, cascade = false) {
  * 没有 baseUrl/apiKey 参数：凭据来自服务端已落盘的配置，否则这个端点会变成
  * 「带任意凭证访问任意地址」的转发器。因此调用方必须先保存改动再调用。
  */
-export async function fetchProviderModels(id: string) {
-  return body(await fetchProviderModelsOp({ path: { id } }));
+export async function fetchProviderModels(profile: string, id: string) {
+  return body(await fetchProviderModelsOp({ path: { id }, query: { profile } }));
 }
 
 // --- WebSocket（codegen 不覆盖，手写保留）-----------------------------------
@@ -330,3 +341,39 @@ export type {
   ProviderInput,
   ToolInfo,
 } from "./generated/index.js";
+
+// --- 配置档 ---------------------------------------------------------------
+
+/**
+ * 全部配置档及其加载状态。
+ *
+ * `error` 只在 `status === "failed"` 时非空，且只给操作者看：那句原文带着
+ * 配置文件的绝对路径（`readConfigFileAt` 拼进去的），所以它出现在这个
+ * 鉴权闸门内的列表里，而绝不出现在任何 4xx/5xx 响应体里。
+ */
+export async function listProfiles() {
+  return body(await listProfilesOp());
+}
+
+export async function createProfile(id: string, name?: string) {
+  return body(await createProfileOp({ body: { id, ...(name === undefined ? {} : { name }) } }));
+}
+
+/** 只改显示名。**不改目录名** —— 目录一动，那份档的插件数据就跟丢了。 */
+export async function renameProfile(id: string, name: string) {
+  return body(await renameProfileOp({ path: { id }, body: { name } }));
+}
+
+export async function reloadProfile(id: string) {
+  return body(await reloadProfileOp({ path: { id } }));
+}
+
+/**
+ * 下线一份配置档。409 表示它还占着某个会话（那一轮对话还没结束）。
+ *
+ * 服务端**不删文件、也不删它的插件数据目录**，所以这里的「删除」是从服务里摘掉；
+ * 界面上的措辞要说清，否则操作者会以为磁盘上的东西没了。
+ */
+export async function deleteProfile(id: string) {
+  return body(await deleteProfileOp({ path: { id } }));
+}

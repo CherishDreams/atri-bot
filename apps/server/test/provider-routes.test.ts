@@ -167,6 +167,16 @@ interface ApiBody {
   session: Session;
 }
 
+/**
+ * 这一族端点都属于**某一份配置档**，不带 `?profile=` 一律 400（刻意没有隐式默认：
+ * 回落 `default` 就是「界面在 B、写进 A、还回 201」那类静默错切的入口）。
+ * 收在 `call()` 一处而不是每个调用点各拼一遍，是因为这里要证的不是「参数能不能缺」——
+ * 那条由 `test/openapi-request.test.ts` 的规格派生守卫专门管。
+ */
+function withProfile(path: string): string {
+  return `${path}${path.includes("?") ? "&" : "?"}profile=default`;
+}
+
 function call(
   origin: string,
   cookie: string,
@@ -174,7 +184,7 @@ function call(
   path: string,
   body?: unknown,
 ): Promise<{ status: number; body: ApiBody }> {
-  return fetch(`${origin}/api/v1${path}`, {
+  return fetch(`${origin}/api/v1${withProfile(path)}`, {
     method,
     headers: { "content-type": "application/json", cookie },
     // GET 不允许带 body，连值为 undefined 的键都不能出现。
@@ -193,11 +203,14 @@ const del = (o: string, c: string, p: string) => call(o, c, "DELETE", p);
 /** 建会话、发一条消息、读完整条 SSE，返回助手回复文本。 */
 async function chat(origin: string, cookie: string, model?: string): Promise<string> {
   const { body: created } = await post(origin, cookie, "/sessions", { title: "t" });
-  const res = await fetch(`${origin}/api/v1/sessions/${created.session.id}/messages/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ content: "你好", model }),
-  });
+  const res = await fetch(
+    `${origin}/api/v1${withProfile(`/sessions/${created.session.id}/messages/stream`)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content: "你好", model }),
+    },
+  );
   assert.equal(res.status, 200);
   const text = await res.text();
   const final = text

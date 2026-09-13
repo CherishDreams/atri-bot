@@ -181,6 +181,30 @@ HTTP 请求
 这样 `GET /sessions/:id` 与其它的具体路径不会互相遮蔽，行为完全由注册顺序决定，
 不需要理解框架的优先级规则。
 
+## 配置档：什么共享、什么各一份
+
+一份配置档 = 一套「跑法」（provider 源与实例、工具开关、`maxToolSteps`、插件启用清单），
+落在 `<dataDir>/profiles/<id>/config.json`。运行期有 N 份同时在线，每份一套
+`ProviderRegistry` / `ProviderConfigStore` / `ToolConfigStore` / `ToolRegistry` /
+`PluginManager` / `AgentEngine`。
+
+跨配置档共享的只有四样：登录、会话存储、**会话锁**、**事件总线**。后两样必须是共享的，
+理由各不相同：
+
+- `core/session/lock.ts` 的 `SessionLock`（`sessionId -> 持有它的配置档 id`）。
+  对话历史是**全局一份** sqlite，所以「同一个会话被两档同时写」会把 `tool_calls` 与它的
+  结果交错落库，而 `AgentEngine.#historyFor` 的配对修复会主动把那半截调用降级成正文 ——
+  坏历史不仅存下来了，还会被当成正常历史喂给下一次请求。锁以前是 `AgentEngine` 的私有
+  `Set`，那是单一配置档时代留下的形状：每档一个引擎时它不再可靠。
+- `core/agent/events.ts` 的 `SessionEvents`。帧由 N 个引擎产生，而 WebSocket 客户端只有
+  一批：接在引擎上就要 N 次订阅 + 删档时漏摘，所以总线在引擎之外。
+
+`ProfileDirectory` 刻意**不是 `core/` 的类**：它持有的那份对象图必须包含 `PluginManager`，
+而分层检查的 `ALLOWED.core = {core, config}` 不允许 `core/` import `plugins/`。
+于是接口声明在 `api/http.ts`，对象在 `app.ts` 用字面量 + 闭包构造 —— 与
+`ProviderListItem` 同一个先例（「这个形状只存在于 HTTP 层」）。不起类、不设 service locator、
+不建模块级 Map 这三条都是 AGENTS.md「依赖一律走构造参数」在挡的形态。
+
 ## 会话与消息的持久化
 
 会话与消息落在 `config.dataDir` 下的 `sessions.sqlite`，由 `core/session/db.ts`（连接、pragma、

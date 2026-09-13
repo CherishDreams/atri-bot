@@ -20,6 +20,13 @@ export const router = createRouter({
           component: () => import("@/views/ProviderConfig.vue"),
         },
         { path: "tools", name: "toolsConfig", component: () => import("@/views/ToolsView.vue") },
+        // 这一页自己**不需要** ?profile=：它管的是「有哪些档」，所以它是那个让你挑档的页面，
+        // 而不是一个挑了档才能用的页面。
+        {
+          path: "profiles",
+          name: "profiles",
+          component: () => import("@/views/ProfilesView.vue"),
+        },
       ],
     },
     {

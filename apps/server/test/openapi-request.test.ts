@@ -266,3 +266,146 @@ test("匿名访问：闸门拒掉的与规格声明的 401 完全一致", async 
     `鉴权与规格不一致：\n${undeclared.join("\n")}\n红了怎么办：改 openapi.json 补 401，或把新路由加进 PUBLIC_PATHS 并说明理由。`,
   );
 });
+
+/**
+ * 配置档作用域的守卫（R4）。
+ *
+ * 挡的是这一类静默错：**半个控制台都在改 `default`，因为某个调用点忘了带 `profile`**。
+ * 只要服务端允许「缺了就回落到 default」，忘了带就没有任何症状 —— 请求成功、界面显示绿勾，
+ * 只是写进了另一份配置档。所以判据是「缺参数必须 400」，而这条判据本身要能被检查。
+ *
+ * 三个方向各自钉住，少一个都会留下一种「守卫绿着而现实坏了」的形状：
+ * 1. 规格里标了 `x-profile-scoped` 的每个 operation，**不带参数打过去必须 400，
+ *    且那句错误文案是「缺少 profile」**。只比状态码不够：这些端点全都可能因为
+ *    别的理由回 400（缺 content、id 不存在），于是 handler 里那道检查被整段删掉也照样绿。
+ * 2. **带参数打过去不得再是那句 400**。这是防空跑的常规做法反过来用在这里：
+ *    有人把守卫写成「一律 400」时，第 1 条会绿。
+ * 3. 标记集合 == 规格里全部 operation − 下面那份显式全局清单，**双向**成立。
+ *    新加一个作用域端点却忘了标记 → 第一个方向漏掉它，而第三个方向当场红。
+ *    「忘了标记」比「多标了」危险得多，因为前者是静默的。
+ *
+ * 为什么不直接遍历 `app.routes()` 来推「哪些端点是作用域化的」：路由表里没有任何
+ * 作用域信息，那份划分只存在于 handler 里；本守卫要证的恰恰是「handler 与规格说的是同一件事」，
+ * 所以一侧读规格、一侧打真请求，两边不许互相抄。
+ * 而「规格的路由 == 真实注册的路由」由 `openapi.test.ts` 管，两条合起来才闭合。
+ */
+test("配置档作用域：标记的端点缺 profile 必须 400，且标记集合与路由表双向一致", async (t) => {
+  const h = await start(t);
+
+  /** 这些 operation 跨配置档共享，或直接就是「管配置档」的，**不该**带 `profile`。 */
+  const GLOBAL = new Set([
+    "health",
+    "login",
+    "logout",
+    "me",
+    "authStatus",
+    "listSessions",
+    "createSession",
+    "getSession",
+    "deleteSession",
+    "listAdapters",
+    "listProfiles",
+    "createProfile",
+    "renameProfile",
+    "reloadProfile",
+    "deleteProfile",
+  ]);
+
+  interface SpecOp {
+    method: string;
+    path: string;
+    operationId: string;
+    declaresProfile: boolean;
+    has400: boolean;
+    scoped: boolean;
+  }
+  const all: SpecOp[] = [];
+  for (const [path, item] of Object.entries(
+    SPEC.paths as Record<string, Record<string, unknown>>,
+  )) {
+    for (const [method, raw] of Object.entries(item)) {
+      if (!["get", "post", "delete"].includes(method)) continue;
+      const op = raw as {
+        operationId: string;
+        "x-profile-scoped"?: boolean;
+        parameters?: { $ref?: string }[];
+        responses?: Record<string, unknown>;
+      };
+      all.push({
+        method: method.toUpperCase(),
+        path,
+        operationId: op.operationId,
+        declaresProfile: (op.parameters ?? []).some(
+          (p) => p.$ref === "#/components/parameters/Profile",
+        ),
+        has400: op.responses?.["400"] !== undefined,
+        scoped: op["x-profile-scoped"] === true,
+      });
+    }
+  }
+  const scoped = all.filter((o) => o.scoped);
+
+  // 第 3 个方向（双向之一）：既不许有「没标记又不在全局清单」的 operation，
+  // 也不许有「全局清单里列着一个规格里已经没有的 operationId」——后者会让清单
+  // 变成装饰：有人把某个端点改回全局、忘了同时改标记，两边都在，检查照样绿。
+  const unmarked = all
+    .filter((o) => !o.scoped && !GLOBAL.has(o.operationId))
+    .map((o) => `${o.operationId}（${o.method} ${o.path}）`);
+  assert.deepEqual(
+    unmarked,
+    [],
+    `这些 operation 既没有 x-profile-scoped 也不在显式全局清单里：${unmarked.join(", ")}。\n` +
+      "新加端点时必须选一个：它是某份配置档里的东西（加标记），还是跨配置档的（进清单并说清为什么）。",
+  );
+  const stale = [...GLOBAL].filter((id) => !all.some((o) => o.operationId === id));
+  assert.deepEqual(
+    stale,
+    [],
+    `全局清单里这些 operationId 在规格里已经不存在：${stale.join(", ")}。把它们删掉 —— ` +
+      "留着会让清单比现实宽，将来真有同名端点时它会被静默当成「已经是全局的」。",
+  );
+
+  for (const o of scoped) {
+    // 标记了却没声明那个 required 参数，等于给生成 SDK 撒谎：客户端类型里没有
+    // `profile` 这个字段，而规格说它是必填的。
+    assert.ok(o.declaresProfile, `${o.operationId} 标了 x-profile-scoped 却没带 Profile 参数`);
+    assert.ok(o.has400, `${o.operationId} 没声明 400 —— 缺 profile 的那个 400 会在 SDK 里凭空出现`);
+
+    await t.test(`${o.operationId} 缺 profile`, async () => {
+      // `{id}` 换成一个**不存在**的 id：这条要证的是「参数缺失的 400 先于任何资源查找」，
+      // 而 handler 里作用域检查确实排在最前（排在 readJson 之前）。
+      const target = `${h.origin}/api/v1${o.path.replace("{id}", "probe")}`;
+      const headers = { cookie: h.cookie, "content-type": "application/json" };
+
+      const bare = await fetch(target, {
+        method: o.method,
+        headers,
+        body: o.method === "POST" ? "{}" : undefined,
+      });
+      const bareBody = (await bare.json().catch(() => ({}))) as { error?: string };
+      // 比**文案**而不只比状态码：这些端点全都可能因为别的理由回 400
+      //（缺 content、未知工具、id 不存在）。只比状态码的话，handler 里那道检查
+      // 被整段删掉也照样绿 —— 那正是本守卫存在的理由。
+      assert.equal(bare.status, 400, `${o.operationId} 不带 profile 回了 ${bare.status}`);
+      assert.match(
+        String(bareBody.error),
+        /缺少 profile/,
+        `那句 400 的理由不是「缺配置档」，实际是「${bareBody.error}」—— ` +
+          "说明作用域检查被跳过或被挪到了别的校验之后",
+      );
+
+      // 反向控制：带上参数后**不得**再是同一句 400。有人把它写成无条件拒绝时，
+      // 上面两条都会绿。
+      const withIt = await fetch(`${target}?profile=default`, {
+        method: o.method,
+        headers,
+        body: o.method === "POST" ? "{}" : undefined,
+      });
+      const withBody = (await withIt.json().catch(() => ({}))) as { error?: string };
+      assert.ok(
+        !/缺少 profile/.test(String(withBody.error ?? "")),
+        "带上 profile 仍然报「缺少 profile」—— 守卫被写成了无条件拒绝",
+      );
+    });
+  }
+});

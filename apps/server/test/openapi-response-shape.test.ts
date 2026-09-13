@@ -48,6 +48,14 @@ interface Op {
   method: "GET" | "POST" | "DELETE";
   path: string;
   responses: Record<string, ResponseDecl>;
+  /**
+   * 规格里这条 operation 带 `x-profile-scoped: true`，因此**必须**带 `?profile=`。
+   *
+   * 驱动表从规格里读这个标记，而不是自己抄一份端点清单：抄的那份会和真实作用域划分
+   * 无关地一直绿 —— 有人把某个端点的作用域改了，清单不会跟着变，于是驱动带着
+   * （或不带）一个已经不该带的参数继续跑，形状检查照样通过。
+   */
+  scoped: boolean;
 }
 interface ResponseDecl {
   $ref?: string;
@@ -74,6 +82,10 @@ const ORDER = [
   "authStatus",
   "login",
   "me",
+  "listProfiles",
+  "createProfile",
+  "renameProfile",
+  "reloadProfile",
   "listProviderSources",
   "createProviderSource",
   "updateProviderSource",
@@ -96,6 +108,7 @@ const ORDER = [
   "deleteProvider",
   "unloadPlugin",
   "deleteProviderSource",
+  "deleteProfile",
   "logout",
 ];
 
@@ -394,12 +407,17 @@ function operations(): Op[] {
   )) {
     for (const [method, raw] of Object.entries(item)) {
       if (!["get", "post", "delete"].includes(method)) continue;
-      const op = raw as { operationId: string; responses: Record<string, ResponseDecl> };
+      const op = raw as {
+        operationId: string;
+        responses: Record<string, ResponseDecl>;
+        "x-profile-scoped"?: boolean;
+      };
       out.push({
         operationId: op.operationId,
         method: method.toUpperCase() as Op["method"],
         path,
         responses: op.responses,
+        scoped: op["x-profile-scoped"] === true,
       });
     }
   }
@@ -428,7 +446,13 @@ test("每个端点的真实响应与规格逐字段一致", async (t) => {
   const ops = operations();
   const byId = new Map(ops.map((o) => [o.operationId, o]));
   /** 共享的资源 id：先建后用，顺序见 ORDER。 */
-  const ids: Ids = { sourceId: "", providerId: "", sessionId: "", streamSessionId: "" };
+  const ids: Ids = {
+    sourceId: "",
+    providerId: "",
+    sessionId: "",
+    streamSessionId: "",
+    profileId: "",
+  };
 
   for (const operationId of ORDER) {
     await t.test(operationId, async () => {
@@ -496,6 +520,8 @@ interface Ids {
   providerId: string;
   sessionId: string;
   streamSessionId: string;
+  /** 驱动自己 `createProfile` 出来的那份档，供 rename / reload 用（绝不碰 `default`）。 */
+  profileId: string;
 }
 
 /**
@@ -517,8 +543,15 @@ type Driven =
     };
 
 async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> {
-  const at = (path: string, body?: unknown) =>
-    h.call(op.method, fill(path, pathIds(id, ids)), body);
+  // **按规格里那条 operation 自己的 `x-profile-scoped` 决定要不要带 `?profile=`。**
+  // 驱动表不另抄一份「哪些端点是作用域化的」：抄的那份与真实划分无关地一直绿，
+  // 有人改了某个端点的作用域时它不会跟着改，于是驱动带着（或不带）一个已经不该带的
+  // 参数继续跑，形状检查照样通过 —— 那是三道守卫共同放弃的一层。
+  const q = (path: string): string =>
+    op.scoped ? `${path}${path.includes("?") ? "&" : "?"}profile=default` : path;
+  const call = (method: string, path: string, body?: unknown) => h.call(method, q(path), body);
+  const sse = (path: string, body?: unknown) => h.sse(q(path), body);
+  const at = (path: string, body?: unknown) => call(op.method, fill(path, pathIds(id, ids)), body);
 
   switch (id) {
     case "health":
@@ -540,6 +573,26 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
     case "logout":
       return at("/auth/logout");
 
+    case "listProfiles":
+      return at("/profiles");
+    case "createProfile": {
+      // 用一个新的 id，绝不碰 `default`：后面每一条作用域化的驱动都靠它还在。
+      const r = await call("POST", "/profiles", { id: "guard-profile", name: "守卫建的档" });
+      ids.profileId = "guard-profile";
+      return r;
+    }
+    case "renameProfile":
+      return call("POST", `/profiles/${ids.profileId}/rename`, { name: "改名后的档" });
+    case "reloadProfile":
+      return call("POST", `/profiles/${ids.profileId}/reload`);
+    case "deleteProfile": {
+      // 自带受害者（与 `deleteSession` 同一处置）：删掉别人还要读的那份档，
+      // 会让后面每条作用域化用例都拿到 404，而红因写在那条用例上。
+      const created = await call("POST", "/profiles", { id: "guard-victim" });
+      const victim = idOf(created.body);
+      return call("DELETE", `/profiles/${victim}`);
+    }
+
     case "createSession": {
       const r = await at("/sessions", { title: "形状守卫" });
       ids.sessionId = idOf(r.body);
@@ -552,14 +605,14 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       return at(`/sessions/${"{id}"}`);
     case "deleteSession": {
       // 自带受害者：不能删掉别人还要读的会话。
-      const created = await h.call("POST", "/sessions", { title: "待删" });
+      const created = await call("POST", "/sessions", { title: "待删" });
       const victim = idOf(created.body);
-      return h.call("DELETE", `/sessions/${victim}`);
+      return call("DELETE", `/sessions/${victim}`);
     }
     case "sendMessage":
       return at(`/sessions/${"{id}"}/messages`, { content: "你好" });
     case "streamMessage": {
-      const r = await h.sse(`/sessions/${ids.streamSessionId}/messages/stream`, {
+      const r = await sse(`/sessions/${ids.streamSessionId}/messages/stream`, {
         content: "流一下",
       });
       return { status: r.status, frames: r.frames };
@@ -578,21 +631,21 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
     }
     case "fetchProviderModels": {
       // 「获取模型列表」只认已保存的源，所以拿预置的 stub（baseUrl 指向桩上游）。
-      const r = await h.call("POST", `/provider-sources/stub/models`);
+      const r = await call("POST", `/provider-sources/stub/models`);
       return r;
     }
     case "deleteProviderSource": {
-      const created = await h.call("POST", "/provider-sources", {
+      const created = await call("POST", "/provider-sources", {
         id: "to-be-deleted",
         type: "openai",
       });
       const owner = idOf(created.body);
-      await h.call("POST", "/providers", {
+      await call("POST", "/providers", {
         id: "owned-by-to-be-deleted",
         source: owner,
         model: "m",
       });
-      return h.call("DELETE", `/provider-sources/${owner}?cascade=1`);
+      return call("DELETE", `/provider-sources/${owner}?cascade=1`);
     }
 
     case "listProviders":
@@ -605,12 +658,12 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
     case "updateProvider":
       return at(`/providers/${"{id}"}`, { name: "改名后的实例", default: true });
     case "deleteProvider": {
-      const created = await h.call("POST", "/providers", {
+      const created = await call("POST", "/providers", {
         id: "guard-victim",
         source: "stub",
         model: "m",
       });
-      return h.call("DELETE", `/providers/${idOf(created.body)}`);
+      return call("DELETE", `/providers/${idOf(created.body)}`);
     }
 
     case "listPlugins":
@@ -620,8 +673,8 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
     case "setPluginEnabled": {
       // 跑两遍：`disabled` 与 `active` 是全规格仅有的两个 enum 之一，只走一遍就漏掉一半。
       // （被形状检查的是第二遍；第一遍用下面的断言直接盯住它的 status/enabled。）
-      const off = await h.call("POST", "/plugins/fixture/enable", { enabled: false });
-      const on = await h.call("POST", "/plugins/fixture/enable", { enabled: true });
+      const off = await call("POST", "/plugins/fixture/enable", { enabled: false });
+      const on = await call("POST", "/plugins/fixture/enable", { enabled: true });
       // 禁用态也交给校验器（走 `also`）：它是全规格里唯一一份 status === "disabled" 的响应。
       return { ...on, also: [off] };
     }
@@ -635,9 +688,9 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       // 内置工具的 id 是代码里的常量，不需要先创建资源。
       // 三次写入：先关（证明 enabled=false 这一支的形状）、再开、最后关回原样 ——
       // 被当作本次响应校验的是「开」，另两次走 `also`，两种布尔值都过校验器。
-      const off = await h.call("POST", "/tools/current_time/enable", { enabled: false });
-      const on = await h.call("POST", "/tools/current_time/enable", { enabled: true });
-      const back = await h.call("POST", "/tools/current_time/enable", { enabled: false });
+      const off = await call("POST", "/tools/current_time/enable", { enabled: false });
+      const on = await call("POST", "/tools/current_time/enable", { enabled: true });
+      const back = await call("POST", "/tools/current_time/enable", { enabled: false });
       return { ...on, also: [off, back] };
     }
     default:

@@ -43,6 +43,10 @@
     {
       "name": "status",
       "description": "运行时状态"
+    },
+    {
+      "name": "profiles",
+      "description": "配置档本身。这一族的每个 operation 都**不带** `?profile=` 参数：它们操作的是「有哪些档」，而不是「某档里的东西」。"
     }
   ],
   "paths": {
@@ -398,8 +402,17 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/sessions/{id}/messages/stream": {
@@ -448,8 +461,17 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/providers": {
@@ -478,10 +500,22 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       },
       "post": {
         "operationId": "createProvider",
@@ -523,8 +557,17 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/providers/{id}": {
@@ -536,6 +579,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProviderId"
+          },
+          {
+            "$ref": "#/components/parameters/Profile"
           }
         ],
         "requestBody": {
@@ -576,8 +622,12 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true
       },
       "delete": {
         "operationId": "deleteProvider",
@@ -587,6 +637,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProviderId"
+          },
+          {
+            "$ref": "#/components/parameters/Profile"
           }
         ],
         "responses": {
@@ -600,13 +653,20 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true
       }
     },
     "/provider-sources": {
@@ -635,10 +695,22 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       },
       "post": {
         "operationId": "createProviderSource",
@@ -679,8 +751,17 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/provider-sources/{id}": {
@@ -692,6 +773,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProviderSourceId"
+          },
+          {
+            "$ref": "#/components/parameters/Profile"
           }
         ],
         "requestBody": {
@@ -732,8 +816,12 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true
       },
       "delete": {
         "operationId": "deleteProviderSource",
@@ -752,6 +840,9 @@
               "type": "boolean"
             },
             "description": "为真时连带删除引用该源的 provider"
+          },
+          {
+            "$ref": "#/components/parameters/Profile"
           }
         ],
         "responses": {
@@ -773,8 +864,12 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true
       }
     },
     "/provider-sources/{id}/models": {
@@ -786,6 +881,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProviderSourceId"
+          },
+          {
+            "$ref": "#/components/parameters/Profile"
           }
         ],
         "responses": {
@@ -807,8 +905,12 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true
       }
     },
     "/plugins": {
@@ -836,10 +938,22 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/plugins/{id}/reload": {
@@ -877,8 +991,17 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/plugins/{id}/unload": {
@@ -919,8 +1042,17 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/plugins/{id}/enable": {
@@ -976,8 +1108,17 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/adapters": {
@@ -1036,10 +1177,22 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
       }
     },
     "/tools/{id}/enable": {
@@ -1091,6 +1244,245 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
+      }
+    },
+    "/profiles": {
+      "get": {
+        "operationId": "listProfiles",
+        "summary": "列出全部配置档及其加载状态",
+        "tags": ["profiles"],
+        "responses": {
+          "200": {
+            "description": "全部配置档。含加载失败的（`status: failed` + `error`）—— 一份档坏了不拖垮别人，而操作者必须能看出是哪一份坏了。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["profiles"],
+                  "properties": {
+                    "profiles": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProfileRecord"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createProfile",
+        "summary": "新建一份配置档",
+        "tags": ["profiles"],
+        "requestBody": {
+          "description": "新配置档的 id 与可选显示名。**先落盘再建对象图**：中间崩了文件在那儿、状态是 failed，操作者看得见并可重载。",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "配置档 id，同时是目录名。"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "给人看的名字，可省。"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "新建好的配置档。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["profile"],
+                  "properties": {
+                    "profile": {
+                      "$ref": "#/components/schemas/ProfileRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/profiles/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProfileId"
+        }
+      ],
+      "delete": {
+        "operationId": "deleteProfile",
+        "summary": "下线一份配置档（不删文件）",
+        "tags": ["profiles"],
+        "responses": {
+          "200": {
+            "description": "已从服务里摘掉。**文件与 `profiles/<id>/plugins/` 都原样留在磁盘上**：框架从不删它，清理是操作者的 `rm -rf`。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "removed"],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/profiles/{id}/rename": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProfileId"
+        }
+      ],
+      "post": {
+        "operationId": "renameProfile",
+        "summary": "改配置档的显示名",
+        "tags": ["profiles"],
+        "requestBody": {
+          "description": "新的显示名。**只改 `name` 键，不改目录名** —— 目录一动，那份档的插件数据就跟丢了，而 id 是 `ctx.dataDir` 的唯一坐标。",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "改名后的配置档。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["profile"],
+                  "properties": {
+                    "profile": {
+                      "$ref": "#/components/schemas/ProfileRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/profiles/{id}/reload": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProfileId"
+        }
+      ],
+      "post": {
+        "operationId": "reloadProfile",
+        "summary": "重读配置文件并换上新的对象图",
+        "tags": ["profiles"],
+        "responses": {
+          "200": {
+            "description": "重载后的配置档。在途的那轮对话继续用**旧**对象图走完 —— 与 `ProviderRegistry.clear()` 同一条不变量（请求已持有自己的实例引用）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["profile"],
+                  "properties": {
+                    "profile": {
+                      "$ref": "#/components/schemas/ProfileRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "description": "重载失败：新的对象图建不起来时**保留正在服务的那一份**，只把状态说成 failed。换上半截对象图比继续用旧配置危险得多。回的是固定文案，原因见 `GET /profiles`。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -1163,6 +1555,24 @@
           "type": "string"
         },
         "description": "工具 id"
+      },
+      "Profile": {
+        "name": "profile",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。"
+      },
+      "ProfileId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。"
       }
     },
     "responses": {
@@ -1207,7 +1617,17 @@
         }
       },
       "Conflict": {
-        "description": "该会话有一次对话正在进行（同会话串行，见 `AgentEngine.handleMessage` 的会话锁）",
+        "description": "冲突，两种情形共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行（同会话串行，见 `core/session/lock.ts` 的 `SessionLock`，它由组合根构造并注入每个引擎，**不属于任何一份配置档**）；② 要下线的配置档还占着某个会话，等那轮对话结束后再来。",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "ProfileUnavailable": {
+        "description": "这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。",
         "content": {
           "application/json": {
             "schema": {
@@ -1697,6 +2117,35 @@
           "enabled": {
             "type": "boolean",
             "description": "必填。省略会得到 400，而不是「默认启用」"
+          }
+        }
+      },
+      "ProfileStatus": {
+        "type": "string",
+        "enum": ["ready", "failed"],
+        "description": "配置档的加载状态。**`failed` 的含义很窄**：这份档自己的文件读不出、校验不过、或对象图建不起来。档*内部*的失败不算档失败 —— 引用了不存在的源的 provider 是 `ProviderInfo.loaded: false` + `error`，`setup()` 抛错的插件是 `PluginStatus: failed`。发明第三种「整份档变红」会把「你有一个模型没配好」表达成「这份档坏了」。与 `packages/shared/src/types.ts` 的 `ProfileStatus` 是同一份，改一处必须改两处（与 `PluginStatus` 同一条理由：形状守卫只管「实发 ⊆ 声明」这一个方向）。"
+      },
+      "ProfileRecord": {
+        "type": "object",
+        "required": ["id", "name", "path", "status", "error"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "给人看的名字；配置档没写 `name` 时等于 id。"
+          },
+          "path": {
+            "type": "string",
+            "description": "它的配置文件路径，给操作者定位用。"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProfileStatus"
+          },
+          "error": {
+            "type": ["string", "null"],
+            "description": "加载失败的原因；正常为 `null`。只给操作者（4xx/5xx 的出口一律不带它，那句原文里有绝对路径）。"
           }
         }
       }
