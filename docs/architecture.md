@@ -9,7 +9,8 @@
 apps/server/src/
 ├── index.ts        薄入口：loadConfig -> createApp -> start -> 信号处理
 ├── app.ts          组合根：在一处装配所有对象，返回 { start, stop, address }
-├── config/         配置加载（默认值 -> atri.config.json -> 环境变量）
+├── config/         配置加载与配置文件读写（默认值 -> atri.config.json -> 环境变量；
+│                   profiles.ts = 每份配置档的落盘位置与一次性 seed）
 ├── core/           全部业务逻辑，不依赖上层
 │   ├── agent/      AgentEngine：一轮对话的编排
 │   ├── auth/       AuthManager：管理员口令与会话令牌
@@ -43,17 +44,25 @@ config/   ── 与 core/ 双向，见下面那一段
 按目录画会看到两条方向相反的边，按**文件**画就没有环：
 
 - `core/ → config/file.ts`：`provider/store.ts`、`auth/manager.ts`、`tool/store.ts`、
-  `provider/factory.ts` 都要读-改-写那个 JSON 配置文件，而「保留我们不认识的键」这件事
-  只有 `config/file.ts` 知道怎么做。这一侧依赖的是**文件读写层**。
-- `config/config.ts → core/tool/store.ts`：只为了一个常量 `DEFAULT_MAX_TOOL_STEPS`。
-  默认值住在「读它的那个模块」里，这样改上限只需要改一处；把常量抄到 `shared/` 或
-  `config/` 都会造出第二个真源。这一侧依赖的是**工具开关存储**。
+  `provider/factory.ts`、`session/db.ts` 都要读-改-写那个 JSON 配置文件、或把数据目录收到
+  0700，而「保留我们不认识的键」这件事只有 `config/file.ts` 知道怎么做。
+  这一侧依赖的是**文件读写层**。
+- `config/file.ts` 与 `config/profiles.ts` → `core/errors.ts`：只为一个 `errorMessage`
+  （外加 `ApiError`，用于「这个 id 不能当目录名」那句 400）。
+  包装捕获到的错误必须带 cause、且不能在每处 catch 里各写一遍三元判断，
+  所以这两个文件依赖的是**错误格式化工具**，不是任何业务逻辑。
+
+历史上这第二侧还有一条 `config/config.ts → core/tool/store.ts` 的边，为的是
+`DEFAULT_MAX_TOOL_STEPS` 那一个常量；把运行期配置搬进配置档之后 `AppConfig` 不再需要它，
+那条边就没了。**但双向本身仍然存在**，别把它当已修完的债：`errorMessage` 是一个
+纯工具函数，把它搬去 `config/` 反而会让 `core/` 反过来依赖 `config/` 的更多东西。
 
 两个方向落在不同的文件上，所以没有真正的循环依赖，Node 的模块图也不会为此做多一层延迟求值。
 `core/session/manager.ts` 里那句 `import type { AppConfig } from "#config/index.ts"`
 **不算一条边**：类型导入在擦除后不存在，运行时没有任何依赖。
 （如果哪天要按目录做机械检查，判据得是「同一对目录之间只允许一个方向」而不是「不允许双向」，
-否则这张图会一检查就红 —— 而红的原因不是有环。）
+否则这张图会一检查就红 —— 而红的原因不是有环。`scripts/check-layering.mjs` 的方向表
+就是照这句话写的：`core` 与 `config` 互相都在对方的允许集合里。）
 
 ### 模块说明符为什么是相对路径 + `#` 别名
 
@@ -92,7 +101,14 @@ const auth = new AuthManager(config, logger);
 await auth.init(); // 必须早于 HTTP 启动：未配置口令时要先落盘
 const sessions = new SessionManager(config, logger); // 会话库落在 config.dataDir
 const providers = new ProviderRegistry();
-const providerConfig = new ProviderConfigStore(config, logger);
+// 运行期配置住在配置档文件里，不在 `atri.config.json`。顺序有意：先建目录、
+// 再一次性 seed（`atri.config.json` 里那几段只在目标文件不存在时搬一次）、
+// **然后**才构造任何存储 —— 存储拿到的一直是 `<dataDir>/profiles/default/config.json`。
+const profilesDir = profilesRoot(config.dataDir);
+ensurePrivateDir(profilesDir);
+seedProfile(profilesDir, DEFAULT_PROFILE_ID, readConfigFile(config.root));
+const profilePath = profileConfigPath(profilesDir, DEFAULT_PROFILE_ID);
+const providerConfig = new ProviderConfigStore({ filePath: profilePath }, logger);
 // 工具：注册表只管「存在与执行」，启用与否由 ToolConfigStore 每次现读文件
 // `list_plugins` 要读插件列表，所以构造顺序是「插件管理器在前、工具在后」。
 // 传的是 **getter 而不是 `plugins.list()` 的结果**：此刻还没 `loadAll()`，
@@ -104,7 +120,7 @@ const plugins = new PluginManager(pluginRuntimeConfig(config), logger, {
 });
 const tools = new ToolRegistry();
 for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) tools.register(tool);
-const toolConfig = new ToolConfigStore(config, logger);
+const toolConfig = new ToolConfigStore({ filePath: profilePath }, logger);
 // 引擎吃五样：会话、provider、工具注册表、工具开关存储、日志器。
 // 曾经这里还注入过 config 与 plugins，两个字段全仓没有任何读取点，于是被删掉；
 // tools / toolConfig 是**先有读取点**（选本轮工具、执行调用）才加进来的。
@@ -170,7 +186,7 @@ HTTP 请求
 会话与消息落在 `config.dataDir` 下的 `sessions.sqlite`，由 `core/session/db.ts`（连接、pragma、
 schema 与版本）和 `manager.ts`（领域方法与 SQL）两层承担 —— 与 `core/provider/` 的
 `store.ts` + `registry.ts` 同构。**不叫 `store.ts`**：本仓 `store` 已经被
-`ProviderConfigStore` / `ToolConfigStore` 占住，含义是「读写 `atri.config.json` 的配置存储」。
+`ProviderConfigStore` / `ToolConfigStore` 占住，含义是「读写配置档文件的配置存储」。
 
 选 `node:sqlite` 的理由只有一条最有分量：它是 **Node 内置模块**，因此不破
 「服务端外部运行时依赖只有 `ws`」这条硬约束。免 `--experimental-sqlite` 旗标的下限是
@@ -328,7 +344,7 @@ adapter 是长驻的 `start()`/`stop()`，provider 是每请求的 `chat()`。
 分层是「注册表只管存与取，存储与装配各自一层」：
 
 ```
-store.ts    ProviderConfigStore：两层配置的校验与落盘（读写 atri.config.json）
+store.ts    ProviderConfigStore：两层配置的校验与落盘（读写配置档文件）
 factory.ts  配置 -> 实例（唯一入口，认得 type、两层合并与密钥解析）
 registry.ts ProviderRegistry：选路与转发，不知道任何厂商细节
 openai.ts   / anthropic.ts：厂商实现
@@ -430,7 +446,7 @@ errors.ts   ProviderError 与上游错误归一
 ```
 types.ts     ToolDefinition（id / name / description / parameters / run）+ JsonSchema
 registry.ts  ToolRegistry：存、取、按 id 执行转发 —— 不 import 具体工具，也不读配置
-store.ts     ToolConfigStore：读写 atri.config.json 的 tools 段
+store.ts     ToolConfigStore：读写配置档文件的 tools 段
 builtins.ts  createBuiltinTools()：内置工具的清单，只有 app.ts import 它
 builtins/    一颗工具一个文件（`currentTime.ts`），只导出自己那颗的 ToolDefinition
 ```

@@ -21,6 +21,11 @@ const SRC = join(ROOT, "apps/server/src");
 /** 每个层允许 import 哪些层。组合根（`app.ts` / `index.ts`）不受限 —— 它就是用来连线的地方。 */
 const ALLOWED = {
   core: new Set(["core", "config"]),
+  // `config` 允许指向 `core`，但**不是因为有一张双向图要供着**：这一侧现在只有
+  // `config/file.ts → core/errors.ts`（`errorMessage`）与 `config/profiles.ts → core/errors.ts`
+  //（`ApiError`）两条边，都是纯工具函数。历史上第三条 `config/config.ts → core/tool/store.ts`
+  //（只为一个 `DEFAULT_MAX_TOOL_STEPS`）已经把运行期配置搬进配置档后消失了 —— 别把它当成
+  // 「已经修完」：双向仍然存在，判据仍然是「同一对目录只允许一个方向 ≠ 不允许双向」。
   config: new Set(["core", "config"]),
   api: new Set(["core", "config", "api", "plugins", "adapters"]),
   adapters: new Set(["core", "config", "adapters"]),

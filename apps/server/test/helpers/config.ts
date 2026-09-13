@@ -2,7 +2,14 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_AUTH_COOKIE_NAME } from "@atri/shared";
 import type { AppConfig } from "#config/index.ts";
-import { configFilePath, readConfigFileAt, writeConfigFileAt } from "#config/file.ts";
+import {
+  configFilePath,
+  readConfigFileAt,
+  writeConfigFileAt,
+  type ProviderSourceEntryConfig,
+  type ProvidersFileConfig,
+  type ToolToggle,
+} from "#config/file.ts";
 // 默认值从 store 取，不在测试里重抄一遍数字：否则「代码默认 5、测试默认 6」这种漂移
 // 会让用例证的不再是生产行为。
 import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
@@ -24,20 +31,23 @@ import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
  *
  * 第四条是随着「存储按 `filePath` 寻址」加进来的：**`providers` / `providerSources` /
  * `tools` / 非默认的 `maxToolSteps` 会真的写进 `<root>/atri.config.json`**。
- * 因为那两个存储现在的规则是「给了 `filePath`，那个文件就是唯一真相」，注入的
- * baseline 只在 `filePath: null` 时生效 —— 测试想「启动时就有这些 provider」，
- * 就得让它们躺在文件里，这才是生产的那条路径。仍然**只写非默认的那几键**：
- * 全写会让每一个测试都凭空多出一配置文件，而「文件不存在」本身是要被某些用例覆盖的状态。
+ * 那两个存储现在的规则是「给了 `filePath`，那个文件就是唯一真相」，注入的 baseline
+ * 只在 `filePath: null` 时生效 —— 测试想「启动时就有这些 provider」，就得让它们躺在
+ * 文件里。写的是 **bootstrap** 而不是配置档文件，因为 `createApp` 启动时会把这几段
+ * 一次性 seed 进 `profiles/default/config.json`：于是每个用 provider 的测试都顺路
+ * 走了一遍生产路径（包括 seed 本身），而不是绕过它去手写内部布局。
+ * 仍然**只写非默认的那几键**：全写会让每一个测试都凭空多出一个配置文件，
+ * 而「文件不存在」本身是要被某些用例覆盖的状态。
  */
 export interface TestConfigInput {
   /** 临时根目录。provider 配置的落盘位置与 `dataDir` 都从它算出来。 */
   root: string;
-  providers?: AppConfig["providers"];
-  providerSources?: AppConfig["providerSources"];
+  providers?: ProvidersFileConfig;
+  providerSources?: Record<string, ProviderSourceEntryConfig>;
   pluginDirs?: string[];
   adapters?: AppConfig["adapters"];
   /** 工具开关。默认空 = 全部禁用（工具是能力授予，默认关闭）。 */
-  tools?: AppConfig["tools"];
+  tools?: Record<string, ToolToggle>;
   /** 默认 5；测试要证「撞上限」这类行为时显式传，别改默认值。 */
   maxToolSteps?: number;
   /** 覆盖 `auth` 段里的任意键（如测试要验证 `cookieSecure` 开关）。 */
@@ -99,10 +109,6 @@ export function makeTestConfig({
     dataDir,
     pluginDirs,
     adapters,
-    tools,
-    maxToolSteps,
-    providers,
-    providerSources,
     auth: {
       adminUser: "admin",
       adminPassword,

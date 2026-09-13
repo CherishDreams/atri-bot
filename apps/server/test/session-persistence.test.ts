@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Session, SessionDetail, ToolCall } from "@atri/shared";
 import { createApp } from "#app.ts";
-import type { AppConfig } from "#config/index.ts";
+import type { ProvidersFileConfig } from "#config/file.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**
@@ -34,7 +34,7 @@ interface Running {
  * 本文件每条用例都要在同一个目录上起第二个 app，目录的生命周期必须比 app 长。
  * `stop` 带一次性守卫，所以「显式停一次、清理钩子再兜一次」不会重复关服务器。
  */
-async function startAppOn(root: string, providers: AppConfig["providers"]): Promise<Running> {
+async function startAppOn(root: string, providers: ProvidersFileConfig): Promise<Running> {
   const app = await createApp(makeTestConfig({ root, providers }));
   await app.start();
   let stopped = false;
@@ -56,7 +56,7 @@ async function startAppOn(root: string, providers: AppConfig["providers"]): Prom
  */
 async function useStore(
   t: TestContext,
-): Promise<(providers: AppConfig["providers"]) => Promise<Running>> {
+): Promise<(providers: ProvidersFileConfig) => Promise<Running>> {
   const root = mkdtempSync(join(tmpdir(), "atri-session-restore-"));
   const running: Running[] = [];
   t.after(async () => {

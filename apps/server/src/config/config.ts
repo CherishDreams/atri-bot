@@ -1,18 +1,17 @@
 import { resolve } from "node:path";
 import { DEFAULT_AUTH_COOKIE_NAME, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT } from "@atri/shared";
-import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
-import {
-  readConfigFile,
-  type AdapterToggle,
-  type ProvidersFileConfig,
-  type ProviderSourceEntryConfig,
-  type ToolToggle,
-} from "./file.ts";
+import { readConfigFile, type AdapterToggle } from "./file.ts";
 
 /**
- * `loadConfig()` 的产物：每个键都有值（内置默认 → 配置文件 → 环境变量，后者覆盖前者）。
+ * `loadConfig()` 的产物：**只有部署级参数**。每个键都有值
+ * （内置默认 → `atri.config.json` → 环境变量，后者覆盖前者）。
  *
- * 这是**唯一**的完整配置类型。各模块的构造参数不要用它，而是声明自己实际读写的那几个键
+ * 这里**没有** `providers` / `providerSources` / `tools` / `maxToolSteps` —— 那是「跑法」，
+ * 住在各配置档自己的 `<dataDir>/profiles/<id>/config.json` 里（见 `config/profiles.ts`），
+ * 由 `ProviderConfigStore` / `ToolConfigStore` 按文件读写。删掉这几个键不是清理：
+ * 只要它们还留在 `AppConfig` 上，「配置档 B 看得见 A 的 provider」就还有一条活路。
+ *
+ * 各模块的构造参数不要用它，而是声明自己实际读写的那几个键
  * （例如 `ProviderStoreConfig { filePath: string | null }`）——否则测试里只传
  * `{ filePath: null }` 这类最小配置就过不了类型检查，而那是它们的既有前提。
  * 密钥走环境变量，结构性设置走文件。
@@ -31,15 +30,6 @@ export interface AppConfig {
   dataDir: string;
   pluginDirs: string[];
   adapters: Record<string, AdapterToggle>;
-  /**
-   * 工具开关。**这里只是启动时的那一份快照**，运行期的读写都走
-   * `core/tool/store.ts`（它在控制台改完开关后必须立刻反映新状态，见其类注释）。
-   */
-  tools: Record<string, ToolToggle>;
-  /** 单轮工具步数上限。校验与夹取在 `ToolConfigStore.maxSteps()`，不在这里。 */
-  maxToolSteps: number;
-  providers: ProvidersFileConfig;
-  providerSources: Record<string, ProviderSourceEntryConfig>;
   auth: {
     adminUser: string;
     adminPassword: string | null;
@@ -73,16 +63,6 @@ export function loadConfig(): AppConfig {
     pluginDirs: (fileConfig.pluginDirs ?? ["./plugins"]).map((p) => resolve(root, p)),
     // 适配器是可选启用的；纯 agent 部署一个都不开。
     adapters: fileConfig.adapters ?? {},
-    // 工具与适配器相反：默认全部关闭，必须在文件里显式写 enabled: true。
-    tools: fileConfig.tools ?? {},
-    // 默认值取自 store 导出的那一个常量，不在这里重抄一遍数字。
-    maxToolSteps: Number(
-      env.ATRI_MAX_TOOL_STEPS ?? fileConfig.maxToolSteps ?? DEFAULT_MAX_TOOL_STEPS,
-    ),
-    // 两层 provider 配置：源（连接）与实例（模型）。测试常直接传这两个字段，
-    // 因此缺省为空对象而不是 null。
-    providers: fileConfig.providers ?? {},
-    providerSources: fileConfig.providerSources ?? {},
     auth: {
       adminUser: env.ATRI_ADMIN_USER ?? fileConfig.auth?.adminUser ?? "admin",
       // 留空表示「启动时自动生成随机口令」，由 AuthManager.init() 负责落盘。

@@ -13,7 +13,14 @@ import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
 import { AdapterManager } from "./adapters/manager.ts";
 import { createHttpServer } from "./api/server.ts";
 import type { AppConfig } from "./config/index.ts";
-import { configFilePath } from "./config/file.ts";
+import { ensurePrivateDir, readConfigFile } from "./config/file.ts";
+import {
+  DEFAULT_PROFILE_ID,
+  profileConfigPath,
+  profilesRoot,
+  runShapeKeysIn,
+  seedProfile,
+} from "./config/profiles.ts";
 
 /**
  * 组合根（composition root）：唯一知道各部件如何拼装的地方。
@@ -32,17 +39,34 @@ export async function createApp(config: AppConfig) {
   const providers = new ProviderRegistry();
 
   // provider 配置的读写入口。启动时读一次，之后每次界面改动都经由它落盘。
-  // 这里显式算出 `filePath` 而不是把 `config` 整个递过去：存储的类型现在要求写出
-  // 「写在哪个文件上」（`null` 也要写出来），漏传不再是「安静地退化成只读」。
-  const configPath = configFilePath(config.root);
-  const providerConfig = new ProviderConfigStore(
-    {
-      filePath: configPath,
-      providers: config.providers,
-      providerSources: config.providerSources,
-    },
-    logger,
-  );
+  //
+  // 「跑法」住在配置档文件里，不在 `atri.config.json`。顺序是有意的：先建目录、
+  // 再一次性 seed、**然后**才构造任何存储 —— 存储一旦拿的就是配置档路径，
+  // bootstrap 里那几段对这个进程就再也不存在了。
+  const profilesDir = profilesRoot(config.dataDir);
+  ensurePrivateDir(profilesDir);
+  const profilePath = profileConfigPath(profilesDir, DEFAULT_PROFILE_ID);
+  const bootstrap = readConfigFile(config.root);
+  const moved = seedProfile(profilesDir, DEFAULT_PROFILE_ID, bootstrap);
+  if (moved !== null) {
+    logger.info(
+      moved.length === 0
+        ? `已创建配置档「${DEFAULT_PROFILE_ID}」（${profilePath}）`
+        : `已把 atri.config.json 里的 ${moved.join(" / ")} 搬进配置档「${DEFAULT_PROFILE_ID}」——` +
+            "这一段以后只在配置档文件里维护",
+    );
+  } else {
+    // 配置档早就在了，而 bootstrap 里还留着那几段：它现在是一句谎话。不删用户的文件
+    // （框架从不删它），但每次启动都要说一次，否则它会变成第二个真源。
+    const leftover = runShapeKeysIn(bootstrap);
+    if (leftover.length > 0) {
+      logger.warn(
+        `atri.config.json 里还留着 ${leftover.join(" / ")}，但配置档「${DEFAULT_PROFILE_ID}」已经存在 —— ` +
+          `这些段**不再生效**，真源是 ${profilePath}。确认无误后可以把它们从 atri.config.json 里删掉。`,
+      );
+    }
+  }
+  const providerConfig = new ProviderConfigStore({ filePath: profilePath }, logger);
 
   // 插件是磁盘上用户手写的代码，`ctx.config` / `shared.config` 会直接交到它手上，
   // 所以在这里就投影成白名单视图（理由见 `plugins/manager.ts` 的 `PluginRuntimeConfig`）。
@@ -62,10 +86,7 @@ export async function createApp(config: AppConfig) {
   for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) {
     tools.register(tool);
   }
-  const toolConfig = new ToolConfigStore(
-    { filePath: configPath, tools: config.tools, maxToolSteps: config.maxToolSteps },
-    logger,
-  );
+  const toolConfig = new ToolConfigStore({ filePath: profilePath }, logger);
 
   /**
    * 按当前配置装配 provider。
@@ -100,7 +121,7 @@ export async function createApp(config: AppConfig) {
 
     if (providers.size === 0) {
       logger.warn(
-        "没有可用的模型 provider，将使用回声兜底（请在 atri.config.json 里配置 providers）",
+        `没有可用的模型 provider，将使用回声兜底（请在配置档文件 ${profilePath} 里配置 providers）`,
       );
     }
     return providers;

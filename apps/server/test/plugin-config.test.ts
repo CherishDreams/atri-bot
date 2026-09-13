@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginManager, pluginRuntimeConfig } from "#plugins/manager.ts";
 import { createApp } from "#app.ts";
 import type { AppConfig } from "#config/index.ts";
+import { DEFAULT_PROFILE_ID, profileConfigPath, profilesRoot } from "#config/profiles.ts";
 import type { Logger } from "#core/logger.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
@@ -62,7 +64,14 @@ async function makeProbePlugins(pluginsRoot: string): Promise<void> {
   );
 }
 
-/** 每个可能泄漏的键都填上真值：投影挡不住哪一个，下面的断言就会撞上哪一个。 */
+/**
+ * 每个可能泄漏的键都填上真值：投影挡不住哪一个，下面的断言就会撞上哪一个。
+ *
+ * 两类秘密现在住在**两个地方**，所以守卫也分两处：口令在 `AppConfig` 里（部署级），
+ * apiKey 在配置档文件里（`profiles/default/config.json`，由 `createApp` 从 bootstrap
+ * seed 出来）。后者尤其要证 —— 「插件看不到密钥」如果只在内存对象上成立，
+ * 那么下一次有人图省事把配置文件整个递给它，这条边界就没了。
+ */
 function configWithSecrets(root: string, pluginDirs: string[]): AppConfig {
   return makeTestConfig({
     root,
@@ -110,11 +119,15 @@ test("插件只看到白名单里的运行期配置", async (t) => {
     greeting: "你好",
   });
 
-  // 这两句是为了让上面那两条不能假绿：口令与 apiKey 必须真的在交给 app 的配置里，
+  // 这两句是为了让上面那两条不能假绿：口令与 apiKey 必须真的在这个部署里存在着，
   // 否则「插件没看到秘密」就成了在空输入上证明的一句空话。
   const configDump = JSON.stringify(config);
   assert.ok(configDump.includes(ADMIN_PASSWORD), "测试配置里没带上口令，守卫失去意义");
-  assert.ok(configDump.includes(API_KEY), "测试配置里没带上 apiKey，守卫失去意义");
+  const profileDump = readFileSync(
+    profileConfigPath(profilesRoot(config.dataDir), DEFAULT_PROFILE_ID),
+    "utf8",
+  );
+  assert.ok(profileDump.includes(API_KEY), "配置档文件里没带上 apiKey，守卫失去意义");
   const pluginDump = JSON.stringify(globalThis.__ctxConfig);
   assert.ok(!pluginDump.includes(ADMIN_PASSWORD), "口令泄漏到了 ctx.config");
   assert.ok(!pluginDump.includes(API_KEY), "apiKey 泄漏到了 ctx.config");

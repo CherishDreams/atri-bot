@@ -83,9 +83,27 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 
 ## 配置
 
-解析顺序：**内置默认值 → `atri.config.json` → 环境变量**。
-环境变量可参考 `.env.example`；基于文件的设置可复制 `atri.config.example.json` 为 `atri.config.json`。
+配置分**两层**，各有一个文件：
+
+| 层     | 文件                             | 里面是什么                                                                       | 谁写它                                            |
+| ------ | -------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------- |
+| 部署级 | `atri.config.json`（仓库根）     | 监听地址与端口、日志级别、数据目录、插件安装目录、适配器开关、静态目录、登录口令 | 手写；`auth.adminPassword` 由服务端首次启动时填入 |
+| 配置档 | `data/profiles/<id>/config.json` | 这份「跑法」用哪些模型、开哪些工具、单轮最多几步、开哪些插件                     | 控制台，或手写                                    |
+
+解析顺序对**部署级**那一层成立：**内置默认值 → `atri.config.json` → 环境变量**。
+环境变量可参考 `.env.example`；`atri.config.example.json` 复制成 `atri.config.json`，
+`atri.profile.example.json` 复制成 `data/profiles/<你的 id>/config.json`。
 密钥放在环境变量里，结构性设置放在文件里。
+
+为什么配置档住在 `data/` 而不是仓库根的一个 `configs/` 目录：`.gitignore` 忽略的是
+**精确名** `atri.config.json`，把带 `apiKey` 的兄弟文件放进仓库根就是「未跟踪但也不忽略」——
+一次顺手 `git add -A` 会把所有配置档的密钥提交进版本库。`data/` 整体被忽略，
+并且权限是 `0700`。
+
+第一次启动时，服务端会把 `atri.config.json` 里的 `providers` / `providerSources` / `tools` /
+`maxToolSteps` **一次性搬进** `data/profiles/default/config.json` 并打一条日志。
+搬过之后那几段在 `atri.config.json` 里**不再生效**（框架不删你的文件，但每次启动都会 warn
+一次提醒它们已经是个摆设）。`default` 这个名字没有任何特权：它只是第一次落盘的位置。
 
 ## 登录鉴权
 
@@ -110,7 +128,9 @@ pnpm dev
 | `ATRI_COOKIE_SECURE`  | 关                    | 加 `Secure` 属性，仅 HTTPS 有效；本仓默认明文 HTTP 故默认关               |
 | `ATRI_STATIC_DIR`     | `apps/dashboard/dist` | 控制台构建产物目录                                                        |
 | `ATRI_DATA_DIR`       | `data`                | 运行时数据目录：会话与消息库 `sessions.sqlite` 落在这里（相对项目根解析） |
-| `ATRI_MAX_TOOL_STEPS` | `5`                   | 单轮允许的工具步数（夹到 `[1, 50]`）。改文件不用重启，改这里要重启        |
+
+单轮工具步数上限 `maxToolSteps` **没有环境变量**：它属于配置档，改文件不用重启。
+给它配一个环境变量只会得到第二个真源（而它只影响首次那一次搬移）。
 
 ### 认证接口
 
@@ -143,6 +163,8 @@ pnpm dev
 
 分两层：**provider source**（一次连接：端点、密钥、超时）与 **provider**（一个模型实例）。
 这样「一个网关下的多个模型」只写一次密钥，增删模型也不必碰凭证。
+
+这一段属于**配置档**，写在 `data/profiles/<id>/config.json` 里（不是 `atri.config.json`）：
 
 ```json
 {
@@ -200,7 +222,8 @@ provider 启动，并且在控制台的供应商配置页里以 `loaded: false` 
 
 ### 在控制台里配置
 
-「供应商配置」页可以直接增删源与模型，改动**写回 `atri.config.json`** 并立即生效，
+「供应商配置」页可以直接增删源与模型，改动**写回配置档文件**（今天只有一份，
+就是 `data/profiles/default/config.json`）并立即生效，
 不需要重启。「获取模型列表」会拿**已保存的**凭证去打上游的 `GET /models`，
 所以源有未保存改动时按钮会变成「保存并获取模型列表」。
 上游没有 `/models` 时可以用「自定义模型」手填模型 id 绕过。
@@ -229,10 +252,13 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 ### 数据目录、备份与单实例
 
-`dataDir`（默认 `data/`，可用 `ATRI_DATA_DIR` 或配置文件里的 `dataDir` 改）下有两样运行状态：
-`sessions.sqlite`（全部对话历史）与 `plugins/<插件 id>/`（各插件自己存的东西，框架不管理内容）。
-口令与各 provider 配置则在 `atri.config.json`。**需要备份的就是这几样**，
+`dataDir`（默认 `data/`，可用 `ATRI_DATA_DIR` 或配置文件里的 `dataDir` 改）下有三样运行状态：
+`sessions.sqlite`（全部对话历史）、`profiles/<id>/config.json`（各配置档的跑法）、
+以及 `plugins/<插件 id>/`（各插件自己存的东西，框架不管理内容）。
+**登录口令在 `atri.config.json`，各 provider 配置在配置档文件里**。**需要备份的就是这几样**，
 其余（`apps/dashboard/dist`）可由源码重新构建。
+整个 `dataDir` 的权限是 `0700`：保护落在**目录**上，`sessions.sqlite` 的 WAL 边车
+（`-wal` / `-shm`）由 SQLite 按 umask 反复重建，逐文件收紧是一次性的假安全感。
 `plugins/` 下**有目录不等于那个插件在跑**：加载失败的插件也留下了它已经写过的数据
 （框架从不删任何东西），是否可用请看控制台的插件页或 `list_plugins`。
 
@@ -263,7 +289,7 @@ pnpm start            # 或 node apps/server/src/index.ts
 - **工具（function calling）** —— 内置工具一颗一个文件（`apps/server/src/core/tool/builtins/`），
   在 `builtins.ts` 的清单里登记后由组合根注册进 `ToolRegistry`。目前有两颗：`current_time`
   （报此刻的日期与时钟，可传 IANA 时区）与 `list_plugins`（列已安装的插件及其加载结果）。
-  启用走 `atri.config.json` 的 `tools` 段，
+  启用走**配置档文件**的 `tools` 段，
   **默认全部关闭**（与适配器的默认启用刻意相反：少听一个端口是部署细节，
   给模型多一件可做的事是能力授予）：
 
@@ -278,7 +304,7 @@ pnpm start            # 或 node apps/server/src/index.ts
   插件注册自己的工具（`ctx.tool()`）还没有做 —— 那需要一次单独的能力授予设计。
 
 - **Provider** —— 模型的出站适配。内置 `openai` 与 `anthropic` 两种实现，
-  在 `atri.config.json` 的 `providerSources`/`providers` 段按类型声明，
+  在配置档文件的 `providerSources`/`providers` 段按类型声明，
   或者在控制台的「供应商配置」页里配。引擎从不 import 具体的模型 SDK。
   详见[模型 provider](#模型-provider)。
 
@@ -357,10 +383,11 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 除标注「公开」的路径外，其余接口都需要登录（未登录返回 401）。
 
-**配置类**写操作落在 `atri.config.json` 上（读-改-写，文件权限 `0600`），改完立刻生效、
-**不需要重启**：provider 靠重建注册表生效，工具靠每次现读文件生效（启用状态不常驻内存，
-见 `docs/architecture.md`）。**会话与消息**则落在 `dataDir` 下的 `sessions.sqlite`
-（同样 `0600`）—— 它们不是配置，不会写进 `atri.config.json`，也不该被当成配置文件去 diff。
+**配置类**写操作落在**配置档文件**（`data/profiles/<id>/config.json`）上，读-改-写、
+文件权限 `0600`，改完立刻生效、**不需要重启**：provider 靠重建注册表生效，工具靠每次现读文件
+生效（启用状态不常驻内存，见 `docs/architecture.md`）。`atri.config.json` 现在唯一的写入者是
+登录口令那一条路径。**会话与消息**则落在 `dataDir` 下的 `sessions.sqlite`
+（同样 `0600`）—— 它们不是配置，不会写进任何配置文件，也不该被当成配置文件去 diff。
 删除仍被引用的 provider source 会被拒绝并列出
 引用者，除非带上 `?cascade=1`。详细的字段语义见[模型 provider](#模型-provider)。
 

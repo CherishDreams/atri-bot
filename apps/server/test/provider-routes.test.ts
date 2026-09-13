@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { createApp } from "#app.ts";
 import { configFilePath } from "#config/file.ts";
 import type { FileConfig } from "#config/file.ts";
+import { DEFAULT_PROFILE_ID, profileConfigPath, profilesRoot } from "#config/profiles.ts";
 import type { SourceEntry } from "#core/provider/store.ts";
 import type { ProviderListItem, ProviderMutationResult } from "#api/server.ts";
 import { makeTestConfig } from "./helpers/config.ts";
@@ -101,13 +102,18 @@ async function startApp(t: TestContext, preset?: FileConfig) {
   const root = mkdtempSync(join(tmpdir(), "atri-routes-"));
   t?.after(() => rmSync(root, { recursive: true, force: true }));
   if (preset) writeFileSync(configFilePath(root), `${JSON.stringify(preset, null, 2)}\n`);
+  // `dataDir` 写出来而不是吃 helper 的默认值：下面要按它算出配置档文件的路径，
+  // 让 helper 的默认值偷偷参与，测试就在断言一个它自己没说明的位置。
+  const dataDir = join(root, "data");
   // 共享 fixture 的默认值与迁移前这里手抄的那份逐字段相同
   // （`"atri_session"` 就是 `DEFAULT_AUTH_COOKIE_NAME`），所以换成它不改变行为。
-  const app = await createApp(makeTestConfig({ root }));
+  const app = await createApp(makeTestConfig({ root, dataDir }));
   await app.start();
   return {
     origin: `http://127.0.0.1:${app.address().port}`,
     root,
+    /** 运行期配置真正落在那个文件上（本阶段只有一个配置档，就是 `default`）。 */
+    profilePath: profileConfigPath(profilesRoot(dataDir), DEFAULT_PROFILE_ID),
     stop: async () => {
       await app.stop();
       rmSync(root, { recursive: true, force: true });
@@ -327,7 +333,7 @@ test("路由：源被引用时拒绝删除，cascade 才连带删掉", async (t)
 
 // --- 落盘与实时生效 ---------------------------------------------------------
 
-test("路由：改动写进 atri.config.json，且不碰文件里别的配置", async (t) => {
+test("路由：改动写进配置档文件，而部署级 atri.config.json 一个字节都不动", async (t) => {
   // 预置别的设置：provider 写入是读-改-写，一次失手就会连带抹掉这些敏感项。
   const app = await startApp(t, {
     port: 0,
@@ -337,6 +343,10 @@ test("路由：改动写进 atri.config.json，且不碰文件里别的配置", 
   t.after(() => app.stop());
   const cookie = await login(app.origin);
 
+  // 启动之后取一次快照：本条要证的是「写入之后部署级文件与写入前**逐字节相同**」，
+  // 而不是「里面还有那几个键」。seed 只在配置档不存在时动一次，之后这条路径没人再碰它。
+  const bootstrapBefore = readFileSync(configFilePath(app.root), "utf8");
+
   await post(app.origin, cookie, "/provider-sources", {
     id: "s",
     type: "anthropic",
@@ -344,12 +354,19 @@ test("路由：改动写进 atri.config.json，且不碰文件里别的配置", 
   });
   await post(app.origin, cookie, "/providers", { id: "p", source: "s", model: "claude-x" });
 
-  const file = JSON.parse(readFileSync(configFilePath(app.root), "utf8"));
-  assert.equal(file.providerSources.s.type, "anthropic");
-  assert.equal(file.providers.p.model, "claude-x");
-  assert.equal(file.auth.adminUser, "admin");
-  assert.equal(file.auth.adminPassword, "keep-me");
-  assert.deepEqual(file.pluginDirs, ["./plugins"]);
+  const profile = JSON.parse(readFileSync(app.profilePath, "utf8"));
+  assert.equal(profile.providerSources.s.type, "anthropic");
+  assert.equal(profile.providers.p.model, "claude-x");
+
+  const bootstrap = JSON.parse(bootstrapBefore);
+  assert.equal(bootstrap.auth.adminUser, "admin");
+  assert.equal(bootstrap.auth.adminPassword, "keep-me");
+  assert.deepEqual(bootstrap.pluginDirs, ["./plugins"]);
+  // 反向也要钉住：运行期的段不得回流到部署级文件（那会造出第二个真源，
+  // 而下一次 seed 已经不会再跑，两边就会永久分叉）。
+  assert.equal(bootstrap.providerSources, undefined);
+  assert.equal(bootstrap.providers, undefined);
+  assert.equal(readFileSync(configFilePath(app.root), "utf8"), bootstrapBefore);
 });
 
 test("路由：改完配置立刻生效，不需要重启", async (t) => {
@@ -408,7 +425,7 @@ test("路由：删掉默认实例后保留键被清掉，选路回退到剩下�
   assert.equal((await get(app.origin, cookie, "/providers")).body.providers[0].default, true);
 
   await del(app.origin, cookie, "/providers/p");
-  const file = JSON.parse(readFileSync(configFilePath(app.root), "utf8"));
+  const file = JSON.parse(readFileSync(app.profilePath, "utf8"));
   // 保留键不清的话会指向一个不存在的 id，而 `/providers` 上什么也看不出来。
   assert.equal("default" in file.providers, false);
 });
@@ -451,10 +468,10 @@ test("路由：存储故障回固定文案的 500，不把配置文件的路径�
   t.after(() => app.stop());
   const cookie = await login(app.origin);
 
-  // 启动之后再把配置文件改坏：store 每次写都现读文件，所以这一步必然让下一次写入失败
-  // （它不把坏文件当成空配置，那是更严重的故障）。
+  // 启动之后再把**配置档文件**改坏：store 每次写都现读它，所以这一步必然让下一次写入失败
+  // （它不把坏文件当成空配置，那是更严重的故障）。改 bootstrap 是没用的 —— 运行期没人读它。
   const broken = "{ 这不是 JSON";
-  writeFileSync(configFilePath(app.root), broken, "utf8");
+  writeFileSync(app.profilePath, broken, "utf8");
 
   const res = await post(app.origin, cookie, "/provider-sources", {
     id: "probe",
@@ -465,8 +482,9 @@ test("路由：存储故障回固定文案的 500，不把配置文件的路径�
   // 固定文案，且这一条对「存储层自己包好的那句」也成立：判据是「凡是 5xx 都不往外说」，
   // 不是「这条消息看起来安全」。后者要求每一次抛错的人都判断对一次。
   assert.equal(res.body.error, "服务器内部错误，详情见服务端日志");
-  // 整个响应体里都不该出现路径：临时目录名与配置文件名是两个可辨认的记号。
-  assert.doesNotMatch(JSON.stringify(res.body), /atri-routes|atri\.config\.json/);
+  // 整个响应体里都不该出现路径：临时目录名、两层配置文件的**目录与文件名**都是可辨认的记号，
+  // 缺了后一条的话，配置档那句「…/profiles/default/config.json」就能原样漏出去。
+  assert.doesNotMatch(JSON.stringify(res.body), /atri-routes|atri\.config\.json|profiles\/default/);
   // 坏文件仍在原地，没被「顺手」覆盖掉 —— 覆盖等于把用户的其它设置抹了。
-  assert.equal(readFileSync(configFilePath(app.root), "utf8"), broken);
+  assert.equal(readFileSync(app.profilePath, "utf8"), broken);
 });

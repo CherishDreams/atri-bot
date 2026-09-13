@@ -7,28 +7,6 @@
   "adapters": {
     "http": { "enabled": true }
   },
-  "tools": {
-    "current_time": { "enabled": false }
-  },
-  "maxToolSteps": 5,
-  "providerSources": {
-    "deepseek": {
-      "type": "openai",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "apiKey": "",
-      "timeoutMs": 120000
-    },
-    "claude": {
-      "type": "anthropic",
-      "apiKey": "",
-      "timeoutMs": 120000
-    }
-  },
-  "providers": {
-    "default": "deepseek-chat",
-    "deepseek-chat": { "source": "deepseek", "model": "deepseek-chat" },
-    "claude-sonnet": { "source": "claude", "model": "claude-sonnet-4-5", "enabled": false }
-  },
   "staticDir": "apps/dashboard/dist",
   "auth": {
     "adminUser": "admin",

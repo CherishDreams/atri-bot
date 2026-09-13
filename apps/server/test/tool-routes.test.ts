@@ -15,16 +15,24 @@ import type { ToolInfo } from "@atri/shared";
 import { createApp } from "#app.ts";
 import { configFilePath } from "#config/file.ts";
 import type { FileConfig } from "#config/file.ts";
+import { DEFAULT_PROFILE_ID, profileConfigPath, profilesRoot } from "#config/profiles.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 async function startApp(t: TestContext, preset?: FileConfig) {
   const root = mkdtempSync(join(tmpdir(), "atri-tool-routes-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   if (preset) writeFileSync(configFilePath(root), `${JSON.stringify(preset, null, 2)}\n`);
-  const app = await createApp(makeTestConfig({ root }));
+  // `dataDir` 写出来：下面要按它算配置档文件的路径，不能吃 helper 的默认值。
+  const dataDir = join(root, "data");
+  const app = await createApp(makeTestConfig({ root, dataDir }));
   await app.start();
   t.after(() => app.stop());
-  return { root, origin: `http://127.0.0.1:${app.address().port}` };
+  return {
+    root,
+    origin: `http://127.0.0.1:${app.address().port}`,
+    /** 工具开关现在真正落在这个文件上（运行期配置归配置档，不再是 `atri.config.json`）。 */
+    profilePath: profileConfigPath(profilesRoot(dataDir), DEFAULT_PROFILE_ID),
+  };
 }
 
 async function login(origin: string): Promise<string> {
@@ -94,7 +102,7 @@ test("启用后不重启就生效，且只往文件里写 tools 段", async (t) 
     adapters: { http: { enabled: false } },
     auth: { adminUser: "admin", adminPassword: "pw" },
   };
-  const { origin, root } = await startApp(t, preset);
+  const { origin, root, profilePath } = await startApp(t, preset);
   const cookie = await login(origin);
 
   const off = await call(origin, cookie, "GET", "/tools");
@@ -108,15 +116,21 @@ test("启用后不重启就生效，且只往文件里写 tools 段", async (t) 
   const after = await call(origin, cookie, "GET", "/tools");
   assert.equal(toolsOf(after.json)[0]?.enabled, true);
 
-  const saved = JSON.parse(readFileSync(configFilePath(root), "utf8")) as FileConfig & {
+  // 开关落在**配置档文件**上，而 `preset` 那些部署级段落留在 `atri.config.json` 里 ——
+  // 一次读-改-写现在跨两个文件，所以两侧都要钉住。
+  const saved = JSON.parse(readFileSync(profilePath, "utf8")) as FileConfig & {
     tools?: Record<string, { enabled?: boolean }>;
   };
   assert.equal(saved.tools?.current_time?.enabled, true);
+
+  const bootstrap = JSON.parse(readFileSync(configFilePath(root), "utf8")) as FileConfig;
   // 其余段落原样保留：开关写入是一次读-改-写，不是整份覆盖。
-  assert.equal(saved.logLevel, "error");
-  assert.deepEqual(saved.pluginDirs, ["./plugins"]);
-  assert.deepEqual(saved.adapters, { http: { enabled: false } });
-  assert.equal(saved.auth?.adminPassword, "pw");
+  assert.equal(bootstrap.logLevel, "error");
+  assert.deepEqual(bootstrap.pluginDirs, ["./plugins"]);
+  assert.deepEqual(bootstrap.adapters, { http: { enabled: false } });
+  assert.equal(bootstrap.auth?.adminPassword, "pw");
+  // 反向：工具开关不得回流到部署级文件（否则「改了配置档没生效」会有第二个隐藏真源）。
+  assert.equal(bootstrap.tools, undefined);
 
   const back = await call(origin, cookie, "POST", "/tools/current_time/enable", { enabled: false });
   assert.equal(toolOf(back.json).enabled, false);

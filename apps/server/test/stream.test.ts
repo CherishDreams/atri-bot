@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message, Session, SessionDetail } from "@atri/shared";
 import { createApp } from "#app.ts";
-import type { AppConfig } from "#config/index.ts";
+import type { ProvidersFileConfig } from "#config/file.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**
@@ -80,7 +80,7 @@ async function startStubUpstream(chunks: string[]) {
   };
 }
 
-async function startApp(providers: AppConfig["providers"]) {
+async function startApp(providers: ProvidersFileConfig) {
   const root = mkdtempSync(join(tmpdir(), "atri-sse-"));
   // 共享 fixture 的默认值与迁移前这里手抄的那份逐字段相同
   // （`"atri_session"` 就是 `DEFAULT_AUTH_COOKIE_NAME`），所以换成它不改变行为。
