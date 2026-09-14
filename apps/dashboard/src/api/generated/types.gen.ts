@@ -219,7 +219,18 @@ export type DeletedMany = {
 export type AdapterInfo = {
     id: string;
     name: string;
+    /**
+     * `atri.config.json` 里没写 `enabled: false`。不等于在收流量。
+     */
     enabled: boolean;
+    /**
+     * 跑在哪份配置档上；没绑定为 null。
+     */
+    profile: string | null;
+    /**
+     * 绑定的那份档此刻可用。为 false 时这个适配器不会被启动。
+     */
+    bound: boolean;
 };
 
 /**

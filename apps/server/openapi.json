@@ -2018,7 +2018,7 @@
       },
       "AdapterInfo": {
         "type": "object",
-        "required": ["id", "name", "enabled"],
+        "required": ["id", "name", "enabled", "profile", "bound"],
         "properties": {
           "id": {
             "type": "string"
@@ -2027,7 +2027,16 @@
             "type": "string"
           },
           "enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "`atri.config.json` 里没写 `enabled: false`。不等于在收流量。"
+          },
+          "profile": {
+            "type": ["string", "null"],
+            "description": "跑在哪份配置档上；没绑定为 null。"
+          },
+          "bound": {
+            "type": "boolean",
+            "description": "绑定的那份档此刻可用。为 false 时这个适配器不会被启动。"
           }
         }
       },

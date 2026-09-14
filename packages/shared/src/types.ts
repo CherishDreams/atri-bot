@@ -109,8 +109,19 @@ export interface ProviderModelList {
 export interface AdapterInfo {
   id: string;
   name: string;
-  /** 适配器当前是否在接收流量。 */
+  /**
+   * 这个接入端**已启用**（`atri.config.json` 里没写 `enabled: false`）。
+   * 注意它不等于「真的在收流量」—— 启用了但绑定不可用时也不会启动，
+   * 那一半由 `bound` 说。
+   */
   enabled: boolean;
+  /** 它跑在哪份配置档上（`adapters.<id>.profile`）；没绑定为 `null`。 */
+  profile: string | null;
+  /**
+   * 绑定的那份配置档此刻是否可用。`enabled === false` 时这一项没有意义（不会去启动它），
+   * 但仍然照实算 —— 控制台要能在用户把档修好之后看到它变绿，而不是等启用之后才知道。
+   */
+  bound: boolean;
 }
 
 /**

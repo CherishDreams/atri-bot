@@ -498,7 +498,13 @@ test("GET /adapters 的元素形状（经进程内 AdapterManager 核对）", ()
   // logger。这条用例以前要构造**一整条真实依赖链**（一座临时目录里的 sqlite、一个引擎、
   // 两个注册表），唯一的原因是那个 `engine` 字段 —— 它被存起来而从未被读，却要求所有
   // 靠近它的测试替它把下游补齐。删掉之后这里回到了它本来该有的大小。
-  const manager = new AdapterManager({ config: { adapters: {} }, logger: createLogger("error") });
+  // 绑定解析器在这里给一个「什么都不存在」的：本条只核对**形状**，
+  // 绑定的行为由 `test/adapters.test.ts` 管。
+  const manager = new AdapterManager({
+    config: { adapters: { "spec-x": { profile: "spec-profile" } } },
+    logger: createLogger("error"),
+    resolveProfile: () => null,
+  });
   manager.register("spec-x", { name: "X", start() {}, stop() {} });
   const listed: AdapterInfo[] = manager.list();
   const problems: string[] = [];

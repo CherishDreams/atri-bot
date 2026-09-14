@@ -5,7 +5,7 @@
   "dataDir": "data",
   "pluginDirs": ["./plugins", "./apps/server/plugins"],
   "adapters": {
-    "http": { "enabled": true }
+    "http": { "enabled": true, "profile": "default" }
   },
   "staticDir": "apps/dashboard/dist",
   "auth": {

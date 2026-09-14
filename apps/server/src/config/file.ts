@@ -27,9 +27,21 @@ export const CONFIG_FILE_NAME = "atri.config.json";
 /**
  * 适配器段里的单项。带索引签名是因为适配器实现可能往自己的段落里放任意配置键，
  * 读-改-写必须把它们原样带回，所以这份类型不能是封闭的。
+ *
+ * `profile` 是**这个接入端跑在哪份配置档上**（见 `config/profiles.ts`）。
+ * 绑定为什么不搬进配置档文件：适配器是**入站**的东西，它占的资源属于部署
+ *（一个监听端口、一个 webhook 回调地址、一个平台的机器人 token）；
+ * 「换个平台换一套模型与工具」要搬的是它**用什么跑法**，而不是它本身。
+ * 于是这里留一条指向档的引用，档那边不需要知道有没有人在用它 ——
+ * 反过来的话，删一份档就得去扫所有档看谁引用了它。
+ *
+ * 该引用**没有默认值**：`enabled` 而没写 `profile` 的适配器不会被启动
+ *（`AdapterManager.startAll` 会为此单独报一条），理由与 `?profile=` 一律必填同一条。
  */
 export interface AdapterToggle {
   enabled?: boolean;
+  /** 绑定到哪份配置档。必须是它的 id，且该档此刻要 `ready`。 */
+  profile?: string;
   [key: string]: unknown;
 }
 

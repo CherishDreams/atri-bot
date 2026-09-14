@@ -199,6 +199,14 @@ HTTP 请求
 - `core/agent/events.ts` 的 `SessionEvents`。帧由 N 个引擎产生，而 WebSocket 客户端只有
   一批：接在引擎上就要 N 次订阅 + 删档时漏摘，所以总线在引擎之外。
 
+适配器**绑定**到配置档，而不是搬进配置档：`adapters.<id>.profile` 留在部署级文件里。
+理由是一个接入端占的资源本来就属于部署（监听端口、webhook 回调地址、平台 token），
+要选的只是「这个平台用哪一套跑法」；反过来的话删一份档就得去扫所有档看谁在引用它。
+绑定经组合根注入的访问器解析（`AdapterManager` 收一个 `resolveProfile`），所以
+`adapters/` 不需要、也不允许 import `api/`（`ProfileBundle` 声明在那里）。
+今天仓库里还没有任何适配器实现，所以这条接缝的**组合根接线**只有单元测试覆盖 ——
+第一个真适配器落地时要补的就是那条端到端，这条判断写在 `test/adapters.test.ts` 末尾。
+
 `ProfileDirectory` 刻意**不是 `core/` 的类**：它持有的那份对象图必须包含 `PluginManager`，
 而分层检查的 `ALLOWED.core = {core, config}` 不允许 `core/` import `plugins/`。
 于是接口声明在 `api/http.ts`，对象在 `app.ts` 用字面量 + 闭包构造 —— 与

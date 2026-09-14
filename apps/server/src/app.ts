@@ -353,7 +353,16 @@ export async function createApp(config: AppConfig) {
     return found;
   }
 
-  const adapters = new AdapterManager({ config, logger });
+  // 适配器按绑定取那一跑法。注入访问器而不是 `profiles` 本身：`adapters/` 按分层不得
+  // import `api/`，而 `ProfileDirectory` 与 `ProfileBundle` 就声明在那里。
+  const adapters = new AdapterManager({
+    config,
+    logger,
+    resolveProfile: (id) => {
+      const bundle = profiles.get(id);
+      return bundle === null ? null : { engine: bundle.engine };
+    },
+  });
 
   const http = createHttpServer({
     config,
