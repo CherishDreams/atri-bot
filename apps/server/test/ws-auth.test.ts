@@ -261,3 +261,32 @@ test("服务关停不发 unauthorized，只关连接", async (t) => {
   );
   assert.equal(live.ws.readyState, WebSocket.CLOSED);
 });
+
+/**
+ * 畸形帧必须被**忽略**，不能把进程带走。
+ *
+ * 量法是「发一串坏帧，再发一次 ping，pong 还要收得到」。这条没有替代品：`ws` 在 socket 的
+ * data 回调里**同步** `emit` `message`，监听器里抛出的 TypeError 因此是未捕获异常，在本仓
+ * 就是跑测试的这个进程当场终止 —— 少一道形状判据时，这个文件不会留下一条红用例，
+ * 而是整份挂掉。反过来说，它能跑完并给出 pong，就是「忽略」这个语义真的生效了。
+ */
+test("畸形 WS 帧被忽略，连接仍然可用", async (t) => {
+  const { http, ws } = await startServer(t);
+  const cookie = await loginCookie(http);
+
+  const connected = await tryConnect(ws, { cookie });
+  assert.equal(connected.opened, true);
+  t.after(() => connected.ws.terminate());
+
+  // 其中 `null` 是唯一致命的那一个：`JSON.parse` 会成功，而 `null.type` 抛 TypeError。
+  // 其余几条要么语法不过（走 `catch` 直接 return），要么取属性只得到 `undefined`。
+  for (const raw of ["null", "[]", "5", '"ping"', "true", "{"]) {
+    connected.ws.send(raw);
+  }
+
+  const frame = await new Promise((done) => {
+    connected.ws.once("message", (raw) => done(JSON.parse(raw.toString())));
+    connected.ws.send(JSON.stringify({ type: "ping" }));
+  });
+  assert.deepEqual(frame, { type: "pong" }, "坏帧之后连接必须还活着，并仍能正常应答");
+});

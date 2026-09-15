@@ -12,6 +12,7 @@ import type { ToolDefinition } from "#core/tool/types.ts";
 import type { PageOptions } from "#core/session/manager.ts";
 import { Router } from "./router.ts";
 import {
+  isJsonObject,
   readJson,
   sendError,
   sendJson,
@@ -785,12 +786,17 @@ export function createHttpServer(deps: HttpDeps) {
     const token = parseCookies(req)[cookieName] ?? "";
     clients.set(ws, token);
     ws.on("message", (raw) => {
-      let frame;
+      let frame: unknown;
       try {
         frame = JSON.parse(raw.toString());
       } catch {
         return;
       }
+      // 形状必须在读 `frame.type` 之前判掉，理由与 HTTP body 那条完全相同（见 `isJsonObject`）：
+      // `JSON.parse("null")` 得到 `null`，而这里的监听器是 `ws` 在 socket 的 data 回调里**同步**
+      // `emit` 出来的 —— 一句 `null.type` 会以未捕获异常终止整个进程，`app.stop()` 一步都不跑
+      // （在途对话、会话锁、WAL 边车全随进程没掉）。畸形帧的正确响应是「忽略」，不是「打死自己」。
+      if (!isJsonObject(frame)) return;
       // `ClientFrame` 今天只有 `ping` 一种；`subscribe` / `unsubscribe` 已从协议里删掉
       // （服务端从不消费它们，而留着会让客户端写出永远走不到的分支）。
       if (frame.type === "ping") ws.send(JSON.stringify({ type: "pong" }));

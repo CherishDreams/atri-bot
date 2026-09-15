@@ -147,6 +147,20 @@ export function sendSse(res: ServerResponse, data: unknown, event?: string): voi
 }
 
 /**
+ * JSON 解析结果的**形状**判据：非 `null`、`typeof === "object"`、非数组。
+ *
+ * HTTP 请求体与 WS 帧共用这一个谓词，不是顺手复用 —— 是这两条入站路径必须严格度一致。
+ * `JSON.parse` 什么都能给：`null`、`[]`、`5`、`"北京时间"`，而调用方拿到之后读的是
+ * `frame.type` / `body.content`。少这一道，一个客户端写错的报文就变成 TypeError：
+ * 在 HTTP 那边是「500 + 服务器内部错误」（用户看不出是自己发错了，日志里多一条无关堆栈），
+ * 在 WS 那边更糟 —— 异常发生在 `ws` 的 `message` 监听器里，同步冒到 socket 的 data 回调，
+ * 成为**未捕获异常直接终止进程**，`app.stop()` 一步都不跑。
+ */
+export function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
  * 读取并解析 JSON 请求体，带大小上限。
  *
  * 返回 `Record<string, unknown>` 而不是 `any`：调用方（`api/server.ts`）确实
@@ -172,15 +186,10 @@ export async function readJson(
   } catch {
     throw new ApiError("JSON 请求体格式错误");
   }
-  // **形状**也要在边界上判，不只语法。`JSON.parse` 什么都能给：`null`、`[]`、`5`、`"北京时间"`，
-  // 而返回类型声明的是 `Record<string, unknown>` —— 不挡的话调用方第一处 `body.content` 就是
-  // TypeError，一个客户端写错的请求体于是变成 500 加一条「服务器内部错误」，
-  // 用户看不出是自己发错了，日志里还多一条与故障无关的堆栈。
+  // **形状**也要在边界上判，不只语法（判据与 WS 帧共用，见 `isJsonObject`）。
   // 空 body 走上面的 `return {}`，所以这里拒的是「有内容但不是对象」。
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!isJsonObject(parsed)) {
     throw new ApiError("请求体必须是一个 JSON 对象");
   }
-  // 这一处 `as` 就是 JSON 边界本身：上面那道判据已经把它压成「非 null 的非数组对象」，
-  // 而 TS 不知道「对象」在 JSON 里就等于「键值映射」。
-  return parsed as Record<string, unknown>;
+  return parsed;
 }
