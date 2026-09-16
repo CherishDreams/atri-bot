@@ -970,5 +970,14 @@ function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string): 
     res.end();
     return;
   }
-  createReadStream(filePath).pipe(res);
+  // `pipe()` **不转发源流的 error**，而 `fs` ReadStream 的 error 无人监听就是未捕获异常 ——
+  // 与刚修掉的 WS 那一处是同一类故障：进程当场没了，`app.stop()` 一步都不跑。
+  // 触发它的是常规运维动作而不是坏运气：单进程托管时静态目录就是构建产物，`pnpm build`
+  // 期间替换或删除正被请求的那个带 hash 的资源，`statFile` 与实际 `open` 之间就有窗口
+  // （实测 stat 之后删文件 → `UNCAUGHT: ENOENT`，退出码 8）。
+  // 响应头与半截 body 已经发出去了，这里只能把连接拆掉：客户端看到的是网络错误，
+  // 而不是服务端消失。不重试、不降级成 404 —— 那两者都要求头还没发。
+  const stream = createReadStream(filePath);
+  stream.on("error", () => res.destroy());
+  stream.pipe(res);
 }
