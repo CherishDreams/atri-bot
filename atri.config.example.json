@@ -3,7 +3,7 @@
   "port": 6185,
   "logLevel": "info",
   "dataDir": "data",
-  "pluginDirs": ["./plugins", "./apps/server/plugins"],
+  "pluginDirs": ["apps/server/plugins"],
   "adapters": {
     "http": { "enabled": true, "profile": "default" }
   },

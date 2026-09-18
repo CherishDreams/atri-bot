@@ -3,7 +3,8 @@ import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DEFAULT_SERVER_PORT } from "@atri/shared";
 import { loadConfig } from "#config/index.ts";
 import { configFilePath } from "#config/file.ts";
@@ -80,4 +81,36 @@ test("没有配置文件时走内置默认，而不是报错", (t) => {
   // 所以「文件不存在」与「文件是坏的」必须是两种结果。
   withRoot(t);
   assert.equal(loadConfig().port, DEFAULT_SERVER_PORT);
+});
+
+/**
+ * 默认 root 锚在**仓库根**，不锚在进程 cwd。
+ *
+ * 这条是本文件里唯一测「默认值从哪来」的用例，因为那个默认值曾经是 `process.cwd()`，
+ * 而 `dev`/`start` 都经 `pnpm --filter` 执行、cwd 是 `apps/server/`。两者一错开，
+ * 同一个部署就在仓库根与 `apps/server/` 各长出一份 `atri.config.json` 和一个 `data/`
+ * （两份互不可见的对话库），而 `staticDir` 的默认值被解析成 `apps/server/apps/dashboard/dist`
+ * （不存在）—— `pnpm build && pnpm start` 的单进程托管整站 404。
+ */
+test("未设 ATRI_ROOT 时，root 是仓库根而不是进程 cwd", (t) => {
+  const savedRoot = process.env.ATRI_ROOT;
+  delete process.env.ATRI_ROOT;
+  // 故意跳到一个**不是**仓库根、也不含配置文件的目录：只要默认值还读 cwd，
+  // 断言里拿到的就是它，这条立刻红。
+  const outside = mkdtempSync(join(tmpdir(), "atri-root-"));
+  const previousCwd = process.cwd();
+  process.chdir(outside);
+  t.after(() => {
+    // 顺序要紧：先把 cwd 换回去再删目录，`rmSync` 删不掉进程正站在里面的目录。
+    process.chdir(previousCwd);
+    if (savedRoot === undefined) delete process.env.ATRI_ROOT;
+    else process.env.ATRI_ROOT = savedRoot;
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  const config = loadConfig();
+  // 本文件在 `<仓库根>/apps/server/test/`，往上三层就是仓库根（与 `DEFAULT_ROOT` 各走一遍，
+  // 两个数只有「锚在仓库根」同时成立才会相等）。
+  assert.equal(config.root, resolve(fileURLToPath(new URL("../../../", import.meta.url))));
+  assert.notEqual(config.root, outside, "root 不该跟着启动目录跑");
 });

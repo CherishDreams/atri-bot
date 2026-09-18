@@ -131,14 +131,15 @@ pnpm dev
 
 更常见的做法是通过环境变量显式指定（优先级高于配置文件）：
 
-| 变量                  | 默认值                | 说明                                                                      |
-| --------------------- | --------------------- | ------------------------------------------------------------------------- |
-| `ATRI_ADMIN_USER`     | `admin`               | 管理员用户名                                                              |
-| `ATRI_ADMIN_PASSWORD` | 无（自动生成）        | 管理员口令                                                                |
-| `ATRI_COOKIE_NAME`    | `atri_session`        | 会话 Cookie 名                                                            |
-| `ATRI_COOKIE_SECURE`  | 关                    | 加 `Secure` 属性，仅 HTTPS 有效；本仓默认明文 HTTP 故默认关               |
-| `ATRI_STATIC_DIR`     | `apps/dashboard/dist` | 控制台构建产物目录                                                        |
-| `ATRI_DATA_DIR`       | `data`                | 运行时数据目录：会话与消息库 `sessions.sqlite` 落在这里（相对项目根解析） |
+| 变量                  | 默认值                | 说明                                                                                                                 |
+| --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `ATRI_ADMIN_USER`     | `admin`               | 管理员用户名                                                                                                         |
+| `ATRI_ADMIN_PASSWORD` | 无（自动生成）        | 管理员口令                                                                                                           |
+| `ATRI_COOKIE_NAME`    | `atri_session`        | 会话 Cookie 名                                                                                                       |
+| `ATRI_COOKIE_SECURE`  | 关                    | 加 `Secure` 属性，仅 HTTPS 有效；本仓默认明文 HTTP 故默认关                                                          |
+| `ATRI_STATIC_DIR`     | `apps/dashboard/dist` | 控制台构建产物目录                                                                                                   |
+| `ATRI_DATA_DIR`       | `data`                | 运行时数据目录：会话与消息库 `sessions.sqlite` 落在这里（相对项目根解析）                                            |
+| `ATRI_ROOT`           | 仓库根                | 解析 `atri.config.json`、`dataDir`、`pluginDirs`、`staticDir` 的基准目录。**与启动目录无关**（默认由源文件位置推出） |
 
 单轮工具步数上限 `maxToolSteps` **没有环境变量**：它属于配置档，改文件不用重启。
 给它配一个环境变量只会得到第二个真源（而它只影响首次那一次搬移）。
@@ -274,6 +275,12 @@ pnpm start            # 或 node apps/server/src/index.ts
 （框架从不删任何东西），是否可用请看控制台的插件页或 `list_plugins`。
 
 - **容器里把 `dataDir` 挂成 volume**，否则重建容器等于清空所有历史。
+- **`data/` 与 `atri.config.json` 都相对仓库根解析，从哪儿启动都一样。** 这个默认值曾经是
+  `process.cwd()`，而 `pnpm dev` / `pnpm start` 都经 `pnpm --filter` 执行、cwd 是 `apps/server/`：
+  从那套启动方式升上来的部署，配置与对话库留在 `apps/server/` 下，而服务端现在读的是仓库根。
+  合并一次即可（`mv apps/server/atri.config.json .`，再把 `apps/server/data/` 并进 `data/`）。
+  **两处都已经有 `sessions.sqlite` 时不要覆盖**——两份历史合不到一个库里，只能挑一份用、
+  另一份改名留着；实在想保持原样就给老位置显式设 `ATRI_ROOT=apps/server`。
 - **一个数据目录只跑一个实例。** 同会话串行那把锁是进程内的 `Set`（`core/agent/engine.ts`），
   第二个进程看不见它；SQLite 侧只有文件锁 + 5 秒 busy timeout，抢不到会得到一句中文 500。
   想跑两份就给它们两个 `dataDir`。

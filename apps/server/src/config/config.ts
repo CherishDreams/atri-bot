@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DEFAULT_AUTH_COOKIE_NAME, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT } from "@atri/shared";
 import { readConfigFile, type AdapterToggle } from "./file.ts";
 
@@ -44,8 +45,24 @@ export interface AppConfig {
   };
 }
 
+/**
+ * 仓库根 = 本文件往上四层（`src/config/` → `src/` → `apps/server/` → 仓库根）。
+ *
+ * 以前默认是 `process.cwd()`，而 README 把 `atri.config.json`、`data/`、`apps/dashboard/dist`
+ * 都写成「仓库根下面的东西」。两者对不上，因为 `dev`/`start` 都是 `pnpm --filter @atri/server …`，
+ * pnpm 把 cwd 切到 `apps/server/`：于是 `atri.config.json` 与 `data/` 在仓库根和 `apps/server/`
+ * **各长出一套**（两份互不可见的对话库，备份时只看到其中一份），而 `staticDir` 的默认值
+ * `apps/dashboard/dist` 被解析成 `apps/server/apps/dashboard/dist`（不存在）——
+ * `pnpm build && pnpm start` 这条文档主推的单进程托管，整站 404「控制台尚未构建」。
+ * 锚在源文件位置上就不依赖「从哪个目录启动」，与 README 的描述重新一致。
+ *
+ * 否掉的替代：向上找第一份存在的 `atri.config.json` 当根。那会让**配置文件在不在**决定 root，
+ * `data/` 与 `staticDir` 跟着一起漂 —— 症状从「固定但要说清」变成「随文件布局漂」，更难诊断。
+ */
+const DEFAULT_ROOT = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
+
 export function loadConfig(): AppConfig {
-  const root = resolve(process.env.ATRI_ROOT ?? process.cwd());
+  const root = resolve(process.env.ATRI_ROOT ?? DEFAULT_ROOT);
   // 读法只有一处：`readConfigFile()`。以前这里自己 `existsSync` + 自己 `JSON.parse`，
   // 于是同一个文件有两套失败语义 —— 它少掉了「顶层必须是对象」那一条，所以
   // `[]` 或 `"x"` 这样的文件能顺利启动（每个键都走默认值），等到第一次界面保存时
@@ -60,7 +77,12 @@ export function loadConfig(): AppConfig {
     port: Number(env.ATRI_PORT ?? fileConfig.port ?? DEFAULT_SERVER_PORT),
     logLevel: env.ATRI_LOG_LEVEL ?? fileConfig.logLevel ?? "info",
     dataDir: resolve(root, env.ATRI_DATA_DIR ?? fileConfig.dataDir ?? "data"),
-    pluginDirs: (fileConfig.pluginDirs ?? ["./plugins"]).map((p) => resolve(root, p)),
+    // 默认值都相对 root（= 仓库根）解析，所以这里写的是「仓库根到那个目录的路径」。
+    // 从前它是 `"./plugins"`，只在 root 恰好是 `apps/server/` 时才指向 README 里那个
+    // 可放插件的目录（`apps/server/plugins`）—— 那是上一个默认值留下的 cwd 拐杖，
+    // root 归位到仓库根之后必须一起改，否则默认值指向一个不存在的 `<仓库根>/plugins`，
+    // 症状是零配置启动时样例插件悄悄不加载。
+    pluginDirs: (fileConfig.pluginDirs ?? ["apps/server/plugins"]).map((p) => resolve(root, p)),
     // 适配器是可选启用的；纯 agent 部署一个都不开。
     adapters: fileConfig.adapters ?? {},
     auth: {
