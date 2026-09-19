@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { icon } from "@/components/shared/icons";
+import { useProfile } from "@/composables/useProfile";
 import { useSessionsStore } from "@/stores/sessions";
 
 /** 两个按钮的图标走命名表，不再在模板里各写一份 `<svg>`。 */
@@ -10,6 +11,8 @@ const SendIcon = icon("arrowUp");
 
 const router = useRouter();
 const sessions = useSessionsStore();
+/** 本页只在配置档闸门之内渲染（`ChatLayout` 的 `ProfileGate`），所以这里读到的一定是真值。 */
+const { profile } = useProfile();
 
 const content = ref("");
 const creating = ref(false);
@@ -62,11 +65,17 @@ async function onCreate(): Promise<void> {
   error.value = null;
   try {
     const session = await sessions.create(deriveTitle());
-    // 首句用 history state 传给会话页：query 会把聊天内容写进地址栏和浏览历史。
+    // 首句交给 store，不是塞进 `router.push` 的 `state`：vue-router **不读** location 上那个键，
+    // 整句话会被安静丢掉（实测落地后输入框为空、一条消息都没多）。也不走 query ——
+    // 那会把聊天内容写进地址栏和浏览历史。两个理由都记在 store 的 `pendingFirst` 上。
+    sessions.stageFirstMessage(session.id, text);
     await router.push({
       name: "chat-session",
       params: { sessionId: session.id },
-      state: { draft: text },
+      // 只把 `?profile=` 这类**导航参数**带过去，不带聊天内容。不带的后果很具体：
+      // 配置档闸门在 `ChatLayout` 上，落地那份路由没有 profile ⇒ 直接把人退回「先选一份
+      // 配置档」，刚存下的首句就只能等用户再点一次。
+      query: { profile: profile.value },
     });
   } catch (err) {
     error.value = err instanceof Error ? err.message : "创建会话失败";

@@ -8,6 +8,14 @@ interface PendingMessage extends Message {
 }
 
 /**
+ * 创建页交给会话页、还没发出的首句。带着目标会话 id：见 store 的 `takeFirstMessage`。
+ */
+interface StagedMessage {
+  sessionId: string;
+  text: string;
+}
+
+/**
  * 中间消息：要求执行工具的助手消息、以及工具的结果。
  * 它们到达不代表这一轮结束 —— 后面还有至少一次补全。
  */
@@ -136,6 +144,18 @@ export const useSessionsStore = defineStore("sessions", {
      */
     epoch: 0,
     error: null as string | null,
+    /**
+     * 从创建页带到会话页、还没发出的首句。
+     *
+     * 为什么走 store 而不是 `router.push({ state: { draft } })`：vue-router **不读** location
+     * 上的 `state`（它的 `buildState` 只产 back/current/forward/replaced/position/scroll
+     * 那几个键），那个写法会把整句话安静丢掉 —— 实测落地后输入框是空的、消息一条没多，
+     * 而页面没有任何提示。也不用 query：聊天内容会进地址栏和浏览历史。
+     *
+     * 它只活过一次导航，刷新即失。这正是它比 `history.state` 好的地方：后者会跟着重新加载
+     * 回来的页面被再读一次，于是把已经发出去的首句又发一遍。
+     */
+    pendingFirst: null as StagedMessage | null,
   }),
 
   getters: {
@@ -197,6 +217,27 @@ export const useSessionsStore = defineStore("sessions", {
       this.error = null;
       await this.refresh();
       return session;
+    },
+
+    /** 创建页把首句交给会话页（见 state 的 `pendingFirst`）。 */
+    stageFirstMessage(sessionId: string, text: string): void {
+      this.pendingFirst = { sessionId, text };
+    },
+
+    /**
+     * 取走属于**这个会话**的首句，并把它清空。
+     *
+     * 两个细节都是必要的。清空：会话页在「挂载」这条路上只该消费一次，留着的话
+     * 下一次进别的会话会把同一句话又发一遍。比 id：用户在「创建 → 落地」之间点了侧栏里
+     * 的另一个会话时，那份草稿属于原来那个 id —— 不比对就会把 A 的第一句发进 B 里，
+     * 而这正是最不该出错的两种情形（发到错的会话、发两遍）。
+     */
+    takeFirstMessage(sessionId: string): string | null {
+      const staged = this.pendingFirst;
+      if (staged === null) return null;
+      // 无论命中与否都清：不命中就是那份草稿已经过期了，留着只会污染后面的会话。
+      this.pendingFirst = null;
+      return staged.sessionId === sessionId ? staged.text : null;
     },
 
     /**

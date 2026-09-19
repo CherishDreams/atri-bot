@@ -63,9 +63,20 @@
     </div>
 
     <template #trigger>
-      <n-text strong class="model-active flex cursor-pointer select-none items-center gap-1">
-        <span class="active-model">{{ providers.activeModel }}</span>
-        <span class="text-ink-faint"><component :is="ChevronIcon" /></span>
+      <!--
+        模型名必须**可截断**：这个触发器原先没有宽度上限，窄屏下被压成 34×84 ——
+        文字换行撑出 84px 高，把 60px 的顶栏上下顶穿（`--atri-header-h` 是它自己的高度，
+        容器不会跟着长）。`min-w-0` + `max-w-[…]` + `truncate` 三条是一套，缺一条就退回
+        「要么不换行要么还是撑高」；箭头 `shrink-0`，否则它先被压扁。
+      -->
+      <n-text
+        strong
+        class="model-active flex min-w-0 cursor-pointer select-none items-center gap-1"
+      >
+        <span class="active-model max-w-[8rem] truncate md:max-w-[16rem]">{{
+          providers.activeModel
+        }}</span>
+        <span class="shrink-0 text-ink-faint"><component :is="ChevronIcon" /></span>
       </n-text>
     </template>
   </n-popover>
@@ -75,7 +86,7 @@
 import { useProvidersStore, type ModelChoice } from "@/stores/providers";
 import { useProfile } from "@/composables/useProfile";
 import type { SelectOption } from "naive-ui";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { icon } from "./icons.js";
 
 const CheckIcon = icon("check");
@@ -125,8 +136,19 @@ function choose(choice: ModelChoice | null): void {
   visible.value = false;
 }
 
-// 顶栏上就显示着当前模型名，所以挂载时就得有数据，不能等用户点开才拉。
-onMounted(() => {
-  if (profile.value !== null) void providers.init(profile.value);
-});
+/*
+ * 顶栏上就显示着当前模型名，所以得有数据，不能等用户点开才拉。
+ *
+ * 用 `watch(profile, …, { immediate: true })` 而不是 `onMounted`：chat 侧的配置档闸门
+ * （`ChatLayout` 里的 `ProfileGate`）在没选档时先渲染选择器，用户选完那一刻 profile 才从
+ * null 变成有值 —— 只挂 onMounted 的话，这一处会在 profile 仍为 null 时白跑一次，
+ * 顶栏随后一直空着，要等用户点开下拉才刷新。
+ */
+watch(
+  profile,
+  (pid) => {
+    if (pid !== null) void providers.init(pid);
+  },
+  { immediate: true },
+);
 </script>

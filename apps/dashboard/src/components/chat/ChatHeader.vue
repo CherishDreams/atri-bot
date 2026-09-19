@@ -17,11 +17,13 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
 
 <template>
   <header
-    class="atri-chat-header flex h-[var(--atri-header-h)] w-full items-center justify-between border-b-1 border-line px-4"
+    class="atri-chat-header flex h-[var(--atri-header-h)] w-full items-center justify-between gap-3 border-b-1 border-line px-4"
   >
-    <ModelSelectMenu />
+    <!-- 左侧允许收缩并截断（见 ModelSelectMenu 的 trigger），右侧三颗控件一律不给缩：
+         它们缩了不是变窄而是点不到。 -->
+    <ModelSelectMenu class="min-w-0" />
 
-    <div class="flex items-center gap-3">
+    <div class="flex shrink-0 items-center gap-3">
       <ThemeToggle />
       <PlatformSwitch />
       <TopBarMenu />

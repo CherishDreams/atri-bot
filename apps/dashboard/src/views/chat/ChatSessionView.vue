@@ -100,10 +100,14 @@ async function submitMessage(text: string): Promise<void> {
   const content = text.trim();
   if (!content || !sessions.active) return;
 
+  // 没选配置档就发不出去：发消息是作用域化的，服务端对缺 profile 一律 400。
+  // 这道判据必须排在清 draft **之前**。放在后面得到的是最坏的那种失败：点了发送、
+  // 打的字没了、请求一条没发、连错误文案都不出现（实测输入框清空而 [data-msg-id] 仍是 0）。
+  if (profile.value === null) return;
+
   draft.value = "";
   // 带上顶栏选中的**实例 id**（不是模型名：名字不再跨配置档唯一，见 `stores/providers.ts`
   // 的 `selection`）；没选就交给服务端按自己的默认选路。
-  if (profile.value === null) return;
   await sessions.send(profile.value, content, providers.selection?.providerId);
 
   // 发送失败时把内容还回输入框，否则用户白打一遍字。
@@ -144,16 +148,9 @@ onMounted(async () => {
     await sessions.refresh().catch(() => undefined);
   }
 
-  // 从创建页带过来的首句：走 history state 而非 query，内容不进地址栏。
-  // 读完就把这个键摘掉（保留 router 自己的 state 键），
-  // 否则刷新页面会把已经发出去的那句话又填回输入框。
-  const state = history.state as Record<string, unknown> | null;
-  if (state && typeof state.draft === "string") {
-    pendingFirst = state.draft;
-    const next = { ...state };
-    delete next.draft;
-    history.replaceState(next, "");
-  }
+  // 从创建页带过来的首句：走 store，不走 query（聊天内容不该进地址栏和浏览历史）。
+  // 取走即清空 —— 一次挂载只消费一次；带着 id 去取，挡的是「创建与落地之间点了别的会话」。
+  pendingFirst = sessions.takeFirstMessage(sessionId.value);
 
   await load(sessionId.value);
 
