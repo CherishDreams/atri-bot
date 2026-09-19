@@ -1124,3 +1124,105 @@ test("注册表：clear() 清空全部 provider 与默认项", () => {
   assert.equal(registry.size, 0);
   assert.equal(registry.defaultId, null);
 });
+
+/**
+ * 流式超时用的是**空闲**判据，不是总预算。
+ *
+ * 上游模型属性决定一次生成多长，而引擎是「`chatStream` 返回之后才落库助手那条」
+ * （`core/agent/engine.ts` 的 `#record` 排在它后面）。以前流式也吃
+ * `AbortSignal.timeout(timeoutMs)`，于是一段 130s 的长回复会在中途被掐死 ——
+ * 用户那条已经持久化、模型这一整段全丢，而前端只收到一个 error 帧：
+ * 一次成功的生成被记成一次故障。
+ */
+
+/**
+ * 每 `gapMs` 推一片；到 `stallAfterMs` 之后**留着连接不再出字**（上游挂住而不关闭）。
+ *
+ * 必须把 `signal` 接进来：这里替身的是 `fetch`，而真的 `fetch` 在被 abort 时会让
+ * `response.body` 抛出取消错误。不接就得到「假上游永远吹不下去也停不下来」——
+ * 空闲超时到了却没有任何东西中断读循环，用例一路挂到文件超时。
+ */
+function drippingSse(
+  frames: string[],
+  gapMs: number,
+  stallAfterMs: number,
+  signal?: AbortSignal,
+): Response {
+  const encoder = new TextEncoder();
+  let index = 0;
+  let elapsed = 0;
+  let stopped = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (!signal) return;
+      const onAbort = (): void => {
+        stopped = true;
+        // error 而不是 cancel：读侧要拿到一个 rejection，这才是 `fetch` 被 abort 的形状。
+        try {
+          controller.error(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+        } catch {
+          /* 已经关闭或已经 error 过 */
+        }
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    },
+    async pull(controller) {
+      if (stopped) return;
+      // 判序是刻意的：「该停住」必须排在「片发完了」之前，否则挂住的那一段永远走不到，
+      // 流会正常关闭 —— 用例就会拿到一个成功返回值而不是超时（第一次写反就是这样）。
+      if (elapsed >= stallAfterMs) {
+        await new Promise((r) => setTimeout(r, 50));
+        elapsed += 50;
+        return;
+      }
+      if (index >= frames.length) {
+        controller.close();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, gapMs));
+      elapsed += gapMs;
+      if (stopped) return;
+      controller.enqueue(encoder.encode(frames[index++]));
+    },
+    cancel() {
+      stopped = true;
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+const openAIFrame = (text: string): string =>
+  `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`;
+
+test("流式：总预算之内一直在出字的长回复不该被掐断", async () => {
+  // 4 片 × 60ms = 240ms 的「活流」，比 timeoutMs=120 长一倍。旧实现会在 120ms 处 abort。
+  const provider = new OpenAIProvider({ id: "slow", baseUrl: "https://x.test/v1", timeoutMs: 120 });
+  const frames = ["一", "二", "三", "四"].map(openAIFrame);
+  const reply = await withFetch(
+    async (_url, init) => drippingSse(frames, 60, Number.POSITIVE_INFINITY, init.signal),
+    () => provider.chatStream({ model: "m", messages: [] }),
+  );
+  assert.equal(reply.content, "一二三四", "每帧续期的空闲超时不该动正在推进的流");
+});
+
+test("流式：上游停住不出字时空闲超时中断，并给一句可操作的中文", async () => {
+  const provider = new OpenAIProvider({
+    id: "stall",
+    baseUrl: "https://x.test/v1",
+    timeoutMs: 120,
+  });
+  // 片数给足（30 片 × 10ms 用不完）：60ms 起就停住，120ms 的空闲上限先到，
+  // 于是这条是「超时」而不是「片发完关闭」——两者要能被正则分出来。
+  const frames = Array.from({ length: 30 }, (_, i) => openAIFrame(`${i}`));
+  await assert.rejects(
+    withFetch(
+      async (_url, init) => drippingSse(frames, 10, 60, init.signal),
+      () => provider.chatStream({ model: "m", messages: [] }),
+    ),
+    /流式响应连续 120ms 没有增量输出/,
+  );
+});

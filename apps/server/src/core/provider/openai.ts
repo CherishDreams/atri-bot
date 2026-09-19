@@ -1,5 +1,6 @@
 import { DEFAULT_TIMEOUT_MS } from "./store.ts";
 import { toNetworkError, toProviderError } from "./errors.ts";
+import { idleTimeout, withTimeout, wrapStreamError, type IdleTimeout } from "./timeout.ts";
 import type { ToolCall } from "@atri/shared";
 import type {
   ChatMessage,
@@ -115,6 +116,8 @@ export class OpenAIProvider {
   /**
    * 流式补全。每收到一段增量就 `onDelta(delta)`，返回拼接后的完整文本。
    * 调用方拿返回值落库，因此增量与最终内容必然一致。
+   *
+   * 超时走**空闲**判据（`idleTimeout`），不是总预算：一次长生成还在往前推时不该被掐掉。
    */
   async chatStream({
     model,
@@ -123,82 +126,98 @@ export class OpenAIProvider {
     onDelta,
     signal,
   }: ChatStreamOptions): Promise<ChatReply> {
-    const response = await this.#fetch(messages, { model, stream: true, tools, signal });
-    if (!response.ok) throw await toProviderError(response, { provider: this.id, model });
-    if (!response.body) {
-      throw await toProviderError(new Response("上游未返回响应体", { status: 502 }), {
-        provider: this.id,
-        model,
-      });
-    }
-
-    let content = "";
-    let stopReason: string | undefined;
-    // 按 `index` 归位的槽位：一次响应可以并行要求调多个工具，每个的 arguments
-    // 会被拆成任意多片，所以这里只能累加，覆盖会丢掉前缀。
-    const slots = new Map<number, { id: string; name: string; arguments: string }>();
-
-    for await (const frame of parseSseJson(response.body)) {
-      if (frame.data === "[DONE]") break;
-
-      // JSON.parse 交出的是 unknown，这里认领 OpenAI 兼容契约里的那几个键。
-      const chunk = frame.payload as OpenAIChatPayload | null;
-      const choice = chunk?.choices?.[0];
-
-      const delta = choice?.delta?.content;
-      if (typeof delta === "string" && delta.length > 0) {
-        content += delta;
-        onDelta?.(delta);
-      }
-
-      for (const frag of choice?.delta?.tool_calls ?? []) {
-        // 没有 `index` 时按「这一路只有一个调用」处理（早期 function_call 就是这个形状）。
-        const at = frag.index ?? 0;
-        const slot = slots.get(at) ?? { id: "", name: "", arguments: "" };
-        if (typeof frag.id === "string" && frag.id) slot.id = frag.id;
-        if (typeof frag.function?.name === "string") slot.name += frag.function.name;
-        if (typeof frag.function?.arguments === "string") slot.arguments += frag.function.arguments;
-        slots.set(at, slot);
-      }
-
-      // 只作诊断：循环的终止条件是「有没有 toolCalls」，不看这里（理由见 ChatReply.stopReason）。
-      if (typeof choice?.finish_reason === "string") stopReason = choice.finish_reason;
-
-      // 兼容网关有时把错误塞进 200 的流里（OpenAI 本身也可能用 `error` 字段报错）。
-      if (chunk?.error) {
-        const detail = chunk.error.message ?? JSON.stringify(chunk.error);
-        throw await toProviderError(new Response(detail, { status: 502 }), {
+    const idle = idleTimeout(this.timeoutMs, signal);
+    try {
+      const response = await this.#fetch(messages, { model, stream: true, tools, idle });
+      if (!response.ok) throw await toProviderError(response, { provider: this.id, model });
+      if (!response.body) {
+        throw await toProviderError(new Response("上游未返回响应体", { status: 502 }), {
           provider: this.id,
           model,
         });
       }
+
+      let content = "";
+      let stopReason: string | undefined;
+      // 按 `index` 归位的槽位：一次响应可以并行要求调多个工具，每个的 arguments
+      // 会被拆成任意多片，所以这里只能累加，覆盖会丢掉前缀。
+      const slots = new Map<number, { id: string; name: string; arguments: string }>();
+
+      for await (const frame of parseSseJson(response.body)) {
+        // 收到任何一帧就算「上游还在往前推」，包括那些只带 tool_calls 片段的帧。
+        idle.renew();
+        if (frame.data === "[DONE]") break;
+
+        // JSON.parse 交出的是 unknown，这里认领 OpenAI 兼容契约里的那几个键。
+        const chunk = frame.payload as OpenAIChatPayload | null;
+        const choice = chunk?.choices?.[0];
+
+        const delta = choice?.delta?.content;
+        if (typeof delta === "string" && delta.length > 0) {
+          content += delta;
+          onDelta?.(delta);
+        }
+
+        for (const frag of choice?.delta?.tool_calls ?? []) {
+          // 没有 `index` 时按「这一路只有一个调用」处理（早期 function_call 就是这个形状）。
+          const at = frag.index ?? 0;
+          const slot = slots.get(at) ?? { id: "", name: "", arguments: "" };
+          if (typeof frag.id === "string" && frag.id) slot.id = frag.id;
+          if (typeof frag.function?.name === "string") slot.name += frag.function.name;
+          if (typeof frag.function?.arguments === "string")
+            slot.arguments += frag.function.arguments;
+          slots.set(at, slot);
+        }
+
+        // 只作诊断：循环的终止条件是「有没有 toolCalls」，不看这里（理由见 ChatReply.stopReason）。
+        if (typeof choice?.finish_reason === "string") stopReason = choice.finish_reason;
+
+        // 兼容网关有时把错误塞进 200 的流里（OpenAI 本身也可能用 `error` 字段报错）。
+        if (chunk?.error) {
+          const detail = chunk.error.message ?? JSON.stringify(chunk.error);
+          throw await toProviderError(new Response(detail, { status: 502 }), {
+            provider: this.id,
+            model,
+          });
+        }
+      }
+
+      const toolCalls = [...slots.entries()]
+        .toSorted(([a], [b]) => a - b)
+        .map(([index, slot]) => ({
+          // id 缺失时补一个确定性的占位：回喂结果要靠 id 配对，宁可给它一个能数出来的名字，
+          // 也不要让那条 tool 消息带着空 tool_call_id 去上游（上游会直接拒）。
+          id: slot.id || `call_${index}`,
+          name: slot.name,
+          arguments: slot.arguments,
+        }));
+
+      const reply: ChatReply = { role: "assistant", content };
+      if (toolCalls.length > 0) reply.toolCalls = toolCalls;
+      if (stopReason) reply.stopReason = stopReason;
+      return reply;
+    } catch (err) {
+      throw wrapStreamError(err, idle, { provider: this.id, model });
+    } finally {
+      // 定时器必须摘：留着一个未触发的 120s 句柄，测试进程会吊在那里不退出。
+      idle.dispose();
     }
-
-    const toolCalls = [...slots.entries()]
-      .toSorted(([a], [b]) => a - b)
-      .map(([index, slot]) => ({
-        // id 缺失时补一个确定性的占位：回喂结果要靠 id 配对，宁可给它一个能数出来的名字，
-        // 也不要让那条 tool 消息带着空 tool_call_id 去上游（上游会直接拒）。
-        id: slot.id || `call_${index}`,
-        name: slot.name,
-        arguments: slot.arguments,
-      }));
-
-    const reply: ChatReply = { role: "assistant", content };
-    if (toolCalls.length > 0) reply.toolCalls = toolCalls;
-    if (stopReason) reply.stopReason = stopReason;
-    return reply;
   }
 
   async #fetch(
     messages: ChatMessage[],
-    options: { model?: string; stream: boolean; tools?: ChatTool[]; signal?: AbortSignal },
+    options: {
+      model?: string;
+      stream: boolean;
+      tools?: ChatTool[];
+      signal?: AbortSignal;
+      /** 流式路径的空闲超时句柄；给了它就由它决定 `signal`，不再套总预算。 */
+      idle?: IdleTimeout;
+    },
   ): Promise<Response> {
+    const signal = options.idle ? options.idle.signal : withTimeout(options.signal, this.timeoutMs);
     try {
-      return await fetch(this.#endpoint(), {
-        ...this.#request(messages, options),
-        signal: withTimeout(options.signal, this.timeoutMs),
-      });
+      return await fetch(this.#endpoint(), { ...this.#request(messages, options), signal });
     } catch (err) {
       throw toNetworkError(err, { provider: this.id, model: options.model });
     }
@@ -306,15 +325,4 @@ export function normalizeModels(data: unknown): string[] {
 
 function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
-}
-
-/**
- * 给请求挂一个超时。
- *
- * 用 `AbortSignal.any` 组合调用方的取消信号与超时信号：任何一方触发都能中断请求。
- * 不能省掉这一步——上游挂起不返回时，流式响应会让连接和前端一起无限等待。
- */
-function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }

@@ -1,5 +1,6 @@
 import { DEFAULT_TIMEOUT_MS } from "./store.ts";
 import { toNetworkError, toProviderError } from "./errors.ts";
+import { idleTimeout, withTimeout, wrapStreamError, type IdleTimeout } from "./timeout.ts";
 import { normalizeModels } from "./openai.ts";
 import type { ToolCall } from "@atri/shared";
 import type {
@@ -122,6 +123,9 @@ export class AnthropicProvider {
     return reply;
   }
 
+  /**
+   * 流式补全。超时走**空闲**判据（`idleTimeout`）而不是总预算，理由与 openai 那一侧相同。
+   */
   async chatStream({
     model,
     messages,
@@ -129,97 +133,112 @@ export class AnthropicProvider {
     onDelta,
     signal,
   }: ChatStreamOptions): Promise<ChatReply> {
-    const response = await this.#fetch(messages, { model, stream: true, tools, signal });
-    if (!response.ok) throw await toProviderError(response, { provider: this.id, model });
-    if (!response.body) {
-      throw await toProviderError(new Response("上游未返回响应体", { status: 502 }), {
-        provider: this.id,
-        model,
-      });
-    }
+    const idle = idleTimeout(this.timeoutMs, signal);
+    try {
+      const response = await this.#fetch(messages, { model, stream: true, tools, idle });
+      if (!response.ok) throw await toProviderError(response, { provider: this.id, model });
+      if (!response.body) {
+        throw await toProviderError(new Response("上游未返回响应体", { status: 502 }), {
+          provider: this.id,
+          model,
+        });
+      }
 
-    let content = "";
-    let stopReason: string | undefined;
-    // 按内容块 `index` 归位：`content_block_start` 给 id/name，参数随后以
-    // `input_json_delta` 分片到达，所以只能累加。
-    const slots = new Map<number, { id: string; name: string; arguments: string }>();
-    const finish = (): ChatReply => {
-      const reply: ChatReply = { role: "assistant", content };
-      const toolCalls = [...slots.entries()]
-        .toSorted(([a], [b]) => a - b)
-        .map(([index, slot]) => ({
-          id: slot.id || `call_${index}`,
-          name: slot.name,
-          arguments: slot.arguments,
-        }));
-      if (toolCalls.length > 0) reply.toolCalls = toolCalls;
-      if (stopReason) reply.stopReason = stopReason;
-      return reply;
-    };
+      let content = "";
+      let stopReason: string | undefined;
+      // 按内容块 `index` 归位：`content_block_start` 给 id/name，参数随后以
+      // `input_json_delta` 分片到达，所以只能累加。
+      const slots = new Map<number, { id: string; name: string; arguments: string }>();
+      const finish = (): ChatReply => {
+        const reply: ChatReply = { role: "assistant", content };
+        const toolCalls = [...slots.entries()]
+          .toSorted(([a], [b]) => a - b)
+          .map(([index, slot]) => ({
+            id: slot.id || `call_${index}`,
+            name: slot.name,
+            arguments: slot.arguments,
+          }));
+        if (toolCalls.length > 0) reply.toolCalls = toolCalls;
+        if (stopReason) reply.stopReason = stopReason;
+        return reply;
+      };
 
-    for await (const frame of parseSseJson(response.body)) {
-      // JSON.parse 交出的是 unknown，这里认领 Anthropic 流式帧里的那几个键。
-      const chunk = frame.payload as AnthropicStreamPayload | null;
-      // 事件类型在 `event:` 字段里，而不是 data 载荷内。
-      switch (frame.event) {
-        case "message_stop":
-          return finish();
-        case "content_block_start": {
-          const block = chunk?.content_block;
-          if (block?.type === "tool_use") {
-            slots.set(chunk?.index ?? 0, {
-              id: block.id ?? "",
-              name: block.name ?? "",
-              arguments: "",
-            });
-          }
-          break;
-        }
-        case "content_block_delta": {
-          // 必须先分 `delta.type`：工具参数的 JSON 碎片也在 `content_block_delta` 里，
-          // 不看类型就当成文本推给前端，用户会看到一堆 `{\"timez` 这样的半截 JSON。
-          const delta = chunk?.delta;
-          if (delta?.type === "input_json_delta") {
-            const slot = slots.get(chunk?.index ?? 0);
-            if (slot && typeof delta.partial_json === "string")
-              slot.arguments += delta.partial_json;
+      for await (const frame of parseSseJson(response.body)) {
+        // 任何一帧都算「还在往前推」，包括只带工具参数碎片的那些。
+        idle.renew();
+        // JSON.parse 交出的是 unknown，这里认领 Anthropic 流式帧里的那几个键。
+        const chunk = frame.payload as AnthropicStreamPayload | null;
+        // 事件类型在 `event:` 字段里，而不是 data 载荷内。
+        switch (frame.event) {
+          case "message_stop":
+            return finish();
+          case "content_block_start": {
+            const block = chunk?.content_block;
+            if (block?.type === "tool_use") {
+              slots.set(chunk?.index ?? 0, {
+                id: block.id ?? "",
+                name: block.name ?? "",
+                arguments: "",
+              });
+            }
             break;
           }
-          const text = delta?.text;
-          if (typeof text === "string" && text.length > 0) {
-            content += text;
-            onDelta?.(text);
+          case "content_block_delta": {
+            // 必须先分 `delta.type`：工具参数的 JSON 碎片也在 `content_block_delta` 里，
+            // 不看类型就当成文本推给前端，用户会看到一堆 `{\"timez` 这样的半截 JSON。
+            const delta = chunk?.delta;
+            if (delta?.type === "input_json_delta") {
+              const slot = slots.get(chunk?.index ?? 0);
+              if (slot && typeof delta.partial_json === "string")
+                slot.arguments += delta.partial_json;
+              break;
+            }
+            const text = delta?.text;
+            if (typeof text === "string" && text.length > 0) {
+              content += text;
+              onDelta?.(text);
+            }
+            break;
           }
-          break;
+          case "message_delta": {
+            if (typeof chunk?.delta?.stop_reason === "string") stopReason = chunk.delta.stop_reason;
+            break;
+          }
+          case "error": {
+            const detail = chunk?.error?.message ?? JSON.stringify(chunk?.error);
+            throw await toProviderError(new Response(detail, { status: 502 }), {
+              provider: this.id,
+              model,
+            });
+          }
+          default:
+            break;
         }
-        case "message_delta": {
-          if (typeof chunk?.delta?.stop_reason === "string") stopReason = chunk.delta.stop_reason;
-          break;
-        }
-        case "error": {
-          const detail = chunk?.error?.message ?? JSON.stringify(chunk?.error);
-          throw await toProviderError(new Response(detail, { status: 502 }), {
-            provider: this.id,
-            model,
-          });
-        }
-        default:
-          break;
       }
+      // 上游没发 message_stop 就断流时，已收到的内容仍然有效。
+      return finish();
+    } catch (err) {
+      throw wrapStreamError(err, idle, { provider: this.id, model });
+    } finally {
+      // 定时器必须摘：留着一个未触发的句柄，测试进程会吊在那里不退出。
+      idle.dispose();
     }
-    // 上游没发 message_stop 就断流时，已收到的内容仍然有效。
-    return finish();
   }
 
   async #fetch(
     messages: ChatMessage[],
-    options: { model?: string; stream: boolean; tools?: ChatTool[]; signal?: AbortSignal },
+    options: {
+      model?: string;
+      stream: boolean;
+      tools?: ChatTool[];
+      signal?: AbortSignal;
+      /** 流式路径的空闲超时句柄；给了它就由它决定 `signal`，不再套总预算。 */
+      idle?: IdleTimeout;
+    },
   ): Promise<Response> {
+    const signal = options.idle ? options.idle.signal : withTimeout(options.signal, this.timeoutMs);
     try {
-      return await fetch(this.#endpoint(), {
-        ...this.#request(messages, options),
-        signal: withTimeout(options.signal, this.timeoutMs),
-      });
+      return await fetch(this.#endpoint(), { ...this.#request(messages, options), signal });
     } catch (err) {
       throw toNetworkError(err, { provider: this.id, model: options.model });
     }
@@ -435,9 +454,4 @@ function toAnthropicTools(tools: ChatTool[] | undefined): Record<string, unknown
     description: tool.description,
     input_schema: tool.parameters,
   }));
-}
-
-function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }

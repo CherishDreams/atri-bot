@@ -67,7 +67,10 @@ export interface ProviderSource {
   baseUrl: string;
   /** 明文密钥。配置接口在鉴权闸门内，会把它原样回给管理员。 */
   apiKey: string;
-  /** 超时（毫秒）。与实现类的 `timeoutMs` 同名同单位，不做秒/毫秒换算。 */
+  /**
+   * 超时（毫秒）。与实现类的 `timeoutMs` 同名同单位，不做秒/毫秒换算。
+   * 非流式是**总预算**，流式是**空闲上限**（连续无增量才断），理由见 README 的 provider 一节。
+   */
   timeoutMs: number;
 }
 
