@@ -773,6 +773,21 @@ export function createHttpServer(deps: HttpDeps) {
     },
   });
   /**
+   * `ws` 会把 **http server 的 `error` 事件转发成它自己的一次 `emit("error")`**
+   *（构造时它往 server 上挂 `error: (err) => this.emit('error', err)`）。
+   * 而 EventEmitter 对「没人听的 error 事件」的规矩是**抛出去**。
+   *
+   * 后果不是难看而是致命：那个转发监听器排在监听器队列**前面**，所以一次传输层错误
+   *（端口被占、绑定失败）会先在这里变成未捕获异常把进程打死，下面 `listen()` 里那条
+   * 中文错误根本没机会生成 —— 实测不加这条时，`app.start()` 既不 reject 也不 resolve，
+   * 进程只留下一条 `UNCAUGHT EADDRINUSE`。
+   * 所以这条必须挂在构造处，而不是等失败之后再补。
+   */
+  wss.on("error", (err) => {
+    logger.error(`WebSocket 服务出错: ${errorMessage(err)}`);
+  });
+
+  /**
    * 在线连接 -> **它握手时用的令牌**。
    *
    * 存令牌不是为了再鉴权一次，而是为了「一个浏览器登出」只影响它自己那批连接：
@@ -842,9 +857,38 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   return {
+    /**
+     * 绑定端口。失败**必须**是一条能被抓到的错误，而不是一次静默挂起。
+     *
+     * `server.listen()` 的失败（端口被占 —— 本服务最常见的启动故障）走的是**事件**而不是
+     * 返回值：实测 EADDRINUSE 在一个 tick 之后才到来，所以 `try/catch` 挡不住它（第一版这么
+     * 写过，catch 一次也没进）。只包 `listening` 回调的话这个 promise 永不 settle，
+     * `main().catch` 抓不到东西，最后由 Node 的默认出口把进程打死，留下一条英文裸栈
+     * （`EADDRINUSE` 加一堆内部帧）—— 既违反「用户可见字符串一律中文」，
+     * 也让测试里的端口冲突死得无法解释。
+     *
+     * 与上面那条 `wss.on("error")` 是一对：那条负责「事件有人接、不会被抛出去」，
+     * 这条负责「接到之后说成一句能读的中文」。缺了前者，这里的 `onError` 根本轮不到执行。
+     */
     listen: (port: number, host: string) =>
-      new Promise<void>((done) => {
-        server.listen(port, host, () => done());
+      // 形参刻意不叫 `resolve`/`reject`：`resolve` 与文件顶部从 `node:path` import 的那个
+      // 同名（`no-shadow` 告警，而本仓 `pnpm lint` 带 `--deny-warnings`，告警即失败）。
+      new Promise<void>((resolveListen, rejectListen) => {
+        const wrap = (err: unknown): Error =>
+          new Error(`无法监听 ${host}:${port}：${listenHint(err)}`, { cause: err });
+        const onListening = (): void => {
+          server.removeListener("error", onError);
+          resolveListen();
+        };
+        const onError = (err: Error): void => {
+          server.removeListener("listening", onListening);
+          rejectListen(wrap(err));
+        };
+        // 两条都挂上之后再发起绑定：反过来（先 listen 再挂）在两次调用之间就失败的场合
+        // 会两条都错过，于是又回到「永不 settle」。
+        server.once("listening", onListening);
+        server.once("error", onError);
+        server.listen(port, host);
       }),
     // 暴露实际绑定端口，使 `port: 0`（随机端口）可用于测试与并行启动。
     // `server.address()` 的类型是 `AddressInfo | string | null`，而这里只需要 TCP 那一支：
@@ -947,6 +991,19 @@ export function resolveStaticPath(staticDir: string, pathname: string): string |
 
   const base = staticDir.endsWith(sep) ? staticDir : staticDir + sep;
   return target.startsWith(base) ? target : null;
+}
+
+/**
+ * `listen` 失败的中文说法（拼在 `无法监听 …` 后面）。
+ *
+ * 只翻两种真会遇到的码，且各自给出下一步；其余原样带出 `err.message`。
+ * 写一张全量表只会诱人来加「理论上的错误」，而那时我们并没有对应的修法可给。
+ */
+function listenHint(err: unknown): string {
+  const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+  if (code === "EADDRINUSE") return "地址已被占用，用 ATRI_PORT 换一个端口，或先停掉占用它的进程";
+  if (code === "EACCES") return "没有权限监听该端口（低于 1024 需要特权）";
+  return errorMessage(err);
 }
 
 function statFile(filePath: string): boolean {
