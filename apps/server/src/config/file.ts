@@ -17,7 +17,15 @@
  * 而**读取与校验规则必须只有一份** —— 两处各写一遍，就会有其中一处少掉某条检查
  * （`loadConfig()` 曾经就是这么漏掉「顶层必须是对象」的，见它的提交正文）。
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { errorMessage } from "#core/errors.ts";
 
@@ -178,14 +186,44 @@ export function readConfigFile(root: string): FileConfig {
   return readConfigFileAt(configFilePath(root));
 }
 
-/** 写入配置文件，并尽量收紧权限（口令与密钥都在里面）。 */
+/**
+ * 写入配置文件：先写**同目录**的临时文件、收紧权限，再 `renameSync` 顶替。并尽量收紧权限
+ * （口令与密钥都在里面）。
+ *
+ * 为什么不是 `writeFileSync(filePath, …)` 一步到位：那是**截断后重写**。进程在写的中途被
+ * kill、磁盘写满（ENOSPC）、掉电，留在原地的就是半截 JSON。而坏配置的既定语义是「启动即失败」
+ * （见 `readConfigFileAt`），于是那半截文件把整份配置档永久锁死在 failed（所有作用域端点 503），
+ * bootstrap 那一份更是让整个服务起不来 —— 而且没有 `.bak` 可回。
+ * `rename` 在同一文件系统内是原子的：观察者要么看到旧的完整文件，要么看到新的完整文件。
+ *
+ * 临时文件必须落在同一个目录：跨文件系统的 `rename` 既不原子，POSIX 还会给 EXDEV。
+ * 名字用固定的 `.tmp` 而不是带 pid 的随机后缀 —— 本进程的写全是同步的（不存在两个写者），
+ * 而「一个数据目录只跑一个实例」是 README 已经写死的部署前提。
+ */
 export function writeConfigFileAt(filePath: string, config: FileConfig): string {
-  writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  const tmpPath = `${filePath}.tmp`;
   try {
-    // Windows 等不支持 POSIX 权限的环境：忽略即可。
-    chmodSync(filePath, 0o600);
-  } catch {
-    /* 忽略 */
+    // `mode` 只在**创建**时生效；随后的 rename 换掉的是目录项，所以最终文件的权限就是这一份。
+    // 顺带得到一个期望之外的副作用：一个历史上 0644 的配置文件，在被写过一次之后就是 0600 了。
+    writeFileSync(tmpPath, `${JSON.stringify(config, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    try {
+      // Windows 等不支持 POSIX 权限的环境：忽略即可。
+      chmodSync(tmpPath, 0o600);
+    } catch {
+      /* 忽略 */
+    }
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    // 失败的残留要清，但清不掉绝不能把原始失败盖过去 —— 所以内层整个忽略。
+    try {
+      rmSync(tmpPath, { force: true });
+    } catch {
+      /* 忽略：真正的原因在 cause 里 */
+    }
+    throw new Error(`写入 ${filePath} 失败：${errorMessage(err)}`, { cause: err });
   }
   return filePath;
 }

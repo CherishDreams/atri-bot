@@ -26,6 +26,11 @@ pnpm-debug.log*
 
 # 本地配置：未配置管理员密码时会把自动生成的口令写进这里，绝不能入库
 atri.config.json
+# 原子写的临时文件（`writeConfigFileAt` 先写 `<目标>.tmp` 再 rename）。正常路径下它不会存在，
+# 但一次失败的写或掉电会把它留在原地 —— 而它里面是**完整的**口令与明文密钥。
+# 这里必须显式忽略：本文件忽略的是**精确名** `atri.config.json`，多个 `.tmp` 就成了
+# 「未跟踪但也不忽略」，一次顺手 `git add -A` 就把口令提交进版本库。
+atri.config.json.tmp
 
 # 运行时数据与本地状态
 data/
