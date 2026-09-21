@@ -23,7 +23,7 @@ import {
 } from "./http.ts";
 import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from "./auth.ts";
 import { errorMessage, errorStack, statusForError, ApiError } from "#core/errors.ts";
-import { SESSION_BUSY_MESSAGE } from "#core/session/lock.ts";
+import { SESSION_BUSY_MESSAGE, SESSION_BUSY_DELETE_MESSAGE } from "#core/session/lock.ts";
 
 /**
  * provider 实例在 `GET /providers` 里的元素：磁盘条目 + 这一条路由额外补上的运行时标注。
@@ -276,6 +276,12 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   router.delete(`${API_PREFIX}/sessions/:id`, async (_req, res, params) => {
+    // 判据与 `profiles.remove` 同一条，只是方向反过来：那里查「这个配置档占着任何会话」，
+    // 这里查「这个会话正被占着」。不查的后果是那一轮之后的每次 `#record` 都落到
+    // `appendMessage` 的 404（会话已经没了），流式端点以一个 error 帧收场，
+    // 而已经生成的那半轮无处可查 —— 用户看到的是一次莫名其妙的失败，
+    // 实际是他自己在它跑着的时候把地基抽掉了。
+    if (lock.has(params.id)) return sendError(res, 409, SESSION_BUSY_DELETE_MESSAGE);
     const ok = sessions.delete(params.id);
     // 失败时回标准错误体而不是 `{ deleted: false }`：404 配一个成功形状的身体，
     // 客户端只能靠状态码猜，而规格里这个分支声明的是 `{ error }`。

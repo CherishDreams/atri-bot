@@ -284,3 +284,67 @@ test("非流式端点：客户端中途断开时中断上游并释放会话锁",
     }
   }
 });
+
+/**
+ * 删除与「一轮正在进行」的冲突。
+ *
+ * 这条查的是**判据漏了半边**：`profiles.remove` 一直查锁（「这个档占着任何会话」），
+ * 而 `DELETE /sessions/:id` 以前不查（「这个会话正被占着」）—— 于是删掉一个正在跑的会话，
+ * 那一轮之后的每次落库都会落到「会话不存在」，流式端点以一个 error 帧收场，
+ * 已经生成的半轮无处可查。症状与「同会话并发」那两条不同：不是排队，是**内容凭空消失**。
+ */
+test("删除正在进行中的会话：409 且会话仍在，这一轮结束后才删得掉", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atri-session-delete-busy-"));
+  const upstream = await startHoldingUpstream();
+  const app = await createApp(
+    makeTestConfig({
+      root,
+      providers: { stub: { type: "openai", baseUrl: upstream.baseUrl, models: ["m"] } },
+    }),
+  );
+  await app.start();
+  const origin = `http://127.0.0.1:${app.address().port}`;
+  t.after(async () => {
+    await app.stop();
+    await upstream.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const cookie = await login(origin);
+  const created = await fetch(`${origin}/api/v1/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ title: "删除与占用" }),
+  });
+  assert.equal(created.status, 201);
+  const { session } = (await created.json()) as { session: Session };
+  const url = `${origin}/api/v1/sessions/${session.id}`;
+
+  const round = fetch(`${url}/messages?profile=default`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ content: "第一条", model: "m" }),
+  });
+  await upstream.entered;
+
+  const busy = await fetch(url, { method: "DELETE", headers: { cookie } });
+  assert.equal(busy.status, 409, "会话正被占着时必须拒绝删除");
+  const busyBody = (await busy.json()) as Record<string, unknown>;
+  assert.match(String(busyBody.error), /还没结束/);
+
+  // 反面守卫：409 这一支不许顺手把会话删掉。「已被拒」与「删了但报错」在状态码上分不出来，
+  // 只能回头看那个会话还在不在 —— 而那正是用户下一步会做的事。
+  const still = await fetch(url, { headers: { cookie } });
+  assert.equal(still.status, 200, "被拒的删除不许动到会话本身");
+  await still.body?.cancel();
+
+  upstream.release();
+  const done = await round;
+  assert.equal(done.status, 200);
+  await done.body?.cancel();
+
+  const deleted = await fetch(url, { method: "DELETE", headers: { cookie } });
+  assert.equal(deleted.status, 200, "锁释放之后同一个会话就该删得掉");
+  const gone = await fetch(url, { headers: { cookie } });
+  assert.equal(gone.status, 404, "删除必须真的生效，否则这条 200 是在说谎");
+});

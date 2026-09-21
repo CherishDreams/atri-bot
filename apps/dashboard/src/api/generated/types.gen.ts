@@ -579,6 +579,10 @@ export type DeleteSessionErrors = {
      * 资源不存在
      */
     404: ApiError;
+    /**
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     */
+    409: ApiError;
 };
 
 export type DeleteSessionError = DeleteSessionErrors[keyof DeleteSessionErrors];
@@ -678,7 +682,7 @@ export type SendMessageErrors = {
      */
     404: ApiError;
     /**
-     * 冲突，两种情形共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行（同会话串行，见 `core/session/lock.ts` 的 `SessionLock`，它由组合根构造并注入每个引擎，**不属于任何一份配置档**）；② 要下线的配置档还占着某个会话，等那轮对话结束后再来。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
     /**
@@ -735,7 +739,7 @@ export type StreamMessageErrors = {
      */
     404: ApiError;
     /**
-     * 冲突，两种情形共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行（同会话串行，见 `core/session/lock.ts` 的 `SessionLock`，它由组合根构造并注入每个引擎，**不属于任何一份配置档**）；② 要下线的配置档还占着某个会话，等那轮对话结束后再来。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
     /**
@@ -1548,7 +1552,7 @@ export type CreateProfileErrors = {
      */
     401: ApiError;
     /**
-     * 冲突，两种情形共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行（同会话串行，见 `core/session/lock.ts` 的 `SessionLock`，它由组合根构造并注入每个引擎，**不属于任何一份配置档**）；② 要下线的配置档还占着某个会话，等那轮对话结束后再来。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
 };
@@ -1588,7 +1592,7 @@ export type DeleteProfileErrors = {
      */
     404: ApiError;
     /**
-     * 冲突，两种情形共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行（同会话串行，见 `core/session/lock.ts` 的 `SessionLock`，它由组合根构造并注入每个引擎，**不属于任何一份配置档**）；② 要下线的配置档还占着某个会话，等那轮对话结束后再来。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
 };
