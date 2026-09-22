@@ -18,7 +18,12 @@ import { AdapterManager } from "./adapters/manager.ts";
 import { createHttpServer } from "./api/server.ts";
 import type { ProfileBundle, ProfileDirectory } from "./api/http.ts";
 import type { AppConfig } from "./config/index.ts";
-import { ensurePrivateDir, readConfigFile } from "./config/file.ts";
+import {
+  configFilePath,
+  ensurePrivateDir,
+  ensurePrivateFile,
+  readConfigFile,
+} from "./config/file.ts";
 import {
   DEFAULT_PROFILE_ID,
   assertProfileId,
@@ -80,6 +85,10 @@ export async function createApp(config: AppConfig) {
   ensurePrivateDir(profilesDir);
   const seedPath = profileConfigPath(profilesDir, DEFAULT_PROFILE_ID);
   const bootstrap = readConfigFile(config.root);
+  // 里面躺着口令，seed 之后还可能躺着已经失效但仍是明文的 `apiKey`。这一轮之后
+  // bootstrap 文件唯一的写入者是「首次生成口令」那条路径，老部署里 0644 的那一份
+  // 再没有别的动作会去收紧它 —— 所以收紧这一步必须是**启动**做的，而不是等某次保存。
+  ensurePrivateFile(configFilePath(config.root));
   const moved = seedProfile(profilesDir, DEFAULT_PROFILE_ID, bootstrap);
   if (moved !== null) {
     logger.info(
@@ -95,7 +104,8 @@ export async function createApp(config: AppConfig) {
     if (leftover.length > 0) {
       logger.warn(
         `atri.config.json 里还留着 ${leftover.join(" / ")}，但配置档已经存在 —— ` +
-          `这些段**不再生效**，真源是 ${seedPath}。确认无误后可以把它们从 atri.config.json 里删掉。`,
+          `这些段**不再生效**，真源是 ${seedPath}。其中可能仍有明文的 provider apiKey：` +
+          `确认无误后把它们从 atri.config.json 里删掉。`,
       );
     }
   }
@@ -251,13 +261,19 @@ export async function createApp(config: AppConfig) {
     return bundle;
   }
 
-  /** 卸载并摘掉一份配置档。**不删文件、不删它的插件数据目录**。 */
+  /**
+   * 卸载并摘掉一份配置档。**不删文件、不删它的插件数据目录**。
+   *
+   * 摘登记必须**无条件**发生。`failed` 的档在 `bundles` 里根本没有条目（`openProfile` 的
+   * catch 只往 `states` 写了一条），所以「拿不到 bundle 就早退」会让那条登记永远留在目录里：
+   * 症状是 `DELETE /profiles/:id` 回 200 `{removed:true}`，刷新之后它还在，
+   * 而指向它的作用域请求照旧不可用 —— 回成功、界面回到原样，是本仓最恨的一种形状。
+   */
   async function closeProfile(id: string): Promise<void> {
     const bundle = bundles.get(id);
-    if (!bundle) return;
     bundles.delete(id);
     states.delete(id);
-    await bundle.plugins.unloadAll();
+    await bundle?.plugins.unloadAll();
   }
 
   for (const id of listProfileDirs(profilesDir)) {

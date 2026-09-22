@@ -150,6 +150,24 @@ export function ensurePrivateDir(dir: string): void {
 }
 
 /**
+ * 把**已存在**的配置文件收到 0600；不存在时什么都不做 —— 这个函数绝不创造文件。
+ *
+ * 为什么需要多这一处：`atri.config.json` 里躺着 `auth.adminPassword`，而 seed 之后还可能有
+ * 一批**已经失效但仍是明文**的 `providerSources.*.apiKey`。把运行期配置搬进配置档之后，
+ * bootstrap 文件唯一的写入者只剩「首次生成口令」那一条路径 —— 于是老部署里那份 0644 的文件
+ * 再也没有任何动作去收紧它（以前第一次保存 provider 配置会顺带 chmod，那是一条没人指望过的巧合）。
+ * `data/` 那一侧有目录 0700 兜底（见 `ensurePrivateDir`），部署级文件没有这层兜底。
+ */
+export function ensurePrivateFile(filePath: string): void {
+  if (!existsSync(filePath)) return;
+  try {
+    chmodSync(filePath, 0o600);
+  } catch {
+    /* 不支持 POSIX 权限的环境：忽略 */
+  }
+}
+
+/**
  * 读取指定路径的配置文件。
  *
  * 文件不存在返回 `{}`（首次启动、或全部配置都来自环境变量），

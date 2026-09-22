@@ -16,7 +16,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SERVER_PORT } from "@atri/shared";
 import { loadConfig } from "#config/index.ts";
-import { configFilePath, writeConfigFileAt } from "#config/file.ts";
+import { configFilePath, ensurePrivateFile, writeConfigFileAt } from "#config/file.ts";
 
 /**
  * `loadConfig()` 的**失败语义**。
@@ -192,4 +192,31 @@ test("已存在的 0644 配置文件，被写过一次之后就收紧成 0600", 
   writeConfigFileAt(filePath, { port: 6185 });
 
   assert.equal(statSync(filePath).mode & 0o777, 0o600, "写过一次之后必须不再是别人可读的");
+});
+
+/**
+ * `ensurePrivateFile()`：启动时收紧部署级配置文件的权限。
+ *
+ * 需要它是因为「搬进配置档」这一轮把 bootstrap 文件的写入者只剩下了「首次生成口令」那一条
+ * 路径 —— 老部署里那份 0644 的文件（里面有口令，可能还有 seed 之后失效但仍明文存在的
+ * `apiKey`）再没有任何动作会去 chmod 它。以前那次收紧是一条没人指望过的巧合。
+ */
+test("ensurePrivateFile：已存在的文件收到 0600，不存在的绝不创造", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "atri-mode-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  // 反面那一半必须先钉住：这个函数如果被写成「mkdir + chmod」，它会凭空造出一个空配置文件，
+  // 而 `readConfigFileAt` 对空文件的读法与「文件不存在」不同 —— 症状是首次启动少一次口令生成。
+  const absent = join(dir, "atri.config.json");
+  ensurePrivateFile(absent);
+  assert.equal(existsSync(absent), false, "文件不存在时什么都不该做");
+
+  const loose = join(dir, "loose.json");
+  writeFileSync(loose, "{}\n", "utf8");
+  chmodSync(loose, 0o644); // `mode` 只在创建时生效，这里显式定住前提
+  assert.equal(statSync(loose).mode & 0o777, 0o644, "前提：起始是 0644");
+
+  ensurePrivateFile(loose);
+  assert.equal(statSync(loose).mode & 0o777, 0o600);
+  assert.equal(readFileSync(loose, "utf8"), "{}\n", "收紧权限不许动内容");
 });

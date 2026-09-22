@@ -10,7 +10,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "#app.ts";
@@ -28,6 +36,7 @@ import {
   seedProfile,
   writeProfileConfig,
 } from "#config/profiles.ts";
+import { API_PREFIX } from "@atri/shared";
 import { makeTestConfig } from "./helpers/config.ts";
 
 function tmpRoot(t: TestContext, prefix: string): string {
@@ -184,4 +193,102 @@ test("端到端：首次启动把 bootstrap 的 provider seed 进配置档，之
   await second.start();
   t.after(() => second.stop());
   assert.equal(readFileSync(profilePath, "utf8"), before, "第二次启动又跑了一遍 seed");
+});
+
+/**
+ * failed 的配置档必须**真的**能被下线。
+ *
+ * `closeProfile` 以前在 `bundles` 里没有条目时直接早退，而 `failed` 的档根本没有 bundle
+ * （`openProfile` 的 catch 只往 `states` 写一条登记），于是那条登记永远留在目录里：
+ * `DELETE /profiles/:id` 回 200 `{removed:true}`，刷新之后它还在，指向它的作用域请求
+ * 照旧不可用。「回成功、界面回到原样」是本仓最恨的一种形状。
+ *
+ * 这条只能在 HTTP 层证 —— 它关系到装配里那两个 Map 的配对，纯文件层测试看不见登记。
+ * 此前没有任何测试删过 failed 档，所以这个洞是从一开始就没被看见的。
+ */
+test("failed 的配置档能删掉：DELETE 之后它不再出现在列表里", async (t) => {
+  const root = tmpRoot(t, "atri-profiles-remove-failed-");
+  const dataDir = join(root, "data");
+  writeFileSync(
+    configFilePath(root),
+    JSON.stringify({ logLevel: "error", auth: { adminUser: "admin", adminPassword: "pw" } }),
+    "utf8",
+  );
+  // 预置一份读不出来的档：先建目录再写坏 JSON（与「一份配置档坏了不拖垮别的」同一条理由 ——
+  // 用 `writeProfileConfig` 就等于让被测函数替我把目录和权限都办好）。
+  const profiles = profilesRoot(dataDir);
+  mkdirSync(profileDir(profiles, "broken"), { recursive: true });
+  writeFileSync(profileConfigPath(profiles, "broken"), "{ 这不是 JSON", "utf8");
+
+  const app = await createApp(makeTestConfig({ root, dataDir }));
+  await app.start();
+  t.after(() => app.stop());
+  const origin = `http://127.0.0.1:${app.address().port}`;
+
+  const login = await fetch(`${origin}${API_PREFIX}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "pw" }),
+  });
+  assert.equal(login.status, 200);
+  // `split(";")[0]` 在 `noUncheckedIndexedAccess` 下是 `string | undefined`，
+  // 而 `HeadersInit` 不收 `{ cookie: string | undefined }` —— 给一个空串兜底，
+  // 后面的断言会用「未登录」的 401 把「没拿到 Cookie」这件事自己报出来。
+  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
+  const list = async (): Promise<{ id: string; status: string }[]> => {
+    const res = await fetch(`${origin}${API_PREFIX}/profiles`, { headers: { cookie } });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { profiles: { id: string; status: string }[] };
+    return body.profiles;
+  };
+
+  // 前提：它确实以 failed 的身份在列表里。不先钉这一句，后面那句「删掉了」
+  // 就可能只是在测一个从来没出现过的目录。
+  assert.deepEqual(
+    (await list()).filter((p) => p.id === "broken").map((p) => p.status),
+    ["failed"],
+  );
+
+  const removed = await fetch(`${origin}${API_PREFIX}/profiles/broken`, {
+    method: "DELETE",
+    headers: { cookie },
+  });
+  assert.equal(removed.status, 200);
+
+  // 本条的落点：状态码说「删掉了」，就得真的看不见。
+  assert.deepEqual(
+    (await list()).map((p) => p.id),
+    [DEFAULT_PROFILE_ID],
+    "DELETE 回 200 之后 failed 的配置档必须不再被登记",
+  );
+});
+
+/**
+ * 启动把 bootstrap 文件收紧到 0600。
+ *
+ * `config.test.ts` 里那条证的是函数本身；这一条证的是**装配里真的调了它** ——
+ * 少调一次的形态与根本没写这个函数一模一样：文件里躺着口令，以及 seed 之后失效、
+ * 但仍以明文留在磁盘上的 `providerSources.*.apiKey`，而它 0644。
+ * 这里刻意不走 `runApp`：那会把「文件的起始权限」交给进程的 umask，
+ * 在 umask 是 0077 的机器上起始就已经是 0600，断言会空跑。
+ */
+test("启动后 atri.config.json 是 0600，即使它原来是 0644", async (t) => {
+  const root = tmpRoot(t, "atri-profiles-mode-");
+  const bootstrapPath = configFilePath(root);
+  writeFileSync(bootstrapPath, "{}\n", "utf8");
+  chmodSync(bootstrapPath, 0o644);
+  assert.equal(statSync(bootstrapPath).mode & 0o777, 0o644, "前提：起始是 0644");
+
+  const app = await createApp(
+    makeTestConfig({ root, dataDir: join(root, "data"), staticDir: join(root, "nope") }),
+  );
+  await app.start();
+  t.after(() => app.stop());
+
+  assert.equal(
+    statSync(bootstrapPath).mode & 0o777,
+    0o600,
+    "启动必须收紧部署级文件：里面有口令，也可能还有失效的明文 apiKey",
+  );
 });

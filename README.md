@@ -122,6 +122,9 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 服务端启动会生成一个随机口令、写进 `atri.config.json` 的 `auth.adminPassword`，
 并**在日志里打印一次**——那是拿到初始口令的唯一途径，请立即保存。
 `atri.config.json` 已被 `.gitignore` 忽略，因为它含有明文口令。
+服务端**每次启动**都会把这个文件收紧到 `0600`：它里面除了口令，还可能留着一次性 seed
+搬走之后**失效但仍是明文**的 `providerSources.*.apiKey`（那几段现在只是残留，界面上改
+provider 配置不会再写这个文件，所以收紧不能等某次保存，只能在启动做）。
 
 ```bash
 pnpm dev
