@@ -77,6 +77,17 @@ export interface PluginStorage {
    * 而注入让这条边界在签名上看得见。
    */
   persistEnabled?: (id: string, enabled: boolean) => void;
+  /**
+   * 把插件自己的数据目录收到 `0700`（不存在时创建）。**由组合根注入**，必填。
+   *
+   * 与上面 `persistEnabled` 同一条理由：分层规则没有检查在守 `plugins/ → config/` 这条边，
+   * 而 `ensurePrivateDir` 会 `mkdir` + `chmod`，不是 `errorMessage` / `ApiError` 那种叶子。
+   * 以前 `plugins/context.ts` 直接 import 它，于是同一层里出现两种形状 ——
+   * 写入是注入的、建目录是硬 import 的。必填（而不是可选）的理由与 `filePath: string | null`
+   * 那条相同：可选会让「忘了传」和「故意不做」长得一样，而漏掉的后果是
+   * 插件的 token 与缓存落在一个 0755 的目录里，且没有任何报错。
+   */
+  ensurePrivateDir: (dir: string) => void;
 }
 
 /**
@@ -322,6 +333,7 @@ export class PluginManager {
         // 只给根，插件经 `ctx.dataDir` 看到的是根目录下**它自己那一个**子目录；
         // `dataDir` 本体（里面有 `sessions.sqlite`）始终不外传，理由见 `PluginRuntimeConfig`。
         dataRoot: this.#storage.dataRoot,
+        ensurePrivateDir: this.#storage.ensurePrivateDir,
       });
 
       try {

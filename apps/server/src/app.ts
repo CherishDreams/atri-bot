@@ -204,6 +204,9 @@ export async function createApp(config: AppConfig) {
       // 启用状态写回**这份档**的文件。注入而不是让 `plugins/` 去 import 配置写入器：
       // 分层规则没有检查在守这一条边，而 `list_plugins` 收访问器已经是仓内先例。
       persistEnabled: (pluginId, enabled) => setProfilePluginEnabled(path, pluginId, enabled),
+      // 「建插件数据目录并收到 0700」也走注入：`plugins/` 只依赖注入给它的 ctx，
+      // 不去 import `config/` 里那个会动文件系统的实现。与上面 `persistEnabled` 同一形状。
+      ensurePrivateDir,
     });
     for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) {
       tools.register(tool);

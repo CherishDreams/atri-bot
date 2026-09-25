@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginManager, pluginRuntimeConfig } from "#plugins/manager.ts";
 import { createApp } from "#app.ts";
+import { ensurePrivateDir } from "#config/file.ts";
 import type { AppConfig } from "#config/index.ts";
 import { DEFAULT_PROFILE_ID, profileConfigPath, profilesRoot } from "#config/profiles.ts";
 import type { Logger } from "#core/logger.ts";
@@ -150,6 +151,7 @@ test("插件声明的同名键只改写它自己那份副本", async (t) => {
   // 而 dataRoot 只进框架内部、连视图都不给（`ctx.dataDir` 才是插件能碰到的那一个目录）。
   const mgr = new PluginManager(pluginRuntimeConfig(config), silentLogger(), {
     dataRoot: join(config.dataDir, "plugins"),
+    ensurePrivateDir,
   });
   await mgr.loadAll();
   assert.deepEqual(

@@ -1,7 +1,15 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PluginInfo } from "@atri/shared";
@@ -10,6 +18,7 @@ import type { PluginView } from "#plugins/manager.ts";
 import type { Logger } from "#core/logger.ts";
 import { ApiError } from "#core/errors.ts";
 import { createApp } from "#app.ts";
+import { ensurePrivateDir } from "#config/file.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**
@@ -90,7 +99,10 @@ function silentLogger(): Logger {
 
 /** 起一个只有管理器的管理器；`pluginDirs` 由调用方决定（`shared.config` 那条用例要读它）。 */
 function makeManager(t: TestContext, pluginDirs: string[] = []) {
-  return new PluginManager({ pluginDirs }, silentLogger(), { dataRoot: useDataRoot(t) });
+  return new PluginManager({ pluginDirs }, silentLogger(), {
+    dataRoot: useDataRoot(t),
+    ensurePrivateDir,
+  });
 }
 
 /**
@@ -264,6 +276,7 @@ test("shared.config 与 ctx.config 都是副本，插件改不到管理器的配
   );
   const mgr = new PluginManager({ pluginDirs: ["/原样"] }, silentLogger(), {
     dataRoot: useDataRoot(t),
+    ensurePrivateDir,
   });
   await mgr.load(sharedDir);
   await mgr.load(ctxDir);
@@ -394,7 +407,7 @@ test("ctx.dataDir 惰性创建，路径由 id 决定", async (t) => {
   `,
   );
 
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot, ensurePrivateDir });
   await mgr.load(writer);
 
   // 键是 `id`，不是磁盘目录名 —— 目录名可以被用户改，而数据不该跟着一起丢。
@@ -423,7 +436,7 @@ test("卸载与换目录都不丢数据：目录的键是 id，不是插件所�
     export default { id: "p7", setup(ctx) { writeFileSync(ctx.dataDir + "/note.json", "第一份"); } };
   `,
   );
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot, ensurePrivateDir });
   await mgr.load(first);
   assert.equal(readFileSync(note, "utf8"), "第一份");
 
@@ -469,7 +482,10 @@ test("id 不能当路径用时拒绝加载，且不创建任何东西", async (t
       export default { id: ${JSON.stringify(bad)}, setup(ctx) { globalThis.__p9_setup = 1; } };
     `,
     );
-    const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
+    const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
+      dataRoot,
+      ensurePrivateDir,
+    });
     // id 会**直接成为** `<dataDir>/plugins/<id>` 的路径组件，所以它在登记那一刻就被拒，
     // 而不是等插件自己去碰 `ctx.dataDir` 才发现：后者意味着一份 id 不合规的插件已经进了
     // 登记表、进了日志、进了 `list_plugins` 给模型看的文本（含 `\n` 的 id 还能伪造日志行）。
@@ -705,7 +721,7 @@ test("两个目录声明同一个 id 时，后来那个被拒绝 —— 数据�
     export default { id: "shared", name: "劫持者", version: "1", setup() {} };
   `,
   );
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot });
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot, ensurePrivateDir });
   await mgr.load(victim);
 
   // `ctx.dataDir` 的路径就是 `<dataRoot>/<id>`，id 又是插件**自报**的：不拒绝第二次声明，
@@ -773,8 +789,14 @@ test("两份配置档各求值一次插件模块：模块级状态不跨实例�
   const dataA = useDataRoot(t);
   const dataB = useDataRoot(t);
   // 两个管理器、同一份安装目录、各自的数据根 —— 这就是多配置档下的常态形状。
-  const mgrA = new PluginManager({ pluginDirs: [install] }, silentLogger(), { dataRoot: dataA });
-  const mgrB = new PluginManager({ pluginDirs: [install] }, silentLogger(), { dataRoot: dataB });
+  const mgrA = new PluginManager({ pluginDirs: [install] }, silentLogger(), {
+    dataRoot: dataA,
+    ensurePrivateDir,
+  });
+  const mgrB = new PluginManager({ pluginDirs: [install] }, silentLogger(), {
+    dataRoot: dataB,
+    ensurePrivateDir,
+  });
   await mgrA.loadAll();
   await mgrB.loadAll();
 
@@ -819,6 +841,7 @@ test("配置档的启用清单：默认开，disabledIds 里的那些不跑 setu
   const dataRoot = useDataRoot(t);
   const off = new PluginManager({ pluginDirs: [install] }, silentLogger(), {
     dataRoot,
+    ensurePrivateDir,
     disabledIds: ["onandoff"],
   });
   await off.loadAll();
@@ -838,4 +861,41 @@ test("配置档的启用清单：默认开，disabledIds 里的那些不跑 setu
     { id: "onandoff", unloaded: true },
     "disabled 记录应该可以卸载",
   );
+});
+
+/**
+ * `ctx.dataDir` 建出来的目录必须是 0700，已存在的宽松权限也要被收紧。
+ *
+ * 这条是给「注入」这个形状配的：`ensurePrivateDir` 现在是必填参数，忘记传会编译不过，
+ * 但**传一个什么都不做的函数**在类型上同样合法 —— 而它的后果是插件存的 token、缓存与
+ * 用户数据落在一个 0755 的目录里，且一路没有任何报错。所以行为本身要在真链路上钉一次，
+ * 不能只信签名。
+ *
+ * 起始权限由测试自己 `chmod` 定住，而不是依赖 umask：在 umask 0077 的机器上
+ * 「新建目录」本来就是 0700，那样断言会空跑（与 `config.test.ts` 里那条同一个理由）。
+ */
+test("ctx.dataDir 的目录是 0700，宽松的旧目录也会被收紧", async (t) => {
+  const dataRoot = useDataRoot(t);
+  const own = join(dataRoot, "pmode");
+  mkdirSync(own, { recursive: true });
+  chmodSync(own, 0o755);
+  assert.equal(statSync(own).mode & 0o777, 0o755, "前提：起始是 0755");
+
+  const plugin = await makePlugin(
+    t,
+    `
+    import { writeFileSync } from "node:fs";
+    export default { id: "pmode", setup(ctx) { writeFileSync(ctx.dataDir + "/token.txt", "t"); } };
+  `,
+  );
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot, ensurePrivateDir });
+  await mgr.load(plugin);
+
+  assert.equal(
+    statSync(own).mode & 0o777,
+    0o700,
+    "插件数据目录里可能是 token：保护必须落在目录上，且每次访问都要成立",
+  );
+  assert.equal(readFileSync(join(own, "token.txt"), "utf8"), "t", "收紧权限不许动内容");
+  await mgr.unloadAll();
 });

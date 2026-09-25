@@ -2,7 +2,6 @@ import { join } from "node:path";
 import type { Logger } from "#core/logger.ts";
 import type { PluginInfo } from "@atri/shared";
 import { ApiError, errorMessage } from "#core/errors.ts";
-import { ensurePrivateDir } from "#config/file.ts";
 
 /**
  * 传给插件上下文的配置：插件可见的运行期配置（`PluginRuntimeConfig` 那份白名单视图）
@@ -38,6 +37,12 @@ export interface PluginContextDeps {
    * 任一段用户手写的 JS）。
    */
   dataRoot: string;
+  /**
+   * 建目录并把它收到 `0700`。**由组合根经 `PluginManager` 注入**（见 `PluginStorage`）：
+   * 这个函数会 `mkdir` + `chmod`，不是 `ApiError` 那种叶子，而 `plugins/` 的规矩是
+   * 「只依赖注入给它的 ctx」—— 同层的 `persistEnabled` 早就按这条办了，这里不该是例外。
+   */
+  ensurePrivateDir: (dir: string) => void;
 }
 
 /**
@@ -92,18 +97,20 @@ export class PluginContext {
   #disposed = false;
   #peers: () => PluginInfo[];
   #dataRoot: string;
+  #ensurePrivateDir: (dir: string) => void;
   #dataDir?: string;
 
   id: string;
   logger: Logger;
   config: PluginContextConfig;
 
-  constructor({ id, logger, config, plugins, dataRoot }: PluginContextDeps) {
+  constructor({ id, logger, config, plugins, dataRoot, ensurePrivateDir }: PluginContextDeps) {
     this.id = id;
     this.logger = logger;
     this.config = config;
     this.#peers = plugins;
     this.#dataRoot = dataRoot;
+    this.#ensurePrivateDir = ensurePrivateDir;
   }
 
   /** 是否已卸载。卸载后调用 effect 会直接报错，避免泄漏。 */
@@ -139,9 +146,9 @@ export class PluginContext {
     assertPluginDirName(this.id);
     const dir = join(this.#dataRoot, this.id);
     // 里面可能有 token、缓存与用户数据：与配置文件（`config/file.ts`）、
-    // 会话库（`core/session/db.ts`）用同一份 `ensurePrivateDir`，而不是各写一遍
+    // 会话库（`core/session/db.ts`）共用同一份实现（由组合根注入），而不是各写一遍
     // 「mkdir + chmod」—— 三遍里必有一遍漏掉 `mode`，而漏掉的那条没人会 notice。
-    ensurePrivateDir(dir);
+    this.#ensurePrivateDir(dir);
     this.#dataDir = dir;
     return dir;
   }
