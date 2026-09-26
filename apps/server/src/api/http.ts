@@ -34,6 +34,16 @@ export interface ProfileBundle {
   providerConfig: ProviderConfigStore;
   /** 配置写成功后重建整张注册表，由组合根提供（见 `app.ts` 的 rebuildProviders）。 */
   reloadProviders: () => ProviderRegistry;
+  /**
+   * 最近一次装配里没加载成功的 provider（`id -> 中文原因`），由 `rebuildProviders()` 写。
+   *
+   * 存在的理由是不给 HTTP 层第二次装配的机会：它以前在这里自己调一次
+   * `createProviders()` 来「诊断」，于是那条路径不传 logger（工厂里的 info 每次
+   * `GET /providers` 都被丢掉）、重读一遍 `process.env` 的密钥，而且与真正的装配
+   * 迟早对同一个字段给出不同答案 —— architecture.md 说 `rebuildProviders()` 是唯一
+   * 装配路径，那么错误也只能有这一个来源。
+   */
+  providerLoadErrors: () => Map<string, string>;
   tools: ToolRegistry;
   toolConfig: ToolConfigStore;
   plugins: PluginManager;

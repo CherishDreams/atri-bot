@@ -423,10 +423,8 @@ export function createHttpServer(deps: HttpDeps) {
     // 单独跑一遍工厂，只为拿到「谁没加载成功、为什么」——注册表里没有这个信息，
     // 而配置页恰恰最需要它。注意取的是 `errors` 不是 `providers`：后者是**成功
     // 构造出来的实例**，键名写反了会得到一个恒空的错误表，于是失败原因永远不显示。
-    const { errors } = createProviders(providerConfig.providerEntries(), {
-      sources: providerConfig.sourceEntries(),
-    });
-    const failedById = new Map(errors.map((e) => [e.id, e.message]));
+    // 错误取自装配那一次（见 `ProfileBundle.providerLoadErrors`），不在这里重跑工厂。
+    const failedById = bundle.providerLoadErrors();
     const defaultId = providerConfig.defaultId;
 
     const list: ProviderListItem[] = providerConfig.providers.map((rawEntry) => {

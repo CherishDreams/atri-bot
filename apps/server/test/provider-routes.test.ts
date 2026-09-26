@@ -501,3 +501,53 @@ test("路由：存储故障回固定文案的 500，不把配置文件的路径�
   // 坏文件仍在原地，没被「顺手」覆盖掉 —— 覆盖等于把用户的其它设置抹了。
   assert.equal(readFileSync(app.profilePath, "utf8"), broken);
 });
+
+/**
+ * 补上被引用的源之后，那条旧错误必须从 `GET /providers` 上消失。
+ *
+ * 这条钉的是「错误表**整份重写**而不是累加」。它以前不存在是因为错误由 HTTP 层现算
+ *（在请求里再跑一遍工厂），而那个形状有它自己的问题（见 `ProfileBundle.providerLoadErrors`）。
+ * 改成由装配那一次记下错误之后，漏掉 `clear()` 的形态是：配置修好了、注册表也重建了，
+ * 界面却继续挂着上一轮的「未找到 id 为「ghost」的 provider source」——
+ * 而这一句读起来像是「还没修好」，用户会照着它去检查一个已经正确的配置。
+ */
+test("引用不到源、修好、再禁用：禁用后的原因不许还是上一轮那句「未找到」", async (t) => {
+  const app = await startApp(t, {
+    providerSources: { s: { type: "openai", baseUrl: "https://example.invalid/v1", apiKey: "k" } },
+    providers: { p: { source: "ghost", model: "m" } },
+  });
+  t.after(() => app.stop());
+  const cookie = await login(app.origin);
+  const entry = async () =>
+    (await get(app.origin, cookie, "/providers")).body.providers.find((x) => x.id === "p");
+
+  const broken = await entry();
+  assert.ok(broken, "前提：引用不到源的条目也要列出来");
+  assert.equal(broken.loaded, false);
+  assert.match(String(broken.error), /未找到/);
+
+  // 先把源补上。这一步的重建**不再产出任何错误**，而 `p` 变成 `loaded: true` ——
+  // 于是错误表里的陈旧条目在这一刻是**看不见**的（`error` 只在 `loaded: false` 时输出）。
+  const created = await post(app.origin, cookie, "/provider-sources", {
+    id: "ghost",
+    type: "openai",
+    baseUrl: "https://example.invalid/v1",
+    apiKey: "k",
+  });
+  assert.equal(created.status, 201);
+  assert.equal((await entry()).loaded, true, "补上源之后这一条就该是已加载");
+
+  // 再把它禁用 —— 这才是能观察出「错误表是整份重写还是累加」的那一步：工厂对禁用的条目
+  // 不产出错误（只 log 一句「已禁用，跳过加载」），所以它 `loaded: false` 而**没有对应原因**。
+  // 如果上一步的陈旧条目还留着，这里回出去的就是「未找到 provider source」，
+  // 而那句话读起来像「还没修好」，用户会照着它去检查一个已经正确的配置。
+  assert.equal((await post(app.origin, cookie, "/providers/p", { enabled: false })).status, 200);
+  const disabled = await entry();
+  assert.ok(disabled);
+  assert.equal(disabled.loaded, false);
+  assert.doesNotMatch(
+    String(disabled.error),
+    /未找到/,
+    "重建之后的列表里不该再挂着上一轮那条「未找到 provider source」",
+  );
+});

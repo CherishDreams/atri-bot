@@ -137,9 +137,12 @@ export async function createApp(config: AppConfig) {
    * 而不是让整个服务起不来。
    */
   function makeRebuildProviders(bundle: MutableBundle) {
-    const { providers, providerConfig, profileId } = bundle;
+    const { providers, providerConfig, profileId, providerErrors } = bundle;
     return function rebuildProviders(): ProviderRegistry {
       providers.clear();
+      // 整份重写而不是累加：一次重建就是这批 provider 的**全部**失败事实。
+      // 留着上一轮的条目会让 `GET /providers` 给一条已经修好的 provider 配一句旧错误。
+      providerErrors.clear();
 
       const entries = providerConfig.providerEntries();
       const { providers: built, errors } = createProviders(entries, {
@@ -148,6 +151,8 @@ export async function createApp(config: AppConfig) {
       });
       for (const provider of built) providers.register(provider);
       for (const { id, message } of errors) {
+        // 同时留给 `GET /providers` —— 装配是唯一写它的地方（见 `MutableBundle.providerErrors`）。
+        providerErrors.set(id, message);
         logger.error(`配置档「${profileId}」的 provider「${id}」加载失败: ${message}`);
       }
 
@@ -178,6 +183,11 @@ export async function createApp(config: AppConfig) {
     profileId: string;
     providers: ProviderRegistry;
     providerConfig: ProviderConfigStore;
+    /**
+     * 最近一次装配里**没加载成功**的 provider：`id -> 中文原因`。
+     * 由 `rebuildProviders()` 整份重写（不是累加），所以它永远与注册表同源。
+     */
+    providerErrors: Map<string, string>;
   }
 
   /**
@@ -195,7 +205,8 @@ export async function createApp(config: AppConfig) {
     const tools = new ToolRegistry();
     // 传 getter 而不是 `plugins.list()` 的结果：此刻还没 `loadAll()`，而且插件能在运行期
     // 增删与启停，快照会让这颗工具继续说出装配那一刻的事实。
-    const shell: MutableBundle = { profileId: id, providers, providerConfig };
+    const providerErrors = new Map<string, string>();
+    const shell: MutableBundle = { profileId: id, providers, providerConfig, providerErrors };
     const plugins = new PluginManager(pluginRuntimeConfig(config), logger, {
       // 每个配置档自己的插件数据根。安装是全局的（`config.pluginDirs`），所以同一个插件 id
       // 会在每份档里各出现一次 —— 数据根不分家的话，两份档的同一个插件会互相覆写 token。
@@ -228,6 +239,9 @@ export async function createApp(config: AppConfig) {
       providers,
       providerConfig,
       reloadProviders: makeRebuildProviders(shell),
+      // 交出去的是快照而不是那个 Map 本体：`api/` 拿到的是读得到的事实，
+      // 不是一条能改回装配状态的口子。
+      providerLoadErrors: () => new Map(providerErrors),
       tools,
       toolConfig,
       plugins,
