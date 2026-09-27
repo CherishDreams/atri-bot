@@ -535,7 +535,9 @@ test("引用不到源、修好、再禁用：禁用后的原因不许还是上�
     apiKey: "k",
   });
   assert.equal(created.status, 201);
-  assert.equal((await entry()).loaded, true, "补上源之后这一条就该是已加载");
+  const repaired = await entry();
+  assert.ok(repaired, "补上源之后这一条仍要在列表里");
+  assert.equal(repaired.loaded, true, "补上源之后这一条就该是已加载");
 
   // 再把它禁用 —— 这才是能观察出「错误表是整份重写还是累加」的那一步：工厂对禁用的条目
   // 不产出错误（只 log 一句「已禁用，跳过加载」），所以它 `loaded: false` 而**没有对应原因**。
