@@ -91,6 +91,15 @@ config/   ── 与 core/ 双向（按文件看没有环）
   要能被直接单测，architecture.md 里「导出它以便测试」就是这条许可的来源；
   把规则写成绝对的一句，会让那三个 import 看起来像违规 —— 它确实曾经是（那句话与仓内事实不符）。
 - `app.ts` 是**唯一**的组合根。装配只在那一处发生；其余模块不知道别人是谁。
+  组合根（`src/` 根下的 `app.ts` / `index.ts`）**不许被任何模块 import**：它认识每一层，
+  `core/` 只要 import 它一次，「core 不依赖上层」就在**传递依赖**上失效，而逐条 import
+  看起来都合规。这一条现在有机械检查守（`scripts/check-layering.mjs`）。
+- **`src/` 下新增顶层目录必须先在 `check-layering.mjs` 的 `ALLOWED` 里登记方向**，否则检查
+  直接红 —— 不在表里的目录是违规，不是豁免。初版把它当成「不归我管」放过去，于是新目录可以
+  自由 import 任何上层而全绿，那条硬约束的实际守法就变成了「没人加过新目录」。
+- **`plugins/` 读 `config/` 只许 `import type`**。需要那一层的**实现**时由组合根注入 ——
+  `persistEnabled`（启用状态写回）与 `ensurePrivateDir`（建插件数据目录）都是这个形状。
+  判据不是风格：会 `mkdir` / `chmod` 的函数与 `ApiError` 那种纯工具叶子不是一类东西。
 - 依赖一律走**构造参数**。不要引入全局单例、模块级可变状态、或「import 一下就自动注册」的副作用。
   这条是测试能直接 `createApp(config)` 起真服务、而不必 mock 掉半个世界的原因。
 - 每个模块往里收一层：`index.ts` 薄入口 → `app.ts` 装配 → `core/` 逻辑 → `api/` 传输。
