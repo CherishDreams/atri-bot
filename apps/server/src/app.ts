@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createLogger } from "./core/logger.ts";
 import { AgentEngine } from "./core/agent/engine.ts";
 import { SessionEvents } from "./core/agent/events.ts";
@@ -67,6 +68,24 @@ interface ProfileState {
  * `core/session/lock.ts` 与 `core/agent/events.ts` 各自的类注释里 —— 一句话版本：
  * 历史是全局一份 sqlite，而「同一个会话不能同时跑两轮」不是任何单个配置档的内部事务。
  */
+/**
+ * 服务端自己的版本号，读 `apps/server/package.json`（与 `api/server.ts` 读 `openapi.json`
+ * 同一个写法：以 `import.meta.url` 为基准，因此与启动目录无关）。
+ *
+ * 为什么不让 `api/` 自己去读：那一层不该知道磁盘布局，而「哪一版」是装配那一次就定下来的
+ * 部署事实。`test/openapi.test.ts` 有一条把 `/health` 的版本、这份 package.json 与
+ * `openapi.json` 的 `info.version` 三者钉在一起 —— 写死字符串时它们是各说各话的。
+ */
+function readServerVersion(): string {
+  const raw = readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8");
+  // JSON 边界：`JSON.parse` 交出 unknown，这里只认领 `version` 那一个键。
+  const parsed = JSON.parse(raw) as { version?: unknown };
+  if (typeof parsed.version !== "string" || parsed.version.length === 0) {
+    throw new Error("apps/server/package.json 里没有可用的 version —— /health 的版本无从可说");
+  }
+  return parsed.version;
+}
+
 export async function createApp(config: AppConfig) {
   const logger = createLogger(config.logLevel);
 
@@ -400,6 +419,7 @@ export async function createApp(config: AppConfig) {
   const http = createHttpServer({
     config,
     logger,
+    version: readServerVersion(),
     auth,
     sessions,
     lock,

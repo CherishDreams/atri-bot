@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp } from "#app.ts";
+import { API_PREFIX } from "@atri/shared";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**
@@ -26,6 +27,8 @@ const SPEC_PATH = fileURLToPath(new URL("../openapi.json", import.meta.url));
  */
 interface OpenApiSpec {
   paths: Record<string, Record<string, unknown>>;
+  /** 只有 `info.version` 这一条被本文件比对（见下面那条版本一致性的用例）。 */
+  info: { version: string };
 }
 
 /** `createApp` 的产物中本文件用到的那一角：真实注册的路由表（见 `api/router.ts` 的 `routes`）。 */
@@ -104,4 +107,35 @@ test("openapi.json 覆盖了所有真实注册的 API 路由，且没有多写�
     [],
     `openapi.json 里有这些路径，但代码中已不存在（规格过期了）:\n${staleInSpec.join("\n")}`,
   );
+});
+
+/**
+ * 版本号必须只有一个真源，而这条检查负责把它接起来。
+ *
+ * `GET /health` 里以前写死 `"1.0.0"`，而同一个字符串在本仓共有四份（根与三个包的
+ * `package.json`、以及这份手写规格的 `info.version`）。bump 之后 `/health` 继续报旧版本，
+ * 而运维会把那句当成「这个部署是哪一版」的凭证读 —— 那是比没有版本更难查的东西。
+ *
+ * 三个来源钉在一起有两个方向要分别守住：`/health` ↔ `package.json` 是**接线**
+ * （由组合根读一次再注入），`规格 ↔ package.json` 是**人记不住房那一类**
+ * （规格手写，`codegen:check` 只看生成物与规格是否一致，看不见规格自己是否过期）。
+ */
+test("版本三处一致：/health 的回答、package.json、规格的 info.version", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atri-openapi-version-"));
+  const app = await createApp(makeTestConfig({ root }));
+  await app.start();
+  t.after(() => app.stop());
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const res = await fetch(`http://127.0.0.1:${app.address().port}${API_PREFIX}/health`);
+  assert.equal(res.status, 200);
+  const health = (await res.json()) as { version?: unknown };
+
+  const pkg = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+  ) as { version?: unknown };
+  const spec = JSON.parse(readFileSync(SPEC_PATH, "utf8")) as OpenApiSpec;
+
+  assert.equal(health.version, pkg.version, "/health 必须回答服务端 package.json 里那一份");
+  assert.equal(spec.info.version, pkg.version, "手写规格的版本必须跟实现同步");
 });

@@ -131,7 +131,7 @@ const CONTENT_TYPES: Record<string, string> = {
  * 不含任何业务逻辑。路由处理函数直接委托给各个 manager。
  */
 export function createHttpServer(deps: HttpDeps) {
-  const { config, logger, sessions, lock, events, profiles, adapters, auth } = deps;
+  const { config, logger, version, sessions, lock, events, profiles, adapters, auth } = deps;
 
   const cookieName = auth.cookieName;
   const router = new Router();
@@ -211,7 +211,9 @@ export function createHttpServer(deps: HttpDeps) {
   }
 
   router.get(`${API_PREFIX}/health`, async (_req, res) => {
-    sendJson(res, 200, { ok: true, app: APP_NAME, version: "1.0.0" });
+    // 版本由装配注入（见 `readServerVersion`）：写死这一句时它与 package.json、
+    // openapi.json 各说各话，bump 之后运维拿到的是一条假凭证。
+    sendJson(res, 200, { ok: true, app: APP_NAME, version });
   });
 
   // --- 鉴权 ---------------------------------------------------------------

@@ -109,6 +109,13 @@ export interface ProfileDirectory {
 export interface HttpDeps {
   config: AppConfig;
   logger: Logger;
+  /**
+   * 服务端版本号，`GET /health` 用。由组合根从 `apps/server/package.json` 读一次注入 ——
+   * 以前这里写死 `"1.0.0"`，而同一个字符串在本仓有四份（根与三个包的 `package.json`、
+   * `openapi.json` 的 `info.version`），bump 之后 `/health` 继续报 1.0.0，
+   * 而运维把那句当部署凭证读。判据是「**这个进程**跑的是哪一版」，所以读服务端那一份。
+   */
+  version: string;
   auth: AuthManager;
   sessions: SessionManager;
   lock: SessionLock;
