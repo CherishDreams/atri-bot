@@ -29,6 +29,8 @@ interface OpenApiSpec {
   paths: Record<string, Record<string, unknown>>;
   /** 只有 `info.version` 这一条被本文件比对（见下面那条版本一致性的用例）。 */
   info: { version: string };
+  /** 生成 SDK 的 `baseURL` 由 `servers[0].url` 来，所以它必须等于服务端注册用的前缀。 */
+  servers: { url: string }[];
 }
 
 /** `createApp` 的产物中本文件用到的那一角：真实注册的路由表（见 `api/router.ts` 的 `routes`）。 */
@@ -138,4 +140,30 @@ test("版本三处一致：/health 的回答、package.json、规格的 info.ver
 
   assert.equal(health.version, pkg.version, "/health 必须回答服务端 package.json 里那一份");
   assert.equal(spec.info.version, pkg.version, "手写规格的版本必须跟实现同步");
+});
+
+/**
+ * API 前缀只能有一个真源。
+ *
+ * 它以前有**三个**：`shared/constants.ts` 的 `API_PREFIX`（服务端注册路由用它）、
+ * 这份手写规格的 `servers[0].url`（`pnpm codegen` 把它写成生成 SDK 的 `baseURL`）、
+ * 以及 `apps/dashboard/vite.config.ts` 里那条代理规则（以前手抄成字符串 `"/api"`）。
+ * 三道 openapi 测试谁都不比 `servers.url`，于是改了 `API_PREFIX` 之后：服务端挂新前缀、
+ * SDK 打旧前缀、dev 代理按字符串匹配照旧转发（`"/api"` 连 `/apis/v1` 都会命中），
+ * 症状是一片 404 而 `vue-tsc` 与 `pnpm check` 全绿 —— 正是本仓最怕的「静默说谎」。
+ *
+ * 代理那一处已经改成直接用常量（第三个真源消失）；这里守剩下这一对。
+ * 规格是手写的，没人替你对。
+ */
+test("规格的 servers[0].url 必须等于服务端的 API_PREFIX", () => {
+  const spec = JSON.parse(readFileSync(SPEC_PATH, "utf8")) as OpenApiSpec;
+
+  assert.equal(spec.servers.length, 1, "规格只该有一个 server（多出来的会各说各话）");
+  // 比的是**去掉前导斜杠之后**的那一段：`servers.url` 按 OpenAPI 的写法是相对路径
+  // （`/api/v1`），而 `API_PREFIX` 就是同一条字符串 —— 直接相等即可，别在这里再拼一次。
+  assert.equal(
+    spec.servers[0]?.url,
+    API_PREFIX,
+    `规格声明的前缀与 \`shared\` 的 API_PREFIX 不一致（规格 ${spec.servers[0]?.url} / 常量 ${API_PREFIX}），生成的 SDK 会打到另一个地址`,
+  );
 });
