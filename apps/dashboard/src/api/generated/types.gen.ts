@@ -241,7 +241,7 @@ export type PluginStatus = 'active' | 'disabled' | 'failed';
 export type PluginInfo = {
     id: string;
     name: string;
-    version?: string;
+    version: string;
     description?: string;
     /**
      * 当前是否在运行（等价于 status === "active"）。disabled 与 failed 都是 false，两者由 error 是否为 null 区分。
@@ -286,7 +286,7 @@ export type ToolInfo = {
      */
     name: string;
     /**
-     * 是否启用。工具默认关闭，必须在 atri.config.json 里显式写 enabled: true（与 adapters 的默认启用刻意相反）
+     * 是否启用。工具默认关闭，必须在**这份配置档**的文件里显式写 enabled: true（与 adapters 的默认启用刻意相反）
      */
     enabled: boolean;
     /**

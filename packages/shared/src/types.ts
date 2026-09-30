@@ -141,8 +141,9 @@ export interface AdapterInfo {
  * `status === "error"` 与它并存会让「状态」和「原因」这两件事在 grep 与文档里混成一个词。
  *
  * 这三个取值与 `apps/server/openapi.json` 的 `components.schemas.PluginStatus` 是同一份，
- * **改一处必须改两处** —— 没有任何检查在绑它们：形状测试只把「实际发出的值 ⊂ 规格 enum」
- * 这一个方向管住，而 dashboard 的类型来自规格、server 的类型来自这里。
+ * 由 `apps/server/test/shared-types-vs-spec.test.ts` 绑住（取值集合与成员的必填性两个方向都比）。
+ * 在它之前这里只有注释上的「改一处必须改两处」，而 dashboard 的类型来自规格、
+ * server 的类型来自这里 —— 靠记忆力绑的契约迟早漂。
  */
 export type PluginStatus = "active" | "disabled" | "failed";
 export interface PluginInfo {
@@ -169,8 +170,13 @@ export interface ToolInfo {
   /** 控制台显示名；没有中文名时等于 id。 */
   name: string;
   enabled: boolean;
-  /** 给模型看的说明。控制台用它解释这颗工具是干什么的。 */
-  description?: string;
+  /**
+   * 给模型看的说明，控制台用它解释这颗工具是干什么的。**必填**：
+   * `ToolDefinition.description` 本身就是 `string`（`core/tool/types.ts`），而插件不能
+   * 注册工具，所以 `GET /tools` 里没有「这一条没有说明」这种响应 —— 以前标成可选，
+   * dashboard 就为一个不可能的 `undefined` 写了一层判空（`shared-types-vs-spec.test.ts` 会抓）。
+   */
+  description: string;
 }
 
 /**
@@ -182,8 +188,8 @@ export interface ToolInfo {
  * 发明第三种「档整体红色」会把「你有一个模型没配好」也表达成「这份档坏了」，
  * 而那是两件必须分开说的事（`GET /providers` 带着失败条目就是同一个先例）。
  *
- * 与 `openapi.json` 的 `components.schemas.ProfileStatus` 是同一份，**改一处必须改两处**
- *（理由与 `PluginStatus` 那条完全一样：形状测试只管「实际发出的值 ⊂ 规格 enum」这一个方向）。
+ * 与 `openapi.json` 的 `components.schemas.ProfileStatus` 是同一份，
+ * 同样由 `shared-types-vs-spec.test.ts` 绑住（理由与 `PluginStatus` 那条完全一样）。
  */
 export type ProfileStatus = "ready" | "failed";
 

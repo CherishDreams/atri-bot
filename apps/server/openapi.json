@@ -2050,7 +2050,7 @@
       },
       "PluginInfo": {
         "type": "object",
-        "required": ["id", "name", "enabled"],
+        "required": ["id", "name", "version", "enabled"],
         "properties": {
           "id": {
             "type": "string"
@@ -2114,7 +2114,7 @@
           },
           "enabled": {
             "type": "boolean",
-            "description": "是否启用。工具默认关闭，必须在 atri.config.json 里显式写 enabled: true（与 adapters 的默认启用刻意相反）"
+            "description": "是否启用。工具默认关闭，必须在**这份配置档**的文件里显式写 enabled: true（与 adapters 的默认启用刻意相反）"
           },
           "description": {
             "type": "string",
