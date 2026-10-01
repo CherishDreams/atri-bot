@@ -238,7 +238,19 @@ export async function createApp(config: AppConfig) {
       // 不去 import `config/` 里那个会动文件系统的实现。与上面 `persistEnabled` 同一形状。
       ensurePrivateDir,
     });
-    for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) {
+    for (const tool of createBuiltinTools({
+      // **在装配处投影**，而不是把 `plugins.list()` 直接递过去：那份是 `PluginView`，
+      // 含插件所在目录与上一次加载的原文（第三方文本，可能带绝对路径），
+      // 而工具结果整段要发给第三方 provider。类型上 `listPlugins` 只声明读那几个键，
+      // 运行时交出去的现实却由那个对象决定 —— 「窄的类型标注不等于窄的现实」（AGENTS.md）。
+      listPlugins: () =>
+        plugins.list().map((p) => ({
+          id: p.id,
+          name: p.name,
+          enabled: p.enabled,
+          failed: p.error !== null,
+        })),
+    })) {
       tools.register(tool);
     }
     const engine = new AgentEngine({

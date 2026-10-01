@@ -113,9 +113,14 @@ test("空参数串按无参数处理，结果超长会截断并注明原长", as
   assert.match(long.content, /结果已截断，原长 500 字符/);
 });
 
-/** 插件的清单项：形状与 `plugins.list()` 的 `PluginView` 兼容（core 不 import plugins，靠结构赋值）。 */
-function plugin(id: string, enabled: boolean, error: string | null = null): PluginSummary {
-  return { id, name: `${id} 插件`, enabled, error };
+/**
+ * 插件的清单项。注意它**不是** `plugins.list()` 的那个形状（`PluginView`）——
+ * 装配处会把后者投影成这样一份（`app.ts`），而 `core/` 不 import `plugins/`，
+ * 所以这里用结构赋值造出来。清单项里没有 `error` 文本，只有 `failed`：
+ * 失败原因不该出现在发给第三方 provider 的工具结果里。
+ */
+function plugin(id: string, enabled: boolean, failed = false): PluginSummary {
+  return { id, name: `${id} 插件`, enabled, failed };
 }
 
 test("内置 current_time 能跑，非法时区兜成 isError 而不是抛出", async () => {
@@ -143,11 +148,7 @@ test("内置 current_time 能跑，非法时区兜成 isError 而不是抛出", 
 test("list_plugins 逐个报告启用状态，且不把失败原因原文外传给模型", async () => {
   const reg = new ToolRegistry();
   for (const tool of createBuiltinTools({
-    listPlugins: () => [
-      plugin("ok", true),
-      plugin("off", false),
-      plugin("bad", false, "插件缺少 id: /home/atri/plugins/x"),
-    ],
+    listPlugins: () => [plugin("ok", true), plugin("off", false), plugin("bad", false, true)],
   })) {
     reg.register(tool);
   }

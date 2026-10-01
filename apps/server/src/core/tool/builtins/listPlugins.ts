@@ -15,8 +15,13 @@ export interface PluginSummary {
   id: string;
   name: string;
   enabled: boolean;
-  /** 只当「上一次加载有没有失败」的标记用，它的**文本不外传**，见 `run()` 里那条理由。 */
-  error: string | null;
+  /**
+   * 「上一次加载有没有失败」。**是布尔而不是那段文本** —— 失败原因是第三方代码产生的，
+   * 可能带着绝对路径，而工具结果整段会发给第三方 provider。
+   * 以前这里是 `error: string | null` + 一句「不外传」的注释，靠 `run()` 里不打印它来兑现；
+   * 判据交给注释就等于交给记忆力，所以形状本身就只留事实的那一半。
+   */
+  failed: boolean;
 }
 
 export function createListPluginsTool(listPlugins: () => readonly PluginSummary[]): ToolDefinition {
@@ -37,11 +42,9 @@ export function createListPluginsTool(listPlugins: () => readonly PluginSummary[
         .map((p) => {
           // `error` 先判，否则一条失败记录会被读成「操作者把它禁用了」（failed ⇒ `enabled`
           // 为 false ⇒ 先印「已禁用」），而模型会据此给出完全错的建议。
-          const state = p.error ? "上次加载失败" : p.enabled ? "运行中" : "已禁用";
-          // 只报「失败」这个事实，不带上 error 原文：那是**第三方文本**（动态 import 的报错、
-          // 插件自己抛的错都可能带着绝对路径），而工具结果会整段发给第三方 provider。
-          // 模型需要知道别声称该插件的能力可用，这一句就够了；
-          // 失败原因是给操作者看的，控制台插件页已经在显示它。
+          const state = p.failed ? "上次加载失败" : p.enabled ? "运行中" : "已禁用";
+          // 只报「失败」这个事实：模型需要的是「别声称这个插件的能力可用」，一句就够；
+          // 失败原因是给操作者看的，控制台插件页已经在显示它（见 `PluginSummary.failed`）。
           return `- ${p.name}（id: ${p.id}）：${state}`;
         })
         .join("\n");
