@@ -115,7 +115,26 @@ function buildCommon(name: ThemeName): Record<string, string> {
  *   `Modal` 用 `preset="card"` 时圆角来自 `peers.Card`。
  * - `InputNumber` 没有任何自有样式键，只能通过 `peers.Input`/`peers.Button` 间接改。
  */
-function buildComponents(name: ThemeName, p: Palette): Record<string, object> {
+/**
+ * 组件级主题覆盖。
+ *
+ * **把返回类型从 `Record<string, object>` 换成 naive-ui 自己那份映射类型，仍然拦不住假键**：
+ * 实测（naive-ui 2.45.3）`GlobalThemeOverrides` 的每一格是 `ExtractThemeOverrides<…>`，
+ * 它接受任意键名 —— 往 `Form` 里塞 `totallyFakeKey` 也 `vue-tsc` 全绿，而 naive-ui 对
+ * 不认识的键**静默忽略**：没有警告、没有报错，只有外观没变。换类型只买到「组件名」这一层
+ * 的约束；键名那一层由 `scripts/check-theme-keys.mjs` 守，判据取自 naive-ui 运行时的
+ * `lightTheme[x].self(commonLight)`，而不是抄一份名单当第二个真源。
+ *
+ * 这次实测查出来的两条，都已按真源改正：
+ * - `Form.labelFontWeightStrong` 不存在，真名是 `labelFontWeight`。
+ * - `Menu.itemIconMargin` 不存在：Menu 没有任何 margin 类自有键 —— 那个间距只能靠 CSS
+ *   覆盖内部类（`TopBarMenu.vue` 里有一段同类的处理）。删掉而不是补一段 CSS：
+ *   它从来没生效过，也就是说线上那个间距本来就不是它给的，改成 CSS 等于顺手改外观。
+ *
+ * 还有第三类两道检查都拦不住：`Button` 没有 `borderRadius`、`Select` 的圆角来自
+ * `peers.InternalSelection` 等 —— 那些靠下面的注释与人的判断。
+ */
+function buildComponents(name: ThemeName, p: Palette): Omit<GlobalThemeOverrides, "common"> {
   const sh = shadow[name];
   return {
     Button: {
@@ -145,7 +164,7 @@ function buildComponents(name: ThemeName, p: Palette): Record<string, object> {
       boxShadowFocusError: `0 0 0 2px ${p.danger.base}40`,
     },
     Form: {
-      labelFontWeightStrong: font.weight.medium,
+      labelFontWeight: font.weight.medium,
       labelFontSizeTopMedium: font.size.sm,
       feedbackFontSizeMedium: font.size.xs,
     },
@@ -190,7 +209,6 @@ function buildComponents(name: ThemeName, p: Palette): Record<string, object> {
       borderRadius: radius.md,
       itemHeight: "36px",
       fontSize: font.size.base,
-      itemIconMargin: "8px",
     },
     Tag: {
       borderRadius: radius.sm,

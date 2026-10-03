@@ -48,22 +48,22 @@ pnpm --filter @atri/shared build   # 必须。shared 的 dist 不入库，没有
 
 ## 命令
 
-| 命令                           | 说明                                                                                      |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `pnpm check`                   | **提交前必须跑**：typecheck → lint → format:check → static:check → codegen:check → test   |
-| `pnpm static:check`            | 三道「编译器与测试都看不见」的检查：分层方向 + 说明符写法、按行号的交叉引用、内置工具登记 |
-| `pnpm lint` / `lint:fix`       | `oxlint --deny-warnings .` / `oxlint --fix .`                                             |
-| `pnpm format` / `format:check` | oxfmt 改写 / 只校验                                                                       |
-| `pnpm codegen`                 | 按 `apps/server/openapi.json` 重新生成前端 SDK                                            |
-| `pnpm test`                    | 全部包；服务端是 `node --test "test/**/*.test.ts"`                                        |
-| `pnpm build`                   | `packages/shared` + `apps/dashboard`（服务端不产出构建物）                                |
-| `pnpm start`                   | 起服务端（= `pnpm --filter @atri/server start`）                                          |
+| 命令                           | 说明                                                                                                      |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `pnpm check`                   | **提交前必须跑**：typecheck → lint → format:check → static:check → codegen:check → test                   |
+| `pnpm static:check`            | 四道「编译器与测试都看不见」的检查：分层方向 + 说明符写法、按行号的交叉引用、内置工具登记、主题键名存在性 |
+| `pnpm lint` / `lint:fix`       | `oxlint --deny-warnings .` / `oxlint --fix .`                                                             |
+| `pnpm format` / `format:check` | oxfmt 改写 / 只校验                                                                                       |
+| `pnpm codegen`                 | 按 `apps/server/openapi.json` 重新生成前端 SDK                                                            |
+| `pnpm test`                    | 全部包；服务端是 `node --test "test/**/*.test.ts"`                                                        |
+| `pnpm build`                   | `packages/shared` + `apps/dashboard`（服务端不产出构建物）                                                |
+| `pnpm start`                   | 起服务端（= `pnpm --filter @atri/server start`）                                                          |
 
 四条容易踩的规则：
 
 - **仓库没有 CI**，`pnpm check` 没人替你跑。**你就是 CI**——没跑过就不要说「改好了」。
-- `static:check` 的三道检查都只认**结构性事实**（谁 import 谁、注释里的行号形态、文件与清单是否
-  一一对应）。它们各自都带一条「防空跑」断言：本仓初版的两条检查把 `fileURLToPath` 返回的
+- `static:check` 的四道检查都只认**结构性事实**（谁 import 谁、注释里的行号形态、文件与清单是否
+  一一对应、主题覆盖的键名在不在 naive-ui 运行时的变量表里）。它们各自都带一条「防空跑」断言：本仓初版的两条检查把 `fileURLToPath` 返回的
   尾斜杠算进了字符串切片，于是遍历到 0 个文件却打印「通过」。**写检查的人必须试着让该检查变红一次**，
   这条判据对 `pnpm check` 里的任何一项都成立。
 - `pnpm lint` 带 `--deny-warnings`，**告警即失败**。而 `oxlint` 单独运行时仅有 warning 会退出 0，

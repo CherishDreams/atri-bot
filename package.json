@@ -20,7 +20,7 @@
     "codegen:check": "pnpm codegen && node scripts/check-codegen.mjs",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm static:check && pnpm codegen:check && pnpm test",
     "clean": "node scripts/clean.mjs",
-    "static:check": "node scripts/check-layering.mjs && node scripts/check-refs.mjs && node scripts/check-tool-registry.mjs"
+    "static:check": "node scripts/check-layering.mjs && node scripts/check-refs.mjs && node scripts/check-tool-registry.mjs && node scripts/check-theme-keys.mjs"
   },
   "devDependencies": {
     "@hey-api/openapi-ts": "0.99.0",
