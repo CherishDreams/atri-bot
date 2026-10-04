@@ -9,19 +9,31 @@
           </div>
 
           <div class="flex flex-col gap-2 px-4 pb-4">
-            <div
-              v-for="source in providers.sources"
-              :key="source.id"
-              class="source-row group relative"
-              @click="requestSelect(source.id)"
-            >
-              <provider-card
-                :provider="source"
-                :active="source.id === providers.selectedSourceId"
-              />
+            <!--
+              一行里有两个动作（选中 / 删除），所以外层是容器而不是按钮 —— 把删除按钮套进
+              一个 `role=button` 的容器里会变成「嵌套可交互元素」，读屏会只念外层。
+              选中那一半自己就是一个可聚焦的按钮。
+            -->
+            <div v-for="source in providers.sources" :key="source.id" class="source-row relative">
               <button
                 type="button"
-                class="absolute right-2 top-2 hidden cursor-pointer rounded px-1 text-xs text-ink-faint group-hover:block hover:bg-tint hover:text-danger"
+                class="block w-full cursor-pointer rounded text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                :aria-current="source.id === providers.selectedSourceId ? 'true' : undefined"
+                @click="requestSelect(source.id)"
+              >
+                <provider-card
+                  :provider="source"
+                  :active="source.id === providers.selectedSourceId"
+                />
+              </button>
+              <!--
+                以前是 `hidden … group-hover:block`：实测在屏幕上是 `display:none`、尺寸 0×0，
+                于是**触屏与键盘都删不掉一个供应商源**（hover 是鼠标专属输入）。
+                常驻可见只多一个淡灰色的字，而它换来的是这条路径人人可走。
+              -->
+              <button
+                type="button"
+                class="absolute right-2 top-2 cursor-pointer rounded px-1 text-xs text-ink-faint hover:bg-tint hover:text-danger focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
                 :aria-label="`删除 ${source.id}`"
                 @click.stop="askRemoveSource(pid, source.id)"
               >

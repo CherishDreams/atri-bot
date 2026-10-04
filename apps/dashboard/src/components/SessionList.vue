@@ -45,12 +45,24 @@ function onSelect(id: string): void {
     </button>
 
     <ul class="m-0 flex-1 list-none overflow-y-auto p-0">
+      <!--
+        一个只能靠鼠标点中才能进入的列表，对键盘用户等于不存在（`<li @click>` 既不可聚焦、
+        也不在读屏的可操作元素列表里）。这里补 `role=button` + `tabindex` + 回车/空格，
+        而不是把整项换成 `<button>`：`.row-base` 的铺底与 `row-active` 都挂在这个 li 上，
+        换标签会把这套行样式与 `aria-current` 的语义一起丢掉。
+      -->
       <li
         v-for="s in sessions.sessions"
         :key="s.id"
-        class="row-base cursor-pointer px-2 py-1.5 text-ink-muted hover:text-ink"
+        role="button"
+        tabindex="0"
+        class="row-base cursor-pointer px-2 py-1.5 text-ink-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         :class="s.id === sessions.active?.id ? 'row-active' : ''"
+        :aria-current="s.id === sessions.active?.id ? 'true' : undefined"
+        :aria-label="`打开会话 ${s.title}`"
         @click="onSelect(s.id)"
+        @keydown.enter.prevent="onSelect(s.id)"
+        @keydown.space.prevent="onSelect(s.id)"
       >
         {{ s.title }}
       </li>
