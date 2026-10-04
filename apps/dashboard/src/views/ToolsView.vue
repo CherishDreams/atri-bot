@@ -29,10 +29,15 @@ watch(profile, (p) => {
         <header class="mb-5">
           <h2 class="m-0 text-2xl font-bold text-ink">工具</h2>
           <!-- 这段说明不是装饰：默认关闭是「反直觉」的那一半，
-             不写出来，用户会以为坏了，而不是「还没开」。 -->
+             不写出来，用户会以为坏了，而不是「还没开」。
+             指向的文件这一轮跟着搬家了：工具开关从部署级的 `atri.config.json`
+             搬进**这份配置档**自己的文件。留着旧文案的后果很具体 ——
+             人去编辑 `atri.config.json` 里的 `tools` 段，界面与行为都不变，
+             而他会以为是自己配错了（`stores/tools.ts` 写的真源就是配置档文件）。 -->
           <p class="mt-1 m-0 text-sm text-ink-muted">
             工具默认<b class="text-ink">全部关闭</b>。在这里启用会写进
-            <code class="text-xs">atri.config.json</code>
+            <b class="text-ink">当前配置档</b>的文件
+            <code class="text-xs">data/profiles/&lt;配置档&gt;/config.json</code>
             的 <code class="text-xs">tools</code> 段，不需要重启就会生效。
           </p>
         </header>

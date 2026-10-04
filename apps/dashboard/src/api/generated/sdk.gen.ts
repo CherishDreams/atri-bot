@@ -332,7 +332,7 @@ export const listTools = <ThrowOnError extends boolean = false>(options: Options
 /**
  * 启用 / 禁用工具
  *
- * 写入 atri.config.json 的 tools 段，立即生效，不需要重启。enabled 必填：工具是能力授予，不接受「省略即启用」这种默认值，所以这里与 POST /plugins/{id}/enable 的宽松写法刻意不同。
+ * 写入**这份配置档**自己的配置文件（`data/profiles/<id>/config.json`）的 tools 段，立即生效，不需要重启。enabled 必填：工具是能力授予，不接受「省略即启用」这种默认值，所以这里与 POST /plugins/{id}/enable 的宽松写法刻意不同。
  */
 export const setToolEnabled = <ThrowOnError extends boolean = false>(options: Options<SetToolEnabledData, ThrowOnError>): RequestResult<SetToolEnabledResponses, SetToolEnabledErrors, ThrowOnError> => (options.client ?? client).post<SetToolEnabledResponses, SetToolEnabledErrors, ThrowOnError>({
     responseType: 'json',
