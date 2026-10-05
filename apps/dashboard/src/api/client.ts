@@ -318,17 +318,75 @@ export async function fetchProviderModels(profile: string, id: string) {
  * WebSocket 的握手与帧协议不属于 OpenAPI 能描述的范围，所以这一段仍是手写的：
  * 生成物只覆盖 HTTP 与 SSE。
  */
-export function connect(onFrame: (frame: ServerFrame) => void): () => void {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}${WS_PATH}`);
-  ws.addEventListener("message", (ev) => {
-    try {
-      onFrame(JSON.parse(ev.data) as ServerFrame);
-    } catch {
-      /* 忽略格式错误的帧 */
-    }
-  });
-  return () => ws.close();
+/** 实时连接的状态。`retrying` 与 `closed` 必须能让界面说清楚，见下面 `connect`。 */
+export type LiveStatus = "open" | "retrying" | "closed";
+
+/** 重连退避：首次 1s，之后翻倍，封顶 15s（本仓自选，理由见 `connect`）。 */
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 15000;
+
+/**
+ * 订阅服务端出站事件。返回取消订阅函数。
+ *
+ * WebSocket 的握手与帧协议不属于 OpenAPI 能描述的范围，所以这一段仍是手写的：
+ * 生成物只覆盖 HTTP 与 SSE。
+ *
+ * **断了要重连，并且要让调用方知道现在没连上。** 以前这里只接 `message`：
+ * 服务端重启（一次发版就够）之后，这条连接安静地不再收任何 `message` 帧，
+ * 而页面看起来一切正常 —— 用户要等到「别人都在动而我这页不动」才发现，
+ * 而那已经是一次需要解释的故障了。
+ *
+ * 退避取 1s 起、翻倍、封顶 15s：一次重启通常在几秒内完成，所以第一档要快；
+ * 封顶是为了服务端真的不在时不要每分钟敲两百次。关掉页面（`onBeforeUnmount`
+ * 走那个 disposer）时**不再重连** —— 那是我们自己关的，不是断了。
+ *
+ * 握手被拒（登出后 401）也走 `close`，会照旧退避重试；这不影响正确性，因为路由守卫
+ * 已经把人带回登录页，而那里的卸载会调用 disposer。
+ */
+export function connect(
+  onFrame: (frame: ServerFrame) => void,
+  onStatus?: (status: LiveStatus) => void,
+): () => void {
+  let ws: WebSocket | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let attempt = 0;
+  let closed = false;
+
+  const openOnce = (): void => {
+    if (closed) return;
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(`${proto}://${location.host}${WS_PATH}`);
+    ws.addEventListener("open", () => {
+      attempt = 0;
+      onStatus?.("open");
+    });
+    ws.addEventListener("message", (ev) => {
+      try {
+        onFrame(JSON.parse(ev.data) as ServerFrame);
+      } catch {
+        /* 忽略格式错误的帧 */
+      }
+    });
+    ws.addEventListener("close", () => {
+      if (closed) return;
+      attempt += 1;
+      onStatus?.("retrying");
+      const delay = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(openOnce, delay);
+    });
+  };
+
+  openOnce();
+
+  return () => {
+    closed = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    ws?.close();
+    ws = null;
+    onStatus?.("closed");
+  };
 }
 
 export type {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { connect } from "../api/client.js";
+import { connect, type LiveStatus } from "../api/client.js";
 import { useAuthStore } from "../stores/auth.js";
 import { useSessionsStore } from "../stores/sessions.js";
 import { usePluginsStore } from "../stores/plugins.js";
@@ -23,6 +23,8 @@ async function onLogout(): Promise<void> {
 }
 
 let unsubscribe: (() => void) | null = null;
+/** 实时推送的连接状态；断线要在这页说出来（`ChatSessionView` 同一个理由）。 */
+const live = ref<LiveStatus>("open");
 
 onMounted(async () => {
   // 先确认身份再拉数据：过期 Cookie 会被 401 拦下，避免无谓的失败请求。
@@ -36,15 +38,20 @@ onMounted(async () => {
     return;
   }
 
-  unsubscribe = connect((frame) => {
-    if (frame.type === "unauthorized") {
-      auth.clear();
-      void router.replace({ name: "login" });
-      return;
-    }
-    // HTTP 响应与 WS 帧都会投递同一条助手消息，store.ingest 按 id 去重。
-    if (frame.type === "message") sessions.ingest(frame.message);
-  });
+  unsubscribe = connect(
+    (frame) => {
+      if (frame.type === "unauthorized") {
+        auth.clear();
+        void router.replace({ name: "login" });
+        return;
+      }
+      // HTTP 响应与 WS 帧都会投递同一条助手消息，store.ingest 按 id 去重。
+      if (frame.type === "message") sessions.ingest(frame.message);
+    },
+    (next) => {
+      live.value = next;
+    },
+  );
 
   await sessions.refresh();
   // 插件面板是作用域化的（每份配置档各有一份启用清单），没选档就不去拉它。
@@ -86,6 +93,15 @@ onBeforeUnmount(() => {
     <SessionList />
 
     <div class="flex min-w-0 flex-col">
+      <!-- 服务端重启过一次，这一页就会「看着正常但不再收消息」。
+           不说出来，用户唯一的线索是别人都在动而自己不。 -->
+      <p
+        v-if="live !== 'open'"
+        role="status"
+        class="m-0 border-b-1 border-line bg-tint px-4 py-1.5 text-xs text-warning"
+      >
+        {{ live === "retrying" ? "实时连接已断开，正在重连…" : "实时连接已关闭" }}
+      </p>
       <header
         class="flex items-center justify-end gap-3 border-b-1 border-line px-4 py-2 text-ink-muted"
       >

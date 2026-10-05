@@ -131,6 +131,13 @@ export const useSessionsStore = defineStore("sessions", {
     /** 「加载更早的会话」在途。 */
     loadingMoreSessions: false,
     /**
+     * 在途那轮流式回复的取消入口，没有在途时为 null。
+     *
+     * 存**函数**而不是 `AbortController` 实例：Pinia 会把 state 里的对象套上响应式代理，
+     * 而 `abort()` 经过代理再调到原生实现就未必还是那一个了；函数不会被代理。
+     */
+    streamAbort: null as (() => void) | null,
+    /**
      * 代际计数：`open()`（换会话）与 `refresh()`（列表被整份替换）都自增它。
      *
      * 存在的唯一理由是「跨 await 的过期检查没法靠读那些值本身做」。`loadEarlier()` 在
@@ -245,6 +252,10 @@ export const useSessionsStore = defineStore("sessions", {
      * 直接访问 /chat/:id 或刷新页面时靠它恢复对话；更早的历史在库里，不在这一页里。
      */
     async open(id: string): Promise<Session | null> {
+      // 先掐掉上一条会话可能还在跑的流：`appendDelta` 写的是**当前** `this.log`，
+      // 不取消就会把 A 的回复接到 B 的对话里 —— 与 `epoch` 挡的是同一类错，
+      // 只是这一条挡在写入之前而不是拼接之后。
+      this.abortStream();
       this.loading = true;
       this.error = null;
       // 作废一切在途的分页请求（见 state 的 `epoch`）：切会话之后，上一条消息流上还没回来的
@@ -311,6 +322,17 @@ export const useSessionsStore = defineStore("sessions", {
       }
     },
 
+    /**
+     * 取消在途的流式回复。`open()`（换会话）与页面卸载都会走这里。
+     *
+     * 只对**客户端**生效：断开连接之后服务端在 `res` 的 `close` 上 abort 上游
+     * （`api/server.ts`），所以这不是一次「继续跑但看不见」的假取消。
+     */
+    abortStream(): void {
+      this.streamAbort?.();
+      this.streamAbort = null;
+    },
+
     /** 没有活跃会话时兜底创建一个，保证发送永远有落点。 */
     async ensureActive(): Promise<void> {
       if (this.active) return;
@@ -373,10 +395,21 @@ export const useSessionsStore = defineStore("sessions", {
 
       this.sending = true;
       this.error = null;
+      // 切页/换会话要能取消这轮流：以前 `send()` 从不传 signal（`api/client.ts` 支持），
+      // 于是离开页面之后流还在跑，而 `sending` 一直挂着 true —— 后果不是这一页转圈，
+      // 而是**别的会话的输入框被它禁掉**（发送按钮判的是全局的 `sessions.sending`）。
+      const controller = new AbortController();
+      this.streamAbort = () => controller.abort();
 
       try {
         let sawFinal = false;
-        for await (const chunk of api.sendMessageStream(profile, active.id, text, model)) {
+        for await (const chunk of api.sendMessageStream(
+          profile,
+          active.id,
+          text,
+          model,
+          controller.signal,
+        )) {
           if (chunk.error) throw new Error(chunk.error);
           // 增量永远挂在「当前草稿」上，而不是发送时捕获的那个 id：
           // 中间消息到达时草稿会被换成服务端消息并再开一条新的。
@@ -407,6 +440,7 @@ export const useSessionsStore = defineStore("sessions", {
       } finally {
         this.sending = false;
         this.streamingId = null;
+        this.streamAbort = null;
       }
     },
 

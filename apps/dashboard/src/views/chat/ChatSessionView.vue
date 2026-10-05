@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { connect } from "@/api/client";
+import { connect, type LiveStatus } from "@/api/client";
 import { captureAnchor } from "@/components/shared/scrollAnchor";
 import { useAuthStore } from "@/stores/auth";
 import { useProvidersStore } from "@/stores/providers";
@@ -36,6 +36,8 @@ const sessionId = computed(() => String(route.params.sessionId ?? ""));
 const canSend = computed(() => draft.value.trim().length > 0 && !sessions.sending);
 
 let unsubscribe: (() => void) | null = null;
+/** 实时推送的连接状态。断线只在这页说一次，不做「已连接」的常态提示。 */
+const live = ref<LiveStatus>("open");
 
 /**
  * 从创建页带过来、尚未发出的首句。
@@ -133,15 +135,20 @@ onMounted(async () => {
     return;
   }
 
-  unsubscribe = connect((frame) => {
-    if (frame.type === "unauthorized") {
-      auth.clear();
-      void router.replace({ name: "login", query: { redirect: route.fullPath } });
-      return;
-    }
-    // 助手回复同时会经 HTTP 响应回来，store.ingest 按 id 去重。
-    if (frame.type === "message") sessions.ingest(frame.message);
-  });
+  unsubscribe = connect(
+    (frame) => {
+      if (frame.type === "unauthorized") {
+        auth.clear();
+        void router.replace({ name: "login", query: { redirect: route.fullPath } });
+        return;
+      }
+      // 助手回复同时会经 HTTP 响应回来，store.ingest 按 id 去重。
+      if (frame.type === "message") sessions.ingest(frame.message);
+    },
+    (next) => {
+      live.value = next;
+    },
+  );
 
   // 列表为空时补一次，侧栏才好显示会话名。
   if (sessions.sessions.length === 0) {
@@ -198,6 +205,10 @@ watch([() => sessions.log.length, logSize], () => {
 onBeforeUnmount(() => {
   unsubscribe?.();
   unsubscribe = null;
+  // 离开这一页要取消在途的那轮流（`send()` 传的 signal 由 store 持有）。
+  // 不取消的后果有两层：这一页没了而流还在写 store；以及 `sending` 挂着 true,
+  // 于是**别的会话**的发送按钮也跟着被禁 —— 它判的是全局那一个。
+  sessions.abortStream();
 });
 </script>
 
@@ -237,6 +248,12 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="sessions.error" class="px-4 pb-2 text-xs text-danger">{{ sessions.error }}</div>
+
+      <!-- 断了要说出来。以前这里什么都不显示：服务端重启之后页面看着一切正常,
+           只是再也收不到消息, 而用户唯一的线索是「别人都在动而我不懂为什么不动」。 -->
+      <div v-if="live !== 'open'" class="px-4 pb-2 text-xs text-warning" role="status">
+        {{ live === "retrying" ? "实时连接已断开，正在重连…" : "实时连接已关闭" }}
+      </div>
 
       <form class="flex gap-2 border-t-1 border-line p-3" @submit.prevent="onSend">
         <n-input
