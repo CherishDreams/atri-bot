@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { RouterLink } from "vue-router";
 import logoUrl from "@/assets/images/logo.png";
-import ModelSelectMenu from "@/components/shared/ModelSelectMenu.vue";
 import PlatformSwitch from "@/components/shared/PlatformSwitch.vue";
 import ThemeToggle from "@/components/shared/ThemeToggle.vue";
 import TopBarMenu from "@/components/shared/TopBarMenu.vue";
 
 /**
- * bot 平台的顶栏。**刻意不复用 ChatHeader**：两者左侧内容本就不同
+ * bot 平台的顶栏。**刻意不复用 ChatHeader**：两者内容本就不同
  * （这里放 logo，chat 那边放模型选择器），硬合成一个组件只会得到一堆
  * `v-if="isChat"`，两个平台的顶栏改动互相牵制。
- * 右侧控件与 chat 保持一致，因此抽成三个共用组件，而不是复制第二份实现。
+ *
+ * **这一侧没有模型选择器**（以前有）。判据不是审美而是「它在这儿不做事」：
+ * bot 侧发消息走 `components/Conversation.vue` 的 `send(profile, text)`，
+ * 根本不传 model，所以那颗选择器改的 `selection` 对 bot 平台没有任何行为影响，
+ * 只是占掉顶栏 128px 的一个装饰 —— 而「这一档用哪个模型」在 chat 侧才是需要随手调的事。
+ * 其余三个控件（主题、平台切换、汉堡）与 chat 共用同一批组件。
  *
  * logo 用**原始整图**（2172×724），不裁不切。这张图内含大量透明留白
  * （实测不透明像素只落在 228–491 行、29–2142 列，真实图形 2114×264、宽高比 8.0），
@@ -40,7 +44,6 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
     </RouterLink>
 
     <div class="ml-auto flex items-center gap-3">
-      <ModelSelectMenu />
       <ThemeToggle />
       <PlatformSwitch />
       <TopBarMenu />
@@ -52,34 +55,21 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
 /**
  * 窄屏收窄 logo。
  *
- * logo 在 60px 顶栏里固定占 177px，是顶栏里最宽的固定项；375px 视口下
- * 「logo 177 + 模型选择器 + 平台切换 107 + 汉堡 32」放不下，实测汉堡按钮
- * 被推到 right=382（视口 375）而**整颗移出屏幕**——不是变窄，是点不到。
- * 因此这里让 logo 在窄屏降一档，而不是继续挤右侧控件。
+ * logo 在这 60px 顶栏里按原图宽高比固定占约 177px，是最宽的固定项；375px 视口下
+ * 「logo 177 + 平台切换 107 + 主题 32 + 汉堡 32 + 三处 gap 36 + 左右内边距 32」放不下，
+ * 汉堡按钮会被推到自己的 `right` 超出视口 —— 不是变窄，是**点不到**，而它是
+ * 「返回控制台 / 新建会话 / 退出登录」的唯一入口。所以让装饰性宽度先让路。
  *
- * 用 max-width 而非覆盖 height：图片的 h-full/w-auto 依赖交叉轴高度，
- * 改高度会让它在 60px 顶栏里重新居中并改变视觉大小，而收窄宽度只是
- * 让这张宽高比 3:1 的图整体等比缩小。
+ * 用 max-width 而非覆盖 height：图片的 h-full/w-auto 依赖交叉轴高度，改高度会让它在
+ * 60px 顶栏里重新居中并改变视觉大小，而收窄宽度只是让这张宽高比 3:1 的图整体等比缩小。
+ *
+ * 这里以前还有一条 `max-width: 414px` 把整个 logo 收起，那是给模型选择器腾地方的
+ * （它的判据里算着 128px 的选择器宽度）；选择器已从本侧顶栏移除，那条规则随之删掉，
+ * 现在 375 档也留得下 logo。
  */
 @media (max-width: 480px) {
   .atri-bot-header .atri-logo {
-    max-width: 64px;
-  }
-}
-
-/**
- * 再窄一档就把 logo 整块收起。触发它的是一次实测：375/414/480 三档下模型名较长时
- * 「打开菜单」这颗按钮 `right` 超出视口 —— **不是变窄，是点不到**，
- * 而顶栏里最宽的可让位项就是这个 logo（模型选择器不能缩到看不见，
- * 平台切换按 AGENTS.md 的既有结论不许塞进汉堡菜单）。
- *
- * 收起它不丢功能：主页入口在汉堡里那一项「返回控制台」，而 logo 本来就是装饰图
- * （空 alt，链接自带 aria-label）。这条与上面那条同一个思路 —— 让装饰性宽度先让路，
- * 保住可达性，而不是去缩真正要点的控件。
- */
-@media (max-width: 414px) {
-  .atri-bot-header .atri-logo-link {
-    display: none;
+    max-width: 96px;
   }
 }
 </style>

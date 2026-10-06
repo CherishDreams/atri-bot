@@ -32,12 +32,15 @@ export const PROFILES_DIR_NAME = "profiles";
 /** 一个配置档目录里那份运行期配方的文件名。 */
 export const PROFILE_FILE_NAME = "config.json";
 /**
- * 第一次落盘时用的那个 id。
+ * 第一次落盘时用的那个 id。定义在 `@atri/shared`（dashboard 补 `?profile=` 时要用同一个值，
+ * 两处各写一份字面量的话，改 seed 落点只会得到「前端不再优先选它」这种没有报错的症状）。
  *
- * **它没有任何运行期特权** —— 不是「默认回落的那一份」，也不是「不可删的那一份」。
- * 它今天唯一的用处是 `seedProfile()` 的落点；运行期选中哪一份由请求决定（下一阶段）。
+ * **服务端仍然不给它任何运行期特权**：缺 `?profile=` 一律 400（见 `api/server.ts` 的
+ * `scopedProfile`），绝不回落到这一份。优先选它的只有前端的路由守卫，而且是在**URL 里写明**
+ * 之后才发请求 —— 那与「服务端猜」是两件事，分别由 `openapi-request.test.ts` 与
+ * `router/index.ts` 守着。
  */
-export const DEFAULT_PROFILE_ID = "default";
+export { DEFAULT_PROFILE_ID } from "@atri/shared";
 
 /**
  * 能当目录名用的配置档 id。
