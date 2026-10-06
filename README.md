@@ -289,7 +289,8 @@ pnpm start            # 或 node apps/server/src/index.ts
   合并一次即可（`mv apps/server/atri.config.json .`，再把 `apps/server/data/` 并进 `data/`）。
   **两处都已经有 `sessions.sqlite` 时不要覆盖**——两份历史合不到一个库里，只能挑一份用、
   另一份改名留着；实在想保持原样就给老位置显式设 `ATRI_ROOT=apps/server`。
-- **一个数据目录只跑一个实例。** 同会话串行那把锁是进程内的 `Set`（`core/agent/engine.ts`），
+- **一个数据目录只跑一个实例。** 同会话串行那把锁是进程内的 `Map`（`core/session/lock.ts`，
+  由组合根构造并注入每一份配置档的引擎，见 architecture.md 的「一轮对话为什么要串行」），
   第二个进程看不见它；SQLite 侧只有文件锁 + 5 秒 busy timeout，抢不到会得到一句中文 500。
   想跑两份就给它们两个 `dataDir`。
 - **备份用 `sqlite3 <db> ".backup 目标"`，或者先停服再整目录复制。**

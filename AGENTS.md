@@ -290,7 +290,8 @@ await app.start();
 量几何时的两个具体教训：
 
 - **和容器自己的 `getBoundingClientRect()` 比，不要和视口绝对坐标比。**
-  chat 侧侧栏占 272px，顶栏自身 `x=272`，左侧控件 `x=288` 是**正确**的（`272+16`），
+  chat 侧侧栏占 232px（`theme/tokens.ts` 的 `layout.navW`，实测顶栏自身 `x=232`），
+  左侧控件 `x=248` 是**正确**的（`232+16`），
   拿它跟 `x<200` 比会误报「不贴左」。
 - **不要用 `console.error` 或 `requestfailed` 判定出错。** 登录前守卫**有意**探测 `/auth/me`
   并收到 401（那是「未登录」的正常表达），导航也会让在途请求变成 `ERR_ABORTED`。
