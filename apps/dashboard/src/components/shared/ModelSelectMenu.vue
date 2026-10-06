@@ -73,9 +73,10 @@
         strong
         class="model-active flex min-w-0 cursor-pointer select-none items-center gap-1"
       >
-        <span class="active-model max-w-[8rem] truncate md:max-w-[16rem]">{{
-          providers.activeModel
-        }}</span>
+        <span
+          class="active-model max-w-[8rem] truncate max-[480px]:max-w-[5rem] md:max-w-[16rem]"
+          >{{ providers.activeModel }}</span
+        >
         <span class="shrink-0 text-ink-faint"><component :is="ChevronIcon" /></span>
       </n-text>
     </template>

@@ -30,9 +30,13 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
          直接子项的高度是内容撑出来的（auto），此时图片的 h-full（height:100%）
          会因为父高不确定而解析成 auto，logo 缩回原始 724px 那套内部尺寸，
          表现为顶栏被撑高或图片位置异常。先让链接占满交叉轴高度，百分比高度才有确定基准。 -->
-    <RouterLink to="/" class="flex shrink-0 self-stretch items-center" aria-label="返回控制台">
+    <RouterLink
+      to="/"
+      class="atri-logo-link flex shrink-0 self-stretch items-center"
+      aria-label="返回控制台"
+    >
       <!-- 链接已有可读名称，图片按装饰处理（空 alt），避免读屏把名称念两遍。 -->
-      <img :src="logoUrl" alt="" class="h-full w-auto" />
+      <img :src="logoUrl" alt="" class="atri-logo h-full w-auto" />
     </RouterLink>
 
     <div class="ml-auto flex items-center gap-3">
@@ -58,8 +62,24 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
  * 让这张宽高比 3:1 的图整体等比缩小。
  */
 @media (max-width: 480px) {
-  .atri-bot-header img {
-    max-width: 96px;
+  .atri-bot-header .atri-logo {
+    max-width: 64px;
+  }
+}
+
+/**
+ * 再窄一档就把 logo 整块收起。触发它的是一次实测：375/414/480 三档下模型名较长时
+ * 「打开菜单」这颗按钮 `right` 超出视口 —— **不是变窄，是点不到**，
+ * 而顶栏里最宽的可让位项就是这个 logo（模型选择器不能缩到看不见，
+ * 平台切换按 AGENTS.md 的既有结论不许塞进汉堡菜单）。
+ *
+ * 收起它不丢功能：主页入口在汉堡里那一项「返回控制台」，而 logo 本来就是装饰图
+ * （空 alt，链接自带 aria-label）。这条与上面那条同一个思路 —— 让装饰性宽度先让路，
+ * 保住可达性，而不是去缩真正要点的控件。
+ */
+@media (max-width: 414px) {
+  .atri-bot-header .atri-logo-link {
+    display: none;
   }
 }
 </style>
