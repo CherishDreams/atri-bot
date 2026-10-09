@@ -73,6 +73,18 @@ export interface PluginToggle {
 export interface ProfileFileConfig {
   /** 给人看的名字；缺省时界面直接用 id。 */
   name?: string;
+  /**
+   * 这一档默认用哪个 provider **实例**。存实例 id 而不是模型名：实例 id 才是
+   * `ProviderRegistry.#resolveFor` 的第一级判据，而模型名不再跨档唯一。
+   *
+   * 它存在的理由是「供应商与模型清单已经是全局的，但每一档要能用其中不同的那一个」。
+   * 没写这一项时回落到全局 `providers.default`，两级都不是靠猜 —— 见 `app.ts` 的装配。
+   */
+  defaultProvider?: string;
+  /**
+   * 下面两段属于**旧形状**：供应商配置现在住在 `providers.json` 里（全局一份）。
+   * 保留是为了读得懂升级前留下的文件，并由 `migrateProvidersToGlobal` 搬出去一次。
+   */
   providers?: ProvidersFileConfig;
   providerSources?: Record<string, ProviderSourceEntryConfig>;
   tools?: Record<string, ToolToggle>;
@@ -80,6 +92,119 @@ export interface ProfileFileConfig {
   /** 每份配置档自己的插件启用清单。装是全局的，这里只决定开不开。 */
   plugins?: Record<string, PluginToggle>;
   [key: string]: unknown;
+}
+
+/**
+ * 配置档文件里属于「旧形状里已经全局化」的那两段。与 `RUN_SHAPE_KEYS`（bootstrap 侧的
+ * 同一批死键）同一条用途：搬完之后每次启动按档提醒，而不是让第二个真源安静地留在磁盘上。
+ */
+export const PROVIDER_SHAPE_KEYS = ["providers", "providerSources"] as const;
+
+/** 这一档文件里还留着哪些已经全局化的段（返回键名；空数组表示干净）。 */
+export function providerShapeKeysIn(profile: ProfileFileConfig): string[] {
+  return PROVIDER_SHAPE_KEYS.filter((key) => profile[key] !== undefined);
+}
+
+/** `migrateProvidersToGlobal` 的产物，只用于日志（不参与任何运行期判定）。 */
+export interface ProvidersMigration {
+  /**
+   * 这次合并的内容是从哪儿来的：
+   *
+   * - `"profiles"`：各配置档文件里有那两段（上一版的形状），逐档合并。
+   * - `"bootstrap"`：一份配置档里都没有，而 `atri.config.json` 有 —— 那是**最初的安装**
+   *   （bootstrap 是唯一写过它们的地方）。不取这一支的话，新部署拿不到自己配好的模型，
+   *   而取的那一步发生在 seed 之前，老部署永远走不到它。
+   */
+  from: "profiles" | "bootstrap";
+  /** 合并进全局文件的 source id。 */
+  sources: string[];
+  /** 合并进全局文件的 provider 实例 id。 */
+  providers: string[];
+  /** 被丢弃的项：`"来源档 id → 键名"`，两个档配了同一个 source 时只有一个能赢。 */
+  dropped: string[];
+  /** 文件里仍留着那两段的配置档（框架从不删用户的文件）。 */
+  leftovers: string[];
+}
+
+/**
+ * 把散在各份配置档里的供应商配置合并成全局的 `providers.json`。**一次性**：
+ * 目标文件已存在就什么都不做（与 `seedProfile` 同一条幂等判据 —— 用「目标在不在」而不是版本号，
+ * 版本号会诱使有人加第二个真源来记「搬过没有」）。
+ *
+ * 冲突取**字典序最小的那份档**：`listProfileDirs` 已经排序，所以这个赢家是确定的，
+ * 换台机器、重启多少次都不会变；其余的进 `dropped` 由调用方 warn 说清。
+ * 「谁赢」这件事必须有明确规则 —— 让它随启动顺序漂移，症状就是某天模型悄悄换了。
+ *
+ * **不删**各档文件里的那两段（框架从不删用户写的东西），只回报谁还留着，
+ * 由装配处每次启动 warn 一次。
+ *
+ * @returns 合并报告；`null` 表示全局文件已经存在，这次什么都没做。
+ */
+export function migrateProvidersToGlobal(
+  profilesDir: string,
+  targetPath: string,
+  bootstrap: FileConfig,
+): ProvidersMigration | null {
+  if (existsSync(targetPath)) return null;
+
+  const sources: Record<string, unknown> = {};
+  const providers: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  const leftovers: string[] = [];
+
+  for (const id of listProfileDirs(profilesDir)) {
+    let profile: ProfileFileConfig;
+    try {
+      profile = readProfileConfig(profileConfigPath(profilesDir, id));
+    } catch (err) {
+      // 读不出来的那一档不参与合并，也**不能**让整次迁移失败：它的文件坏了是它自己的事
+      //（`openProfile` 那边会登记成 failed），这里跟着坏掉只会让整个服务起不来。
+      dropped.push(`${id} → 文件读不出（${err instanceof Error ? err.message : String(err)}）`);
+      continue;
+    }
+    if (providerShapeKeysIn(profile).length > 0) leftovers.push(id);
+
+    for (const [key, value] of Object.entries(profile.providerSources ?? {})) {
+      if (key in sources) {
+        dropped.push(`${id} → source「${key}」已被更早的一份档占用`);
+        continue;
+      }
+      sources[key] = value;
+    }
+    // `default` 这个保留键按普通键一起合并：第一个非空的就是赢家，规则与上面同一条。
+    for (const [key, value] of Object.entries(profile.providers ?? {})) {
+      if (key in providers) {
+        dropped.push(`${id} → provider「${key}」已被更早的一份档占用`);
+        continue;
+      }
+      providers[key] = value;
+    }
+  }
+
+  let from: ProvidersMigration["from"] = "profiles";
+  if (Object.keys(sources).length === 0 && Object.keys(providers).length === 0) {
+    // 各档里什么都没有：那是**最初的安装**，bootstrap 才是唯一写过这两段的地方。
+    // 判据用「都没有」而不是「比 bootstrap 少」—— 只要任何一档里出现过其中一段，
+    // 那些档就是更近的一份真源，bootstrap 里的那一段是上一版留下的死键，不许复活。
+    from = "bootstrap";
+    Object.assign(sources, bootstrap.providerSources ?? {});
+    Object.assign(providers, bootstrap.providers ?? {});
+  }
+
+  // 两边都空也要写：写下去之后「文件在不在」才是那个可靠的「搬过没有」信号。
+  // 不写的话每次启动都要重扫一遍所有档，而用户也看不出这份空文件是不是坏了。
+  writeConfigFileAt(targetPath, {
+    providerSources: sources,
+    providers,
+  } as FileConfig);
+
+  return {
+    from,
+    sources: Object.keys(sources),
+    providers: Object.keys(providers).filter((key) => key !== "default"),
+    dropped,
+    leftovers,
+  };
 }
 
 /** 配置档们的根目录（由 `dataDir` 算出）。 */

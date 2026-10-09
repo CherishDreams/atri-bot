@@ -33,6 +33,18 @@ import { errorMessage } from "#core/errors.ts";
 export const CONFIG_FILE_NAME = "atri.config.json";
 
 /**
+ * 全局供应商配置的文件名（在 `dataDir` 下）。
+ *
+ * 为什么单独一个文件而不是回到 `atri.config.json`：那一份里躺着 `auth.adminPassword`，
+ * 运行期写入者越少越好（现在只有「首次生成口令」那一条路径），而且它半截 JSON 等于
+ * **整个服务起不来**；供应商配置由配置页高频读写，坏一次只该让 provider 报错。
+ * 也不放仓库根：`.gitignore` 忽略的是精确名 `atri.config.json`，根下的新兄弟文件就成了
+ * 「未跟踪但也不忽略」，一次 `git add -A` 就会把 `apiKey` 提交进版本库。`data/` 整目录
+ * 已忽略且 0700。
+ */
+export const PROVIDERS_FILE_NAME = "providers.json";
+
+/**
  * 适配器段里的单项。带索引签名是因为适配器实现可能往自己的段落里放任意配置键，
  * 读-改-写必须把它们原样带回，所以这份类型不能是封闭的。
  *
@@ -126,6 +138,17 @@ export interface FileConfig {
 /** @returns 配置文件绝对路径 */
 export function configFilePath(root: string): string {
   return join(root, CONFIG_FILE_NAME);
+}
+
+/**
+ * 全局供应商配置的绝对路径。
+ *
+ * 参数是 `dataDir` 而不是 `root`：它属于**运行期数据**（与 `profiles/`、`sessions.sqlite`
+ * 同级），备份 `dataDir` 就要连它一起带走；而 root 下那份 `atri.config.json` 是部署参数。
+ * @returns 配置文件绝对路径
+ */
+export function providersFilePath(dataDir: string): string {
+  return join(dataDir, PROVIDERS_FILE_NAME);
 }
 
 /**

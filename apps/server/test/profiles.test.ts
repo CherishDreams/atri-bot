@@ -22,14 +22,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "#app.ts";
-import { configFilePath } from "#config/file.ts";
+import { configFilePath, ensurePrivateDir, providersFilePath } from "#config/file.ts";
 import {
   DEFAULT_PROFILE_ID,
   PROFILE_FILE_NAME,
   assertProfileId,
   listProfileDirs,
+  migrateProvidersToGlobal,
   profileConfigPath,
   profileDir,
+  providerShapeKeysIn,
   profilesRoot,
   readProfileConfig,
   runShapeKeysIn,
@@ -115,6 +117,133 @@ test("bootstrap 里还留着哪些「跑法」段：空对象与只带部署级�
   assert.deepEqual(runShapeKeysIn({ tools: {} }), ["tools"]);
   // 「写了但值是 undefined」不算留着：那是不存在的键，seed 不会搬它，也不该每次启动 warn。
   assert.deepEqual(runShapeKeysIn({ providers: undefined }), []);
+});
+
+// --- 供应商配置搬成全局一份 `providers.json` ---------------------------------
+
+/**
+ * 全局供应商的那一次合并。这里证的都是「装配还没接上、所以只有函数能证」的部分：
+ * 谁赢（必须确定，否则某天模型悄悄换了）、幂等判据（第二次不许再动已经写好的文件）、
+ * 以及**最初的安装**那一支 —— 各档里什么都没有时要去 bootstrap 取，
+ * 漏掉它的症状是新部署配好了模型却一个都加载不出来，而界面只显示「没有 provider」。
+ */
+test("合并各配置档的供应商段：同名冲突由字典序最小的那份赢，其余进 dropped", (t) => {
+  const root = tmpRoot(t, "atri-provmrg-");
+  const profiles = profilesRoot(root);
+  const dataDir = join(root, "data");
+  ensurePrivateDir(dataDir);
+  const target = providersFilePath(dataDir);
+  writeProfileConfig(profileConfigPath(profiles, "a"), {
+    name: "甲",
+    providerSources: { shared: { type: "openai", baseUrl: "https://a.example/v1" } },
+    providers: { default: "ga", ga: { source: "shared", model: "from-a" } },
+  });
+  writeProfileConfig(profileConfigPath(profiles, "b"), {
+    providerSources: { shared: { type: "openai", baseUrl: "https://b.example/v1" } },
+    providers: { gb: { source: "shared", model: "from-b" }, default: "gb" },
+  });
+
+  const report = migrateProvidersToGlobal(profiles, target, {});
+  if (report === null) throw new Error("目标文件不存在时必须做一次合并");
+  assert.equal(report.from, "profiles");
+  assert.deepEqual(report.sources, ["shared"]);
+  // `default` 是保留键而不是实例，所以它出现在文件里但不算一个 provider。
+  assert.deepEqual(report.providers, ["ga", "gb"]);
+  assert.deepEqual(report.leftovers, ["a", "b"]);
+  // 冲突的两条都要点名，并且说清是被谁占的 —— 「你的配置被忽略了」不指出赢家等于没说。
+  assert.deepEqual(report.dropped, [
+    "b → source「shared」已被更早的一份档占用",
+    "b → provider「default」已被更早的一份档占用",
+  ]);
+
+  const written = JSON.parse(readFileSync(target, "utf8")) as {
+    providerSources: Record<string, { baseUrl?: string }>;
+    providers: Record<string, unknown>;
+  };
+  assert.equal(written.providerSources.shared?.baseUrl, "https://a.example/v1", "赢家不是 a");
+  assert.equal(written.providers.default, "ga");
+  // 保留键 `default` 也跟着搬：它指的就是这批实例里的某一个。
+  assert.deepEqual(Object.keys(written.providers).toSorted(), ["default", "ga", "gb"]);
+
+  // **不删**用户文件里的那两段：搬完还在，由装配处每次启动 warn。
+  assert.deepEqual(providerShapeKeysIn(readProfileConfig(profileConfigPath(profiles, "a"))), [
+    "providers",
+    "providerSources",
+  ]);
+});
+
+test("合并是**一次性**的：第二次运行既不写文件也不改各档", (t) => {
+  const root = tmpRoot(t, "atri-provmrg-idem-");
+  const profiles = profilesRoot(root);
+  const dataDir = join(root, "data");
+  ensurePrivateDir(dataDir);
+  const target = providersFilePath(dataDir);
+  const profilePath = profileConfigPath(profiles, "a");
+  writeProfileConfig(profilePath, { providers: { p: { model: "m" } } });
+
+  assert.notEqual(migrateProvidersToGlobal(profiles, target, {}), null);
+  const targetBefore = readFileSync(target, "utf8");
+  const profileBefore = readFileSync(profilePath, "utf8");
+
+  // 第二次：目标已存在 → 什么都不做。若这里改成「比较内容再决定」，就多了一个真源。
+  assert.equal(migrateProvidersToGlobal(profiles, target, { providers: { late: {} } }), null);
+  assert.equal(readFileSync(target, "utf8"), targetBefore, "第二次运行改到了已有的全局文件");
+  assert.equal(readFileSync(profilePath, "utf8"), profileBefore, "第二次运行改到了配置档文件");
+});
+
+test("最初的安装（各档里什么都没有）从 bootstrap 取，各档里出现过任何一段就不取", (t) => {
+  const root = tmpRoot(t, "atri-provmrg-boot-");
+  const profiles = profilesRoot(root);
+  const dataDir = join(root, "data");
+  ensurePrivateDir(dataDir);
+  const target = providersFilePath(dataDir);
+
+  const fresh = migrateProvidersToGlobal(profiles, target, {
+    providerSources: { s: { type: "openai", apiKey: "k" } },
+    providers: { default: "p", p: { source: "s", model: "m" } },
+  });
+  if (fresh === null) throw new Error("新部署没有做合并");
+  assert.equal(fresh.from, "bootstrap");
+  assert.deepEqual(fresh.sources, ["s"]);
+  assert.deepEqual(fresh.providers, ["p"]);
+
+  // 反向：只要有任何一档写了那两段，bootstrap 里那一份就是上一版留下的死键，不许复活。
+  const root2 = tmpRoot(t, "atri-provmrg-stale-");
+  const profiles2 = profilesRoot(root2);
+  writeProfileConfig(profileConfigPath(profiles2, "a"), { providers: { mine: { model: "m" } } });
+  const second = migrateProvidersToGlobal(profiles2, join(root2, "providers.json"), {
+    providers: { stale: { model: "s" } },
+  });
+  if (second === null) throw new Error("第二种情形也没做合并");
+  assert.equal(second.from, "profiles");
+  assert.deepEqual(second.providers, ["mine"], "bootstrap 里的死键被复活进了全局文件");
+});
+
+test("读不出来的配置档不参与合并，也不让整次迁移失败", (t) => {
+  const root = tmpRoot(t, "atri-provmrg-broken-");
+  const profiles = profilesRoot(root);
+  writeProfileConfig(profileConfigPath(profiles, "good"), { providers: { p: { model: "m" } } });
+  mkdirSync(profileDir(profiles, "broken"), { recursive: true });
+  writeFileSync(profileConfigPath(profiles, "broken"), "{ 这不是 JSON", "utf8");
+
+  const report = migrateProvidersToGlobal(profiles, join(root, "providers.json"), {});
+  if (report === null) throw new Error("坏文件让整次迁移没跑");
+  assert.deepEqual(report.providers, ["p"], "坏文件连带把好的那份也拖掉了");
+  assert.equal(report.dropped.length, 1);
+  assert.match(report.dropped[0] ?? "", /^broken → 文件读不出/);
+  // 坏的那一档不该出现在 leftovers 里：它连键都读不出来，warn 一句「你还有残留」是瞎说。
+  assert.deepEqual(report.leftovers, ["good"]);
+});
+
+test("providerShapeKeysIn 只点名已经全局化的那两段", () => {
+  assert.deepEqual(providerShapeKeysIn({}), []);
+  assert.deepEqual(providerShapeKeysIn({ tools: {}, plugins: {} }), []);
+  assert.deepEqual(providerShapeKeysIn({ providers: {} }), ["providers"]);
+  assert.deepEqual(providerShapeKeysIn({ providerSources: undefined, name: "x" }), []);
+  assert.deepEqual(providerShapeKeysIn({ providers: {}, providerSources: {} }), [
+    "providers",
+    "providerSources",
+  ]);
 });
 
 test("配置档目录收到 0700：先预置宽松权限，再证明它被收紧", (t) => {
