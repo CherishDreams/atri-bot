@@ -16,7 +16,7 @@ import type { ProviderConstructor, ProviderImpl, ProviderOptions } from "./types
  * 注册表只该负责「存与取」，而「读配置、挑实现、解析密钥」是装配职责——
  * 混在一起会让注册表依赖具体的厂商实现。
  *
- * 配置是**两层**的（`atri.config.json`）：
+ * 配置是**两层**的（`data/providers.json`，部署级全局一份）：
  *
  * - `providerSources`：一次连接。`baseUrl` / `apiKey` / `timeoutMs` / `type`。
  * - `providers`：一个模型实例。`source` 指向某个源，外加 `model`。

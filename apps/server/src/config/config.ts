@@ -7,10 +7,12 @@ import { readConfigFile, type AdapterToggle } from "./file.ts";
  * `loadConfig()` 的产物：**只有部署级参数**。每个键都有值
  * （内置默认 → `atri.config.json` → 环境变量，后者覆盖前者）。
  *
- * 这里**没有** `providers` / `providerSources` / `tools` / `maxToolSteps` —— 那是「跑法」，
- * 住在各配置档自己的 `<dataDir>/profiles/<id>/config.json` 里（见 `config/profiles.ts`），
+ * 这里**没有** `providers` / `providerSources` / `tools` / `maxToolSteps` —— 那些是运行期配置，
+ * 各自住在真正那个文件里：供应商在 `<dataDir>/providers.json`（部署级全局一份），
+ * 工具与步数在各配置档自己的 `<dataDir>/profiles/<id>/config.json`（见 `config/profiles.ts`），
  * 由 `ProviderConfigStore` / `ToolConfigStore` 按文件读写。删掉这几个键不是清理：
- * 只要它们还留在 `AppConfig` 上，「配置档 B 看得见 A 的 provider」就还有一条活路。
+ * 只要它们还留在 `AppConfig` 上，就永远有一条「把注入的那份当成当前档的配置」的活路，
+ * 而那正是「配置档 B 看得见 A 的 provider」这类串档错误的入口。
  *
  * 各模块的构造参数不要用它，而是声明自己实际读写的那几个键
  * （例如 `ProviderStoreConfig { filePath: string | null }`）——否则测试里只传

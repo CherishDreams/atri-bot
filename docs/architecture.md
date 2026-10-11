@@ -100,49 +100,64 @@ const logger = createLogger(config.logLevel);
 const auth = new AuthManager(config, logger);
 await auth.init(); // 必须早于 HTTP 启动：未配置口令时要先落盘
 const sessions = new SessionManager(config, logger); // 会话库落在 config.dataDir
-const providers = new ProviderRegistry();
-// 运行期配置住在配置档文件里，不在 `atri.config.json`。顺序有意：先建目录、
-// 再一次性 seed（`atri.config.json` 里那几段只在目标文件不存在时搬一次）、
-// **然后**才构造任何存储 —— 存储拿到的一直是 `<dataDir>/profiles/default/config.json`。
+// 运行期配置分两处：**供应商是部署级全局的一份**，工具与插件的启用状态在各档文件里。
+// 顺序有意：先建目录、把旧位置的内容各搬一次（都在目标文件不存在时才动）、
+// **然后**才构造任何存储 —— 存储拿到的一直是它真正那个文件。
 const profilesDir = profilesRoot(config.dataDir);
 ensurePrivateDir(profilesDir);
-seedProfile(profilesDir, DEFAULT_PROFILE_ID, readConfigFile(config.root));
-const profilePath = profileConfigPath(profilesDir, DEFAULT_PROFILE_ID);
-const providerConfig = new ProviderConfigStore({ filePath: profilePath }, logger);
-// 工具：注册表只管「存在与执行」，启用与否由 ToolConfigStore 每次现读文件
+seedProfile(profilesDir, DEFAULT_PROFILE_ID, readConfigFile(config.root)); // tools / maxToolSteps
+const providersPath = providersFilePath(config.dataDir);
+migrateProvidersToGlobal(profilesDir, providersPath, bootstrap); // 一次性收成全局一份
+const providerConfig = new ProviderConfigStore({ filePath: providersPath }, logger);
+const providers = new ProviderRegistry();
+// 一份注册表 + 一张失败表，全局只此一份；`rebuildProviders()` 是**唯一**装配路径，
+// 启动与「配置页改完保存」共用它，所以 `GET /providers` 的错误与注册表永远同源。
+function rebuildProviders(): ProviderRegistry {
+  /* 读 providerConfig → createProviders() → 填 providers / providerErrors，并设默认 */
+}
+// 以下每一样**都是一份配置档**各有一套：插件管理器、工具注册表、工具开关、引擎。
 // `list_plugins` 要读插件列表，所以构造顺序是「插件管理器在前、工具在后」。
 // 传的是 **getter 而不是 `plugins.list()` 的结果**：此刻还没 `loadAll()`，
 // 而插件能在运行期被加载/重载/启停 —— 快照会把这颗工具冻在装配那一刻。
-// 第三个参数是框架私有的数据根：插件只经 `ctx.dataDir` 看到 `<dataDir>/plugins/<自己的 id>`，
-// 拿不到 `dataDir` 本体（那下面躺着 `sessions.sqlite`）。
+// 第三个参数是框架私有的数据根，而且是**这一档自己的**那一个：插件只经 `ctx.dataDir`
+// 看到 `<dataDir>/profiles/<档 id>/plugins/<自己的 id>`，拿不到 `dataDir` 本体
+//（那下面躺着 `sessions.sqlite` 与全局那份 `providers.json`）。
 const plugins = new PluginManager(pluginRuntimeConfig(config), logger, {
-  dataRoot: join(config.dataDir, "plugins"),
+  dataRoot: join(profileDir(profilesDir, id), "plugins"),
+  persistEnabled: (pluginId, enabled) => setProfilePluginEnabled(profilePath, pluginId, enabled),
 });
 const tools = new ToolRegistry();
 for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) tools.register(tool);
 const toolConfig = new ToolConfigStore({ filePath: profilePath }, logger);
-// 引擎吃五样：会话、provider、工具注册表、工具开关存储、日志器。
+// 引擎吃五样：会话、（全局那一份）provider、工具注册表、工具开关存储、日志器，
+// 加上「这一档默认用清单里的哪一个」——`model` 缺省时由它填，这是档级默认与全局默认
+// 之间那一级差别的落点。
 // 曾经这里还注入过 config 与 plugins，两个字段全仓没有任何读取点，于是被删掉；
 // tools / toolConfig 是**先有读取点**（选本轮工具、执行调用）才加进来的。
-const engine = new AgentEngine({ sessions, providers, tools, toolConfig, logger });
+const engine = new AgentEngine({
+  sessions,
+  providers,
+  tools,
+  toolConfig,
+  logger,
+  lock,
+  events,
+  profileId: id,
+  defaultProviderId,
+});
 // 适配器不注入 engine：那个字段以前只存不读，已按「注入了但没人读」的同一条判断删掉。
-const adapters = new AdapterManager({ config, logger });
-// `createHttpServer` **不是** async（它只构造 server 与路由，`listen` 才是异步的那一步），
-// 所以这里不 await —— `app.start()` 里才 `await http.listen(...)`。
+const adapters = new AdapterManager({ config, logger, resolveProfile });
 const http = createHttpServer({
   config,
   logger,
   sessions,
-  providers,
-  providerConfig,
-  reloadProviders: rebuildProviders, // 启动与「配置页改完保存」共用同一个装配函数
-  plugins,
+  profiles, // 配置档目录：`id -> 那份对象图`，见下一节
+  providerSurface: { config: providerConfig, registry: providers, rebuild: rebuildProviders },
   adapters,
-  tools,
-  toolConfig,
   auth,
-  engine,
 });
+```
+
 ```
 
 `ProviderRegistry` 仍然**不接配置**：早先给它注入的 `config` 被存成一个从未被读取的字段，
@@ -158,14 +173,16 @@ const http = createHttpServer({
 ## 请求生命周期
 
 ```
+
 HTTP 请求
-  └─> createServer 处理器
-        ├─ new URL(req.url, ...) 取 pathname
-        ├─ 鉴权闸门（仅 /api/v1 下、非白名单路径）
-        ├─ router.match(method, pathname)
-        │     ├─ 命中 -> handler(req, res, params)
-        │     └─ 未命中 -> serveStatic()（真实文件，否则 SPA 回退）
-        └─ catch -> logger.error + 500
+└─> createServer 处理器
+├─ new URL(req.url, ...) 取 pathname
+├─ 鉴权闸门（仅 /api/v1 下、非白名单路径）
+├─ router.match(method, pathname)
+│ ├─ 命中 -> handler(req, res, params)
+│ └─ 未命中 -> serveStatic()（真实文件，否则 SPA 回退）
+└─ catch -> logger.error + 500
+
 ```
 
 ### 鉴权闸门为什么在路由匹配之前
@@ -183,13 +200,22 @@ HTTP 请求
 
 ## 配置档：什么共享、什么各一份
 
-一份配置档 = 一套「跑法」（provider 源与实例、工具开关、`maxToolSteps`、插件启用清单），
-落在 `<dataDir>/profiles/<id>/config.json`。运行期有 N 份同时在线，每份一套
-`ProviderRegistry` / `ProviderConfigStore` / `ToolConfigStore` / `ToolRegistry` /
-`PluginManager` / `AgentEngine`。
+**供应商（provider source 与模型实例）不属于配置档**，它是部署级全局的一份，
+落在 `<dataDir>/providers.json`。一份配置档 = 一套**跑法**：工具开关、`maxToolSteps`、
+插件启用清单，外加「默认用全局清单里的哪一个实例」，落在
+`<dataDir>/profiles/<id>/config.json`。运行期有 N 份同时在线，每份一套
+`ToolConfigStore` / `ToolRegistry` / `PluginManager` / `AgentEngine`；
+`ProviderConfigStore` / `ProviderRegistry` / 那张失败表**各只有一份**，被 N 个引擎共用。
 
-跨配置档共享的只有四样：登录、会话存储、**会话锁**、**事件总线**。后两样必须是共享的，
-理由各不相同：
+这条分界是刻意对齐 AstrBot 的：「除了配置文件，其他都是全局配置」。技术上支撑它的两件事——
+连接与密钥是**文件系统级**的凭证（按档各存一份就是让同一个 `apiKey` 躺在 N 个文件里，
+而轮换密钥要改 N 处），以及「换一档换一套后端」从来没有真实使用过（bot 侧发消息不传 model，
+chat 侧传的也只是清单里的实例 id）。此前本仓是按档各一套的，那一版把这条钉死过
+（`x-profile-scoped` 与一批作用域测试），这次是**部分推翻那个决定**并保留其遗产：
+`?profile=` 仍然必填、仍然绝不回落，只是范围缩小到真属于档的那几族端点。
+
+跨配置档共享的因此是六样：登录、会话存储、**会话锁**、**事件总线**、供应商那一份文件，
+以及由它装出来的那一张注册表。锁与总线必须是共享的，理由各不相同：
 
 - `core/session/lock.ts` 的 `SessionLock`（`sessionId -> 持有它的配置档 id`）。
   对话历史是**全局一份** sqlite，所以「同一个会话被两档同时写」会把 `tool_calls` 与它的
@@ -218,7 +244,8 @@ HTTP 请求
 会话与消息落在 `config.dataDir` 下的 `sessions.sqlite`，由 `core/session/db.ts`（连接、pragma、
 schema 与版本）和 `manager.ts`（领域方法与 SQL）两层承担 —— 与 `core/provider/` 的
 `store.ts` + `registry.ts` 同构。**不叫 `store.ts`**：本仓 `store` 已经被
-`ProviderConfigStore` / `ToolConfigStore` 占住，含义是「读写配置档文件的配置存储」。
+`ProviderConfigStore` / `ToolConfigStore` 占住，含义是「读-改-写某个配置文件的那类存储」
+（前者写全局的 `providers.json`，后者写各配置档自己的文件）。
 
 选 `node:sqlite` 的理由只有一条最有分量：它是 **Node 内置模块**，因此不破
 「服务端外部运行时依赖只有 `ws`」这条硬约束。免 `--experimental-sqlite` 旗标的下限是
@@ -379,12 +406,14 @@ adapter 是长驻的 `start()`/`stop()`，provider 是每请求的 `chat()`。
 分层是「注册表只管存与取，存储与装配各自一层」：
 
 ```
-store.ts    ProviderConfigStore：两层配置的校验与落盘（读写配置档文件）
-factory.ts  配置 -> 实例（唯一入口，认得 type、两层合并与密钥解析）
+
+store.ts ProviderConfigStore：两层配置的校验与落盘（读写全局那份 `providers.json`）
+factory.ts 配置 -> 实例（唯一入口，认得 type、两层合并与密钥解析）
 registry.ts ProviderRegistry：选路与转发，不知道任何厂商细节
-openai.ts   / anthropic.ts：厂商实现
-sse.ts      SSE 解析（两个实现共用）
-errors.ts   ProviderError 与上游错误归一
+openai.ts / anthropic.ts：厂商实现
+sse.ts SSE 解析（两个实现共用）
+errors.ts ProviderError 与上游错误归一
+
 ```
 
 把装配从注册表里拆出来，是为了让 `registry.ts` 不 import 任何具体实现。
@@ -399,6 +428,15 @@ errors.ts   ProviderError 与上游错误归一
 这样切分是因为**凭证属于连接，不属于模型**：一个网关下的十个模型共享一份密钥，
 而超时也是连接级的性质。若压成一层，加一个模型就要重抄一遍密钥与端点。
 
+这一层落点的第三条界线是**它不属于任何一份配置档**：整个 `providers.json` 是部署级的
+一份，改一次每一档都生效。档那边只留一根引用（`ProfileFileConfig.defaultProvider`，
+值是**实例 id**），由该档引擎在请求没带 `model` 时填进选路。为什么实例 id 而不是模型名：
+`ProviderRegistry.#resolveFor` 的第一级判据就是实例 id，而模型名不再全局唯一
+（两个源都可以挂 `deepseek-chat`）。为什么这一根引用留在档里而不是也做成全局：
+「两份档各打各的模型」是多配置档存在的少数几个真实用途之一，
+把它做成浏览器本地状态（上一版就是这么做的，`localStorage` 里按档存一份选择）
+就会得到第三份真源，而且是看不见的那一种 —— 换设备换一个默认，而没人会去浏览器设置里找。
+
 `factory.ts` 对一个 provider 就是「一个模型实例」，所以构造时把 `model` 变成单元素
 `models: [model]`——注册表原来的按模型名选路因此完全不用改。
 
@@ -407,10 +445,16 @@ errors.ts   ProviderError 与上游错误归一
 所以「用户点错一次把配置改坏」不会发生。写文件是「读-改-写」同一份 JSON，
 `host`/`auth` 等无关字段原样保留，权限设 `0600`（里面有明文密钥）。
 
-一个反直觉但必要的分支：`config.root` 可以缺省。直接用代码构造 config 的调用方
+一个反直觉但必要的分支：`filePath` 可以是 `null`。直接用代码构造存储的调用方
 （测试、嵌入式使用）没有配置文件可写，此时存储退化为**只读内存视图**，
 写操作显式报错——否则 `join(undefined, ...)` 会以一个难懂的 `ERR_INVALID_ARG_TYPE`
 冒出来。
+
+**这份文件读坏了不许让每一档都失败**：装配那一次把「整个文件解析不了」catch 成
+「一个 provider 都没有」（回声兜底）+ 一条 error 日志，原因由 `GET /providers` 的顶层
+`error` 带给配置页。以前只坏一档，全局一份读坏若上抛就会让 N 份档全变 `failed`，
+而那一刻恰恰是操作者最需要服务活着好去改这个文件的时候。「空清单」与「读不出来」
+必须是两个字段，否则用户会去检查一个本来就空的配置。
 
 ### 配置变更如何生效
 
@@ -423,14 +467,22 @@ errors.ts   ProviderError 与上游错误归一
 因此那个请求会用旧配置跑完，下一次请求拿到新配置。代价是**别的标签页不会自动
 看到变化**（本次不做 WS 通知）。
 
+重建的入口只有这一个，连「哪些 provider 没加载成功、为什么」那张失败表也由它整份重写
+（不是累加）。以前 `GET /providers` 会自己再跑一遍 `createProviders()` 来「诊断」，
+于是那条路径不传 logger、重读一遍环境变量里的密钥，并且迟早与真正的装配对同一个
+字段给出不同答案。
+
 ### 选路与回声兜底
 
-`#resolveFor(model)` 的显式值既可以是**实例 id** 也可以是模型名：控制台的模型
-选择器发上来的是实例 id，而配置文件里写的通常是上游模型名，两种都得认。
+`#resolveFor(model)` 的显式值既可以是**实例 id** 也可以是模型名：档默认填进来的是
+实例 id，而直接调 API 的人写的通常是上游模型名，两种都得认。
 只按模型名匹配会让「选了个非默认实例」静默落到默认 provider 上，
 还把实例 id 当成上游模型名发出去——这类错误上游只会回一个含糊的 404。
 
 选路的其余部分是三级回落：显式值命中 → 默认 provider → 第一个注册的。
+完整次序还要在前面再加一级：**请求带的 model → 这一档的 `defaultProvider` →
+全局 `providers.default` → 第一个注册的**。中间那一级不在注册表里而在引擎里，
+因为注册表是全局一份而它是档级的 —— 让注册表认档就等于把传输层的概念塞回 `core/`。
 模型名对不上任何 provider 时仍退回默认 provider，因为上游的模型列表通常比本地配置新，
 本地列表不该当硬闸门。
 
@@ -479,11 +531,13 @@ errors.ts   ProviderError 与上游错误归一
 硬造一个 factory 只会得到一个没人读的文件。
 
 ```
-types.ts     ToolDefinition（id / name / description / parameters / run）+ JsonSchema
-registry.ts  ToolRegistry：存、取、按 id 执行转发 —— 不 import 具体工具，也不读配置
-store.ts     ToolConfigStore：读写配置档文件的 tools 段
-builtins.ts  createBuiltinTools()：内置工具的清单，只有 app.ts import 它
-builtins/    一颗工具一个文件（`currentTime.ts`），只导出自己那颗的 ToolDefinition
+
+types.ts ToolDefinition（id / name / description / parameters / run）+ JsonSchema
+registry.ts ToolRegistry：存、取、按 id 执行转发 —— 不 import 具体工具，也不读配置
+store.ts ToolConfigStore：读写配置档文件的 tools 段
+builtins.ts createBuiltinTools()：内置工具的清单，只有 app.ts import 它
+builtins/ 一颗工具一个文件（`currentTime.ts`），只导出自己那颗的 ToolDefinition
+
 ```
 
 清单**直接 import 实现文件**，中间不放 `builtins/index.ts` 这类 re-export 层 ——
@@ -777,29 +831,37 @@ apiKey 确实存在于交给 app 的配置里」，防止有人清空测试配�
 `apps/dashboard` 是 Vue 3 + vue-router + Pinia + UnoCSS + naive-ui 的单页应用：
 
 ```
+
 src/
-├── main.ts          挂载应用，按顺序引入 ./uno.css 与 virtual:uno.css
-├── assets/images/   logo.png（控制台顶栏用，整图不裁）
+├── main.ts 挂载应用，按顺序引入 ./uno.css 与 virtual:uno.css
+├── assets/images/ logo.png（控制台顶栏用，整图不裁）
 ├── api/
-│   ├── client.ts    唯一的 HTTP/WS 出口（手写）
-│   └── generated/   由 openapi.json 生成的类型化 SDK（入库，不手改）
-├── stores/          auth / sessions / plugins / providers（Pinia）
-├── router/index.ts  路由与登录守卫
-├── layouts/         bot/BotLayout（顶栏 + 侧栏） / chat/ChatLayout（侧栏 + 顶栏）
-├── views/           LoginView / ConsoleView / ProviderConfig / chat 下的创建与会话页
+│ ├── client.ts 唯一的 HTTP/WS 出口（手写）
+│ └── generated/ 由 openapi.json 生成的类型化 SDK（入库，不手改）
+├── stores/ auth / sessions / plugins / providers / profiles（Pinia）
+├── router/index.ts 路由、登录守卫，以及给作用域页面补 `?profile=` 的那一条
+├── layouts/ bot/BotLayout（顶栏 + 侧栏） / chat/ChatLayout（侧栏 + 顶栏）
+├── views/ LoginView / ConsoleView / ProviderConfig / ProfilesView / chat 下的创建与会话页
 └── components/
-    ├── shared/      icons / TopBarMenu / PlatformSwitch / ModelSelectMenu
-    ├── bot/         BotHeader / BotNavigation
-    ├── chat/        ChatHeader / Navigation
-    └── provider/    ProviderCard
-```
+├── shared/ icons / TopBarMenu / PlatformSwitch / ModelSelectMenu / ProfileGate
+├── bot/ BotHeader / BotNavigation
+├── chat/ ChatHeader / Navigation
+└── provider/ ProviderCard
+
+````
 
 ### 两个平台的顶栏
 
 控制台（bot）与聊天（chat）是两套布局，各自有**自己的顶栏组件**，右侧控件则共用：
 
-- `components/bot/BotHeader.vue` —— 左侧 logo，右侧 `ModelSelectMenu` + `PlatformSwitch` + `TopBarMenu`。
+- `components/bot/BotHeader.vue` —— 左侧 logo，右侧 `PlatformSwitch` + `ThemeToggle` + `TopBarMenu`。
 - `components/chat/ChatHeader.vue` —— 左侧模型选择器，右侧同样是那三个控件。
+
+**bot 侧没有模型选择器**（以前有）。判据不是审美而是「它在这儿不做事」：bot 侧发消息走的
+是 `send(profile, text)`，压根不传 model，那颗选择器对这一侧没有任何行为影响，
+只是占掉顶栏约 128px 的装饰。而「这一档默认用哪个模型」现在是一次**写进配置档文件**的
+配置动作（见下面「配置档在界面里的位置」），放在一个不发消息的平台上更容易被误以为
+改了这里就等于改了那个平台的回复。
 
 刻意**不把两者合成一个组件**：左侧内容本就不同，合起来只会得到一堆 `isChat` 分支，
 让两个平台的顶栏改动互相牵制。曾经把 BotHeader 做成直接复用 ChatHeader，
@@ -815,14 +877,21 @@ src/
   留白本身就充当内边距；裁图只会多出一份要跟着原图更新的派生资源。
 - **logo 的父链接需要 `self-stretch`**。顶栏是 `items-center` 的 flex 容器，直接子项高度是内容撑出来的，
   此时 `img` 的 `h-full`（`height:100%`）因父高不确定而解析成 `auto`，图片会退回原始尺寸。
-- **窄屏要收窄 logo**（`max-width: 96px`）。177px 的 logo 加上模型选择器与 107px 的切换按钮，
-  在 375px 视口下放不下，实测汉堡按钮被推到 `right=382` 而**整颗移出屏幕**——不是变窄，是点不到。
+- **窄屏要收窄 logo**（`max-width: 96px`，`@media (max-width: 480px)`）。177px 的 logo 加上
+  107px 的平台切换与两颗 32px 的按钮，再算上 gap 与内边距，在 375px 视口下放不下，
+  实测汉堡按钮被推到 `right=382` 而**整颗移出屏幕**——不是变窄，是点不到，而它是
+  「返回控制台 / 新建会话 / 退出登录」的唯一入口。让装饰性宽度先让路。
+  这里以前还有一条 `max-width: 414px` 把 logo **整块收起**，那是给模型选择器腾地方的；
+  选择器已经从这一侧撤掉，那条规则的前提不再成立，于是也删掉了（现在 375 档仍留得下 logo）。
 
 几条约束：
 
-- **令牌只存在于 Cookie 里**，前端不持有、也不存储任何令牌。
+- **令牌只存在于 Cookie 里**，前端不持有、也不存储任何令牌，
   `main.ts` 里没有 `localStorage`/`sessionStorage` 的用法，这是有意的。
-  （唯一的 `localStorage` 用法是记住模型选择——那不是凭证。）
+  **今天整个 dashboard 一处 `localStorage` 都没有**：以前那里记着「每一档选中的模型」
+  （`atri.selectedModel.<profile>`），而供应商改成全局一份之后，那个值已经是配置档的
+  属性而不是浏览器偏好 —— 留在浏览器里就是第三个真源，而且是「看不见但生效」的那一种。
+  这条不是清理，是把一类「换台机器行为就变了」的状态彻底去掉。
 - 401 统一在 `api/client.ts` 转成 `UnauthorizedError`，由 store 与路由守卫决定后续动作，
   调用方不需要各自判断状态码。
 - 登录守卫先问 `/auth/status`、再问 `/auth/me`。前者是公开的，用来判断是否需要登录；
@@ -831,10 +900,27 @@ src/
   不含任何原子类。少了 `import "virtual:uno.css"`，构建产物里一个工具类都不会生成，
   样式层会**静默失效**（CSS 从 ~12 kB 掉到 ~3 kB 就是这个症状）。
 
+### 配置档在界面里的位置
+
+- **当前配置档只有一个真源：URL 上的 `?profile=`。** 不在 store 里存「现在选中的那份」，
+  于是刷新、深链、浏览器前进后退、侧栏链接四条入口自动一致。
+- **路由守卫会补 `?profile=default`**（没有它时），取不到 `default` 就用第一份 `ready` 的档，
+  一份 `ready` 都没有才把界面停在挑选页。补值发生在**前端**：服务端对缺 `profile` 仍然一律
+  400，请求带着 URL 上写明的那个档名出去，所以「绿勾 = 已落盘」没有被削弱一分。
+  守卫同时保证 `GET /profiles` 那份列表在手——**包括 URL 已经带着档名的那些导航**：
+  顶栏要显示的「这一档默认用哪个模型」是档级属性，只在 `GET /profiles` 的返回里，
+  列表为空时界面的症状是安静地显示「默认模型」，而档里明明配了另一个。
+- **`/provider`（供应商配置）与 `/profiles`（配置档本身）标了 `noProfile`**：前者是全局一份
+  清单，后者管的是「有哪些档」，URL 上挂一个与页面无关的档名会让人以为它们是档级的。
+- **模型选择器写的是档文件**：它调 `POST /profiles/{id}/default-provider`，成功之后靠
+  `GET /profiles` 的回读上色，所以点错了、写失败了都留在原来那一行并且有一句中文原因，
+  而不是先变绿再等人发现。发消息**不**带 model。
+
 ### 供应商配置页
 
 `views/ProviderConfig.vue` 是「源列表 + 源详情」的两栏工作台，状态全在
-`stores/providers.ts`。三个容易做错的地方：
+`stores/providers.ts`（那一份 store 现在没有任何「当前档」的概念：清单是全局的）。
+三个容易做错的地方：
 
 - **store 的私有辅助必须是模块级函数**。Pinia 把 actions 挂到另一个对象上执行，
   action 里的 `this.#privateFn()` 会因为 `this` 上根本没有那个私有名字而抛 `TypeError`。
@@ -915,7 +1001,7 @@ unsubscribeAuth();
 for (const ws of clients.keys()) ws.close(); // **不**先广播 unauthorized，理由见下
 wss.close(() => server.close(done));
 server.closeAllConnections?.(); // 兜住空闲 keep-alive 连接
-```
+````
 
 关停时**不发** `unauthorized`：一次例行发版会把每个开着控制台的浏览器弹回登录页，
 而操作者会读成「我被踢了」—— 那是把非鉴权事件伪装成鉴权事件。连接随进程一起死，

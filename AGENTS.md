@@ -345,8 +345,12 @@ Vue 3 + vue-router + Pinia + UnoCSS(presetWind4) + naive-ui，`<script setup lan
   写成 `ref` 会立刻出现「停在 chat 但按钮显示 bot」——刷新、前进后退、直接粘贴深链时局部状态都不跟着走。
 - `src/api/client.ts` 是**唯一的** HTTP/WS 出口。401 在那里统一转成 `UnauthorizedError`，
   调用方不要各自判断状态码。
-- **凭证只走 `HttpOnly` Cookie**，前端不持有也不存储任何令牌。
-  不要往 `localStorage` 放任何凭证（唯一的 `localStorage` 用法是记住模型选择，那不是凭证）。
+- **凭证只走 `HttpOnly` Cookie**，前端不持有也不存储任何令牌，不要往 `localStorage` 放任何凭证。
+  今天整个 dashboard **一处 `localStorage` 都没有**，这是刻意的，不要「顺手加回来」：
+  以前那里按档记着选中的模型（`atri.selectedModel.<profile>`），而「这一档用哪个模型」
+  是配置档的属性（写在 `data/profiles/<id>/config.json` 的 `defaultProvider`），
+  存进浏览器就是第三个真源，症状是「换台机器行为不一样，而没有任何文件写着它」。
+  判据与上面平台切换那条是同一句话：**能从路由或服务端配置推出的状态不要存本地**。
 - 顶栏等跨平台复用的东西放 `components/shared/`；只在单个平台用的放 `components/<平台>/`。
   两个平台的顶栏**各自一份实现**（bot 左侧是 logo、chat 左侧是模型选择器），
   不要用 `isChat` 分支合成一个组件——那会把两边的改动绑在一起。
@@ -395,7 +399,23 @@ WebSocket 描述不了，永远手写。
 
 ## 配置与安全
 
-- 解析顺序：**内置默认值 → `atri.config.json` → 环境变量**。密钥走环境变量，结构性设置走文件。
+**配置分三层，界线不许漂**：
+
+| 层               | 文件                             | 内容                                                            |
+| ---------------- | -------------------------------- | --------------------------------------------------------------- |
+| 部署级（启动）   | `atri.config.json`               | 端口、数据目录、插件安装目录、适配器、口令                      |
+| 部署级（运行期） | `data/providers.json`            | 供应商：源（连接与密钥）、模型实例清单、全局默认                |
+| 配置档           | `data/profiles/<id>/config.json` | 跑法：工具开关、`maxToolSteps`、插件启用清单、`defaultProvider` |
+
+判据是「**这个东西占的资源属于谁**」：密钥与端点属于部署（按档各存一份就是让同一个
+`apiKey` 躺在 N 个文件里，轮换要改 N 处），而「开哪些工具、开哪些插件、默认打哪个模型」
+属于那一跑法。想给某一族配置加「按档各一份」之前先读 architecture.md 的
+「配置档：什么共享、什么各一份」—— 这一条**已经被翻过一次**（上一版是供应商按档隔离，
+并用 `x-profile-scoped` 与一批作用域测试钉死），翻回来付的代价是重写那批守卫与契约。
+
+- 解析顺序（只对**启动那一份**成立）：**内置默认值 → `atri.config.json` → 环境变量**。
+  密钥走环境变量，结构性设置走文件。运行期那两个文件由控制台的写操作维护，
+  启动时只搬一次（`seedProfile` / `migrateProvidersToGlobal`，判据都是「目标文件在不在」）。
 - **两个看起来像 bug、其实不是的形状，别顺手「修正」**：
   `AppConfig.logLevel` 是 `string` 而不是 `"debug"|"info"|"warn"|"error"` 联合（未知级别今天
   退化成 info，收紧成联合会让 `ATRI_LOG_LEVEL=verbose` 从「安静地跑」变成「启动失败」）；
@@ -404,10 +424,16 @@ WebSocket 描述不了，永远手写。
   改配置文件格式与读取路径。两者都是行为变更，不是类型清理。
   同理 `FileConfig` 必须带 `[key: string]: unknown` —— 读-改-写要原样保留我们不认识的键，
   封闭的类型会让下一次写入丢掉用户的配置。
-- **`atri.config.json` 已被 gitignore**，因为它含明文口令与 `apiKey`。
-  自动生成的口令会写进它——绝不要把它加进版本控制，也不要贴进对话或日志。
-- `atri.config.example.json` 与 `.env.example` 只放占位符，**不放真实凭证**。
-- 改配置相关的行为时，同步更新 `.env.example`、`atri.config.example.json` 与 README 的变量表。
+- **`atri.config.json` 已被 gitignore**，因为它含明文口令。自动生成的口令会写进它——
+  绝不要把它加进版本控制，也不要贴进对话或日志。`apiKey` 现在住在 `data/providers.json`，
+  它靠「`data/` 整目录被忽略 + 目录 0700」得到保护：**不要把运行期配置往仓库根放**，
+  `.gitignore` 忽略的是**精确名** `atri.config.json`，根下的兄弟文件是「未跟踪但也不忽略」，
+  一次 `git add -A` 就会把密钥提交进版本库。
+- `atri.config.example.json`、`providers.example.json`、`atri.profile.example.json`
+  与 `.env.example` 只放占位符，**不放真实凭证**。示例文件之间不要互相抄段落：
+  供应商那两段只出现在 `providers.example.json`，`atri.profile.example.json` 里只留
+  `defaultProvider` 那**一根引用**。
+- 改配置相关的行为时，同步更新 `.env.example`、上面那几个 example 与 README 的变量表。
 - 口令比对用 `timingSafeEqual` 对定长摘要比较，且**失败原因不区分**（不回「用户不存在」）。
   新增鉴权路径时不要泄露这个差异。
 
