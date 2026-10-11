@@ -21,6 +21,9 @@ export const router = createRouter({
           path: "provider",
           name: "providerConfig",
           component: () => import("@/views/ProviderConfig.vue"),
+          // 供应商（源与模型实例）是**部署级全局的一份**，这一页不属于任何配置档，
+          // 所以它和「配置档」页一样是 `noProfile`： URL 上不该出现一个与页面无关的档名。
+          meta: { noProfile: true },
         },
         { path: "tools", name: "toolsConfig", component: () => import("@/views/ToolsView.vue") },
         // 这一页自己**不需要** ?profile=：它管的是「有哪些档」，所以它是那个让你挑档的页面，
@@ -69,7 +72,10 @@ function pickProfile(usable: ProfileRecord[]): string | null {
   return usable.find((p) => p.id === DEFAULT_PROFILE_ID)?.id ?? usable[0]?.id ?? null;
 }
 
-/** 这个目标路由需不需要 `?profile=`。登录页与「配置档」页不需要。 */
+/**
+ * 这个目标路由需不需要 `?profile=`。登录页、「配置档」页与「供应商」页都不需要：
+ * 前两者管的是档本身，最后那个是全局一份的清单。
+ */
 function needsProfile(to: RouteLocationNormalized): boolean {
   return Boolean(to.meta.requiresAuth) && to.meta.noProfile !== true;
 }
@@ -111,22 +117,31 @@ router.beforeEach(async (to) => {
    * 已有 `?profile=` 时**一律不碰**，包括它指向一份不存在或 failed 的档 —— 那是用户或
    * 另一台机器写下的深链，界面要如实报错，而不是悄悄把人换到另一份档上。
    */
-  const requested = to.query.profile;
-  const missingProfile = typeof requested !== "string" || requested.length === 0;
-  if (auth.isAuthenticated && needsProfile(to) && missingProfile) {
+  if (auth.isAuthenticated && needsProfile(to)) {
     const profiles = useProfilesStore();
+    // 列表为空就先拉一次，**包括 URL 已经带着 `?profile=` 的那些导航**。
+    // 不只是补值那一条路径要这份列表：顶栏的模型选择器显示的是「这一档默认用哪个」，
+    // 而那是档级属性，只存在于 `GET /profiles` 的返回里。少了这一句，深链与刷新进来时
+    // 列表是空的，而空列表在界面上的症状是「显示默认模型」—— 一句谎话，
+    // 因为档里明明写着另一个。（这条是浏览器实测抓出来的，不是想出来的。）
     if (profiles.profiles.length === 0 && !profiles.loading) {
       await profiles.refresh();
     }
-    const pick = pickProfile(profiles.usable);
-    if (pick !== null) {
-      return {
-        name: to.name ?? undefined,
-        params: to.params,
-        query: { ...to.query, profile: pick },
-        hash: to.hash,
-        replace: true,
-      };
+    const requested = to.query.profile;
+    const missingProfile = typeof requested !== "string" || requested.length === 0;
+    // URL 上已经写着档名：到此为止，**不碰**。它指向一份不存在的或 failed 的档时
+    // 也要如实报错，而不是悄悄把人换到另一份档上。
+    if (missingProfile) {
+      const pick = pickProfile(profiles.usable);
+      if (pick !== null) {
+        return {
+          name: to.name ?? undefined,
+          params: to.params,
+          query: { ...to.query, profile: pick },
+          hash: to.hash,
+          replace: true,
+        };
+      }
     }
   }
 

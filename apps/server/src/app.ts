@@ -13,29 +13,39 @@ import { ToolRegistry } from "./core/tool/registry.ts";
 import { ToolConfigStore } from "./core/tool/store.ts";
 import { createBuiltinTools } from "./core/tool/builtins.ts";
 import { AuthManager } from "./core/auth/manager.ts";
-import { errorMessage } from "./core/errors.ts";
+import { ApiError, errorMessage } from "./core/errors.ts";
 import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
 import { AdapterManager } from "./adapters/manager.ts";
 import { createHttpServer } from "./api/server.ts";
-import type { ProfileBundle, ProfileDirectory } from "./api/http.ts";
+import type {
+  ProfileBundle,
+  ProfileDirectory,
+  ProviderSurface,
+  ProvidersView,
+} from "./api/http.ts";
 import type { AppConfig } from "./config/index.ts";
 import {
   configFilePath,
   ensurePrivateDir,
   ensurePrivateFile,
+  providersFilePath,
   readConfigFile,
 } from "./config/file.ts";
+import type { ProvidersFileConfig, ProviderSourceEntryConfig } from "./config/file.ts";
 import {
   DEFAULT_PROFILE_ID,
   assertProfileId,
   listProfileDirs,
+  migrateProvidersToGlobal,
   profileConfigPath,
   profileDir,
   profilesRoot,
+  providerShapeKeysIn,
   readProfileConfig,
   runShapeKeysIn,
   seedProfile,
   setProfilePluginEnabled,
+  updateProfileConfig,
   writeProfileConfig,
 } from "./config/profiles.ts";
 import type { ProfileFileConfig } from "./config/profiles.ts";
@@ -48,11 +58,23 @@ function disabledPluginsOf(profile: ProfileFileConfig): string[] {
     .map(([id]) => id);
 }
 
+/** 一份对象图 -> 它在目录里的那条状态。`ready` 的四个字段永远从同一个来源算。 */
+function readyState(bundle: ProfileBundle): ProfileState {
+  return {
+    name: bundle.name,
+    status: "ready",
+    error: null,
+    defaultProviderId: bundle.defaultProviderId,
+  };
+}
+
 /** 一份配置档在目录里的状态（成功的那些也在这里，为的是 `records()` 一次算完）。 */
 interface ProfileState {
   name: string;
   status: ProfileStatus;
   error: string | null;
+  /** 这一档默认用哪个 provider 实例（`null` = 用全局 `providers.default`）。 */
+  defaultProviderId: string | null;
 }
 
 /**
@@ -60,11 +82,13 @@ interface ProfileState {
  * 下层通过构造函数注入协作者，彼此互不感知，
  * 从而让 core/ 不掺杂任何传输层细节。
  *
- * ## 现在这里拼装的是「N 份对象图」
+ * ## 现在这里拼装的是「一份全局 + N 份跑法」
  *
- * 一份配置档 = 一套 `ProviderRegistry` / `ProviderConfigStore` / `ToolConfigStore` /
- * `ToolRegistry` / `PluginManager` / `AgentEngine`。跨配置档共享的只有四样：
- * 登录、会话存储、**会话锁**、**事件总线**。后两个必须是共享的，理由写在
+ * **供应商是部署级全局的一份**（`providers.json` + 一个 `ProviderRegistry` + 一份失败表），
+ * 连它那些「哪一条没跑起来」的诊断一起。一份配置档 = 一套**跑法**：`ToolConfigStore` /
+ * `ToolRegistry` / `PluginManager` / `AgentEngine`，外加「默认用全局清单里的哪一个」。
+ * 跨配置档共享的因此是六样：登录、会话存储、**会话锁**、**事件总线**、供应商那一份文件，
+ * 以及由它装出来的那一张注册表。锁与总线必须是共享的，理由写在
  * `core/session/lock.ts` 与 `core/agent/events.ts` 各自的类注释里 —— 一句话版本：
  * 历史是全局一份 sqlite，而「同一个会话不能同时跑两轮」不是任何单个配置档的内部事务。
  */
@@ -98,12 +122,17 @@ export async function createApp(config: AppConfig) {
   const lock = new SessionLock();
   const events = new SessionEvents();
 
-  // 「跑法」住在配置档文件里，不在 `atri.config.json`。顺序是有意的：先建目录、
-  // 再一次性 seed、**然后**才构造任何对象图 —— 存储拿到的一直是配置档路径。
+  // 「跑法」住在配置档文件里，供应商住在 `providers.json`，都不在 `atri.config.json`。
+  // 顺序是有意的：先建目录、再一次性 seed、**然后**才构造任何对象图 —— 存储拿到的一直是
+  // 真正那个文件的路径。
   const profilesDir = profilesRoot(config.dataDir);
   ensurePrivateDir(profilesDir);
   const seedPath = profileConfigPath(profilesDir, DEFAULT_PROFILE_ID);
   const bootstrap = readConfigFile(config.root);
+  // 供应商那一份全局文件落在 `dataDir` 下（与 `sessions.sqlite`、`profiles/` 同级）：
+  // 它是运行期数据而不是部署参数，备份 `dataDir` 就该连它一起带走。路径先算出来，
+  // 因为下面那句「bootstrap 里还留着运行期段」的警告要说清真源在哪。
+  const providersPath = providersFilePath(config.dataDir);
   // 里面躺着口令，seed 之后还可能躺着已经失效但仍是明文的 `apiKey`。这一轮之后
   // bootstrap 文件唯一的写入者是「首次生成口令」那条路径，老部署里 0644 的那一份
   // 再没有别的动作会去收紧它 —— 所以收紧这一步必须是**启动**做的，而不是等某次保存。
@@ -116,17 +145,17 @@ export async function createApp(config: AppConfig) {
         : `已把 atri.config.json 里的 ${moved.join(" / ")} 搬进配置档「${DEFAULT_PROFILE_ID}」——` +
             "这一段以后只在配置档文件里维护",
     );
-  } else {
-    // 配置档早就在了，而 bootstrap 里还留着那几段：它现在是一句谎话。不删用户的文件
-    // （框架从不删它），但每次启动都要说一次，否则它会变成第二个真源。
-    const leftover = runShapeKeysIn(bootstrap);
-    if (leftover.length > 0) {
-      logger.warn(
-        `atri.config.json 里还留着 ${leftover.join(" / ")}，但配置档已经存在 —— ` +
-          `这些段**不再生效**，真源是 ${seedPath}。其中可能仍有明文的 provider apiKey：` +
-          `确认无误后把它们从 atri.config.json 里删掉。`,
-      );
-    }
+  }
+
+  // bootstrap 里留着运行期段就是一句谎话，**与这次是不是第一次启动无关**：不删用户的
+  // 文件（框架从不删它），但每次启动都要说一次，否则它会变成第二个真源。
+  const leftover = runShapeKeysIn(bootstrap);
+  if (leftover.length > 0) {
+    logger.warn(
+      `atri.config.json 里还留着 ${leftover.join(" / ")}，但它们**已经不再生效** —— ` +
+        `供应商的真源是 ${providersPath}，工具与步数的真源是 ${seedPath}。` +
+        `其中可能仍有明文的 provider apiKey：确认无误后把它们从 atri.config.json 里删掉。`,
+    );
   }
 
   // 旧的插件数据根（`<dataDir>/plugins`）不再被读。**既不迁也不删**：里面可能是
@@ -146,8 +175,45 @@ export async function createApp(config: AppConfig) {
   /** id -> 对象图。只装 `ready` 的那些。 */
   const bundles = new Map<string, ProfileBundle>();
 
+  // --- 供应商：部署级全局的一份 ---------------------------------------------
+  //
+  // 连接（source）与模型实例（provider）是**部署级**的东西：它们是密钥与端点，按配置档
+  // 各存一份只会让同一个 `apiKey` 躺在 N 个文件里，而「换一档换一套后端」其实从来没人在用
+  //（档里发消息时传的是文本，模型由选择器或档默认决定）。对齐 AstrBot 也是这一条：
+  // 除了配置文件，供应商与工具都是全局的，配置档只管「启用哪些工具、启用哪些插件」。
+  //
+  // 下面这三样因此只有一份，且**只由 `rebuildProviders()` 写**：文件存储、注册表、失败表。
+  const providerConfig = new ProviderConfigStore({ filePath: providersPath }, logger);
+  const providers = new ProviderRegistry();
   /**
-   * 按当前配置装配这一份档的 provider 注册表。
+   * 最近一次装配里**没加载成功**的 provider：`id -> 中文原因`。
+   * 由 `rebuildProviders()` 整份重写（不是累加），所以它永远与注册表同源。
+   */
+  const providerErrors = new Map<string, string>();
+
+  // 一次性把散在各档（或最初的 `atri.config.json`）里的供应商配置收进全局那一份。
+  // 必须**早于任何一次装配**：`rebuildProviders()` 读的就是这个文件。
+  // `openSessionDb` 已经建过 `dataDir` 并收到 0700，但那是别人的顺序；写盘的前置条件
+  // 在这里自己说清，不依赖「构造 `SessionManager` 排在前面」这种看不见的事实。
+  ensurePrivateDir(config.dataDir);
+  const migration = migrateProvidersToGlobal(profilesDir, providersPath, bootstrap);
+  if (migration !== null) {
+    logger.info(
+      `供应商配置已经收成全局一份（${providersPath}）：从` +
+        `${migration.from === "bootstrap" ? " atri.config.json" : " 各配置档"}合并出 ` +
+        `${migration.sources.length} 个 source / ${migration.providers.length} 个 provider`,
+    );
+    if (migration.dropped.length > 0) {
+      // 冲突必须点名：「你配的那条被忽略了」不说是哪一条、被谁占了，等于没说。
+      logger.warn(
+        `合并时有 ${migration.dropped.length} 条被丢弃（同名时由字典序最小的那份配置档赢）：` +
+          migration.dropped.join("；"),
+      );
+    }
+  }
+
+  /**
+   * 按当前配置装配那张全局注册表。
    *
    * 启动与「配置页改完保存」走的是**同一个函数**，因此不会出现两条装配路径
    * 慢慢走散的情况（例如忘记处理默认值回退）。
@@ -155,59 +221,82 @@ export async function createApp(config: AppConfig) {
    * 单个 provider 配错只记日志、不阻断启动：「其中一个后端坏了」应该能局部降级，
    * 而不是让整个服务起不来。
    */
-  function makeRebuildProviders(bundle: MutableBundle) {
-    const { providers, providerConfig, profileId, providerErrors } = bundle;
-    return function rebuildProviders(): ProviderRegistry {
-      providers.clear();
-      // 整份重写而不是累加：一次重建就是这批 provider 的**全部**失败事实。
-      // 留着上一轮的条目会让 `GET /providers` 给一条已经修好的 provider 配一句旧错误。
-      providerErrors.clear();
+  function rebuildProviders(): ProviderRegistry {
+    providers.clear();
+    // 整份重写而不是累加：一次重建就是这批 provider 的**全部**失败事实。
+    // 留着上一轮的条目会让 `GET /providers` 给一条已经修好的 provider 配一句旧错误。
+    providerErrors.clear();
 
-      const entries = providerConfig.providerEntries();
-      const { providers: built, errors } = createProviders(entries, {
-        sources: providerConfig.sourceEntries(),
-        logger,
-      });
-      for (const provider of built) providers.register(provider);
-      for (const { id, message } of errors) {
-        // 同时留给 `GET /providers` —— 装配是唯一写它的地方（见 `MutableBundle.providerErrors`）。
-        providerErrors.set(id, message);
-        logger.error(`配置档「${profileId}」的 provider「${id}」加载失败: ${message}`);
-      }
-
-      const defaultId = readDefaultProviderId(entries);
-      if (defaultId) {
-        // 显式配了默认值但它没加载成功时，别静默回退到第一个——那会让请求
-        // 悄悄打到另一个模型上。宁可留空，由注册表的回退规则处理并留下日志。
-        if (providers.get(defaultId)) {
-          providers.setDefault(defaultId);
-        } else {
-          logger.warn(
-            `配置档「${profileId}」的默认 provider「${defaultId}」未加载成功，将回退到第一个可用 provider`,
-          );
-        }
-      }
-
-      if (providers.size === 0) {
-        logger.warn(
-          `配置档「${profileId}」没有可用的模型 provider，将使用回声兜底（请在它自己的配置文件里配置 providers）`,
-        );
-      }
+    let entries: ProvidersFileConfig;
+    let sources: Record<string, ProviderSourceEntryConfig>;
+    try {
+      entries = providerConfig.providerEntries();
+      sources = providerConfig.sourceEntries();
+    } catch (err) {
+      // 整个文件读不出来时**绝不上抛**。以前只坏一档，现在全局一份读坏就会让**每一档**
+      // 都变成 `failed` —— 而「配置页打不开、什么都改不动」恰恰是操作者最需要这个服务
+      // 还活着的那一刻。这里退化成「一个 provider 都没有」（回声兜底），
+      // 原因由 `providersView()` 带给配置页，改好文件后一次保存就恢复。
+      logger.error(`全局供应商配置读不出来，本轮不装配注册表: ${errorMessage(err)}`);
       return providers;
-    };
+    }
+
+    const { providers: built, errors } = createProviders(entries, { sources, logger });
+    for (const provider of built) providers.register(provider);
+    for (const { id, message } of errors) {
+      // 同时留给 `GET /providers` —— 装配是唯一写它的地方。
+      providerErrors.set(id, message);
+      logger.error(`provider「${id}」加载失败: ${message}`);
+    }
+
+    const defaultId = readDefaultProviderId(entries);
+    if (defaultId) {
+      // 显式配了默认值但它没加载成功时，别静默回退到第一个——那会让请求
+      // 悄悄打到另一个模型上。宁可留空，由注册表的回退规则处理并留下日志。
+      if (providers.get(defaultId)) {
+        providers.setDefault(defaultId);
+      } else {
+        logger.warn(`全局默认 provider「${defaultId}」未加载成功，将回退到第一个可用 provider`);
+      }
+    }
+
+    if (providers.size === 0) {
+      logger.warn(
+        `没有可用的模型 provider，将使用回声兜底（请在 ${providersPath} 里配置 providers）`,
+      );
+    }
+    return providers;
   }
 
-  /** `buildBundle` 里 `reloadProviders` 要引用还在构造中的那份 bundle，所以先给它一个可写的壳。 */
-  interface MutableBundle {
-    profileId: string;
-    providers: ProviderRegistry;
-    providerConfig: ProviderConfigStore;
-    /**
-     * 最近一次装配里**没加载成功**的 provider：`id -> 中文原因`。
-     * 由 `rebuildProviders()` 整份重写（不是累加），所以它永远与注册表同源。
-     */
-    providerErrors: Map<string, string>;
+  /**
+   * 配置页读的那一份视图。与 `rebuildProviders()` 用同一个存储，但**每次现读**：
+   * 文件是半截 JSON 时返回「空清单 + 原因」而不是抛 —— 抛出去的那句里带着绝对路径，
+   * 而它的后果是让整张配置页 500，那一刻人已经改不动这个文件了。
+   *
+   * 为什么不复用装配那一次的结果：那次之后操作者可能直接手改过文件，
+   * 视图必须说「此刻文件里写着什么」，否则配置页会显示上一次装配时的旧清单。
+   */
+  function providersView(): ProvidersView {
+    try {
+      return {
+        entries: providerConfig.providers,
+        defaultId: providerConfig.defaultId,
+        error: null,
+      };
+    } catch (err) {
+      return { entries: [], defaultId: null, error: errorMessage(err) };
+    }
   }
+
+  const providerSurface: ProviderSurface = {
+    config: providerConfig,
+    registry: providers,
+    rebuild: rebuildProviders,
+    view: providersView,
+    // 交出去的是快照而不是那个 Map 本体：`api/` 拿到的是读得到的事实，
+    // 不是一条能改回装配状态的口子。
+    loadErrors: () => new Map(providerErrors),
+  };
 
   /**
    * 读一份配置档并**只构造**它的对象图，不登记、不加载插件。
@@ -218,14 +307,32 @@ export async function createApp(config: AppConfig) {
   async function buildBundle(id: string): Promise<ProfileBundle> {
     const path = profileConfigPath(profilesDir, id);
     const profile = readProfileConfig(path);
-    const providerConfig = new ProviderConfigStore({ filePath: path }, logger);
+    // 搬完**不删**档里那两段（框架从不删用户写的东西），但那句话每次启动都要说：
+    // 留着一段不再被读的 `providers`，下一次排查时它会被人当成真源。
+    const stale = providerShapeKeysIn(profile);
+    if (stale.length > 0) {
+      logger.warn(
+        `配置档「${id}」的文件里还留着 ${stale.join(" / ")}，但供应商已经是**全局一份** ` +
+          `（${providersPath}）—— 这一段在这份档里不再生效，确认无误后从 ${path} 删掉，` +
+          `里面可能仍有明文的 apiKey。`,
+      );
+    }
+    const defaultProviderId =
+      typeof profile.defaultProvider === "string" && profile.defaultProvider
+        ? profile.defaultProvider
+        : null;
+    if (defaultProviderId !== null && providers.get(defaultProviderId) === null) {
+      // 说得出名地提醒，而不是让每条消息静默落到别的模型上：注册表的 `#resolveFor`
+      // 会退到全局默认、再退到第一个可用的，症状是「默认写着 A，回的却是 B」。
+      logger.warn(
+        `配置档「${id}」的默认 provider「${defaultProviderId}」当前没有加载成功，` +
+          `将回退到全局默认（清单见 ${providersPath}）`,
+      );
+    }
     const toolConfig = new ToolConfigStore({ filePath: path }, logger);
-    const providers = new ProviderRegistry();
     const tools = new ToolRegistry();
     // 传 getter 而不是 `plugins.list()` 的结果：此刻还没 `loadAll()`，而且插件能在运行期
     // 增删与启停，快照会让这颗工具继续说出装配那一刻的事实。
-    const providerErrors = new Map<string, string>();
-    const shell: MutableBundle = { profileId: id, providers, providerConfig, providerErrors };
     const plugins = new PluginManager(pluginRuntimeConfig(config), logger, {
       // 每个配置档自己的插件数据根。安装是全局的（`config.pluginDirs`），所以同一个插件 id
       // 会在每份档里各出现一次 —— 数据根不分家的话，两份档的同一个插件会互相覆写 token。
@@ -262,27 +369,18 @@ export async function createApp(config: AppConfig) {
       lock,
       events,
       profileId: id,
+      defaultProviderId,
     });
-    const bundle: ProfileBundle = {
+    return {
       id,
       name: profile.name ?? id,
       path,
-      providers,
-      providerConfig,
-      reloadProviders: makeRebuildProviders(shell),
-      // 交出去的是快照而不是那个 Map 本体：`api/` 拿到的是读得到的事实，
-      // 不是一条能改回装配状态的口子。
-      providerLoadErrors: () => new Map(providerErrors),
+      defaultProviderId,
       tools,
       toolConfig,
       plugins,
       engine,
     };
-    // 第一次填充注册表，且**必须在返回之前**：`openProfile()` 与 `profiles.reload()` 都走
-    // 这一个构造口，少一句的后果不是报错而是静默降级 —— 注册表空着，每条消息都落到回声
-    // 兜底，而 `GET /providers` 照旧显示「已配置」（它读的是配置文件，不是注册表）。
-    bundle.reloadProviders();
-    return bundle;
   }
 
   /**
@@ -299,12 +397,17 @@ export async function createApp(config: AppConfig) {
     try {
       bundle = await buildBundle(id);
     } catch (err) {
-      states.set(id, { name: id, status: "failed", error: errorMessage(err) });
+      states.set(id, {
+        name: id,
+        status: "failed",
+        error: errorMessage(err),
+        defaultProviderId: null,
+      });
       logger.error(`配置档「${id}」加载失败: ${errorMessage(err)}`);
       return null;
     }
     bundles.set(id, bundle);
-    states.set(id, { name: bundle.name, status: "ready", error: null });
+    states.set(id, readyState(bundle));
     await bundle.plugins.loadAll();
     return bundle;
   }
@@ -324,6 +427,12 @@ export async function createApp(config: AppConfig) {
     await bundle?.plugins.unloadAll();
   }
 
+  // 装配**必须早于任何一份档**：`buildBundle()` 里那句「这一档的默认 provider 有没有
+  // 加载成功」要看注册表此刻的内容，早于装配就会对每一条档误报一次。
+  // 少这一句的后果不是报错而是静默降级 —— 注册表空着，每条消息都落到回声兜底，
+  // 而 `GET /providers` 照旧显示「已配置」（它读的是配置文件，不是注册表）。
+  rebuildProviders();
+
   for (const id of listProfileDirs(profilesDir)) {
     await openProfile(id);
   }
@@ -337,7 +446,7 @@ export async function createApp(config: AppConfig) {
     ids: () => [...states.keys()].toSorted(),
     get: (id) => bundles.get(id) ?? null,
     status: (id) => states.get(id)?.status ?? null,
-    records: () =>
+    records: (): ProfileRecord[] =>
       [...states.entries()]
         .map(([id, state]) => ({
           id,
@@ -345,6 +454,7 @@ export async function createApp(config: AppConfig) {
           path: profileConfigPath(profilesDir, id),
           status: state.status,
           error: state.error,
+          defaultProviderId: state.defaultProviderId,
         }))
         .toSorted((a, b) => (a.id < b.id ? -1 : 1)),
     async create(id, name) {
@@ -367,11 +477,44 @@ export async function createApp(config: AppConfig) {
       const bundle = bundles.get(id);
       if (bundle) {
         bundle.name = name;
-        states.set(id, { name, status: "ready", error: null });
+        states.set(id, readyState(bundle));
       } else {
         const state = states.get(id);
         if (state) states.set(id, { ...state, name });
       }
+      return recordOf(id);
+    },
+    /**
+     * 改这一档默认用的 provider 实例。
+     *
+     * 先验「这个实例在全局清单里存在」再落盘：让它指着一个不存在的 id，症状不是报错而是
+     * 每条消息静默落到注册表的回退上 —— 界面显示你选了 A，回的却是全局默认那个。
+     * 与 `rename` 一样**先落盘再动内存**，那样一次写失败留下的是自洽的状态。
+     */
+    async setDefaultProvider(id, providerId) {
+      assertProfileId(id);
+      if (!states.has(id)) throw new ApiError(`没有这份配置档: ${id}`, 404);
+      if (providerId !== null && providerConfig.getProvider(providerId) === null) {
+        throw new ApiError(
+          `全局供应商清单里没有 provider「${providerId}」，不能把它设成这份配置档的默认`,
+          400,
+        );
+      }
+      updateProfileConfig(profileConfigPath(profilesDir, id), (file) => {
+        // `null` 是「取消档级默认，回到全局那一个」，所以删掉键而不是留一个空串：
+        // 留着 `"defaultProvider": ""` 会让下一次读它的人判断两次。
+        if (providerId === null) delete file.defaultProvider;
+        else file.defaultProvider = providerId;
+      });
+      const bundle = bundles.get(id);
+      if (bundle) {
+        bundle.defaultProviderId = providerId;
+        // 引擎上那份才是发消息时真正读的那一个：只改 bundle 会得到「界面已经改了，
+        // 下一条消息还是老模型」，而要等一次重载才生效这件事没有任何地方会说。
+        bundle.engine.defaultProviderId = providerId;
+      }
+      const state = states.get(id);
+      if (state) states.set(id, { ...state, defaultProviderId: providerId });
       return recordOf(id);
     },
     async reload(id) {
@@ -383,19 +526,24 @@ export async function createApp(config: AppConfig) {
       } catch (err) {
         // 新的建不起来：**保留正在服务的那一份**，只把状态说成失败。
         // 换上一个半截的对象图比继续用旧配置危险得多（旧的那份至少是在工作的）。
-        states.set(id, { name: previous?.name ?? id, status: "failed", error: errorMessage(err) });
+        states.set(id, {
+          name: previous?.name ?? id,
+          status: "failed",
+          error: errorMessage(err),
+          defaultProviderId: previous?.defaultProviderId ?? null,
+        });
         throw new Error(`配置档「${id}」重载失败，仍在使用重载前的对象图：${errorMessage(err)}`, {
           cause: err,
         });
       }
       if (previous) {
         bundles.set(id, next);
-        states.set(id, { name: next.name, status: "ready", error: null });
+        states.set(id, readyState(next));
         await previous.plugins.unloadAll();
       } else {
         await closeProfile(id);
         bundles.set(id, next);
-        states.set(id, { name: next.name, status: "ready", error: null });
+        states.set(id, readyState(next));
       }
       await next.plugins.loadAll();
       return recordOf(id);
@@ -437,6 +585,7 @@ export async function createApp(config: AppConfig) {
     lock,
     events,
     profiles,
+    providerSurface,
     adapters,
   });
 

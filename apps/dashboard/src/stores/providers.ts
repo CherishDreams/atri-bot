@@ -2,22 +2,6 @@ import { defineStore } from "pinia";
 import type { ProviderInfo, ProviderSource } from "../api/generated/index.js";
 import * as api from "../api/client.js";
 
-/**
- * 当前选中的模型，持久化在 localStorage 里，**按配置档各存一份**。
- *
- * 存在浏览器而不是配置档文件：这是**这个浏览器**的偏好，不是服务端配置。
- * 键里必须带配置档 id：模型名不再跨配置档唯一（两份档都可以有 deepseek-chat），
- * 共用一条键 means 在 A 选中的名字落到 B 上会指向另一个模型，而选择器上看不出差别。
- */
-const SELECTION_PREFIX = "atri.selectedModel";
-
-/** 选择项：`providerId` 是**实例 id**，发往服务端时用的是它（见 `selection` 的注释）。 */
-interface Selection {
-  providerId: string;
-  model: string;
-  sourceId: string;
-}
-
 /** 可选的 provider 实现类型。与 `store.js` 的 `PROVIDER_TYPES` 保持一致。 */
 export const PROVIDER_TYPES = [
   { label: "OpenAI 兼容", value: "openai" },
@@ -44,41 +28,8 @@ export interface ModelChoice {
   model: string;
   source: string;
   type: string;
-}
-
-function readSelection(profile: string): Selection | null {
-  try {
-    const raw = localStorage.getItem(`${SELECTION_PREFIX}.${profile}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { providerId?: unknown; model?: unknown; sourceId?: unknown };
-    // 旧键（不带配置档后缀、也没有 providerId）里的选择**不迁**：它在多档下已经说不清
-    // 指的是哪一份，猜一个比回到默认更坏。留在原地，用户重选一次即可。
-    if (
-      typeof parsed.providerId !== "string" ||
-      typeof parsed.model !== "string" ||
-      typeof parsed.sourceId !== "string"
-    ) {
-      return null;
-    }
-    return {
-      providerId: parsed.providerId,
-      model: parsed.model,
-      sourceId: parsed.sourceId,
-    };
-  } catch {
-    // localStorage 可能被禁用或存着脏数据；选择失效只是退回默认，不该让页面炸掉。
-    return null;
-  }
-}
-
-function writeSelection(profile: string, value: Selection | null): void {
-  const key = `${SELECTION_PREFIX}.${profile}`;
-  try {
-    if (value) localStorage.setItem(key, JSON.stringify(value));
-    else localStorage.removeItem(key);
-  } catch {
-    /* 存不下就算了，本次会话内的选择仍然有效 */
-  }
+  /** 是不是**全局**默认（`providers.json` 里的 `providers.default`）。 */
+  isDefault: boolean;
 }
 
 /** 由一条 provider 配置算出选择器里的一行；缺 model 的条目没有可选目标。 */
@@ -89,6 +40,7 @@ function toChoice(entry: ProviderInfo): ModelChoice | null {
     model: entry.model,
     source: entry.source ?? entry.id,
     type: entry.type ?? "openai",
+    isDefault: entry.default === true,
   };
 }
 
@@ -110,7 +62,14 @@ function usableChoices(providers: ProviderInfo[]): ModelChoice[] {
 }
 
 /**
- * 模型 provider 配置与当前选择。
+ * 模型 provider 配置：源与实例，**部署级全局的一份**。
+ *
+ * 这里没有「当前配置档」这个概念，也没有任何本地选择：清单是全局的，而
+ * 「这一档默认用清单里的哪一个」是配置档的属性，读它、改它都走
+ * `stores/profiles.ts`（那份列表由 `GET /profiles` 带出）。以前这里额外把选择
+ * 存进 `localStorage`（`atri.selectedModel.<profile>`），供应商全局化之后它就成了
+ * 第三份真源，而且是「看不见但生效」的那一种 —— 换台浏览器就换一个默认模型，
+ * 而没人会去浏览器设置里找它。
  *
  * 写操作统一走 `runAction`：失败把原因记在 `error` 上由页面展示，
  * 然后**无论成败都重新拉一次列表**——服务端可能在部分成功后仍报错
@@ -118,14 +77,10 @@ function usableChoices(providers: ProviderInfo[]): ModelChoice[] {
  */
 type ProviderActions = {
   error: string | null;
-  refresh: (profile: string) => Promise<void>;
+  refresh: () => Promise<void>;
 };
 
-async function runAction(
-  store: ProviderActions,
-  profile: string,
-  op: () => Promise<unknown>,
-): Promise<void> {
+async function runAction(store: ProviderActions, op: () => Promise<unknown>): Promise<void> {
   store.error = null;
   try {
     await op();
@@ -133,7 +88,7 @@ async function runAction(
     store.error = (err as Error).message;
   } finally {
     try {
-      await store.refresh(profile);
+      await store.refresh();
     } catch (err) {
       store.error ??= (err as Error).message;
     }
@@ -150,14 +105,14 @@ export const useProvidersStore = defineStore("providers", {
     availableModels: [] as string[],
     loadingModels: false,
     saving: false,
-    /** 模型选择器的当前选择；`model` 为空表示「用服务端默认」。 */
     /**
-     * 此刻选中的模型。`providerId` 才是发往服务端的那一个：
-     * `ProviderRegistry.#resolveFor` 的第一级选路按**实例 id**，而 `model` 只是第二级
-     * （本地列出的模型名）。发 model 今天也能工作，但两份配置档有同名模型时它会静默走错，
-     * 而 `model` 与 `sourceId` 留着是为了在选择器里显示得下、并能在实例消失后判失效。
+     * 整份 `providers.json` 读不出来时的原因；`null` 表示读得出来。
+     *
+     * 它必须**与空清单分开**：两者都让列表为空，而用户要做的完全不同 ——
+     * 一个是「去添加一个供应商」，另一个是「你手改坏的那个文件得修」。
+     * 那句原文带着配置文件的路径，所以这个页面只在鉴权闸门之内出现。
      */
-    selection: null as Selection | null,
+    fileError: null as string | null,
     error: null as string | null,
   }),
 
@@ -180,45 +135,51 @@ export const useProvidersStore = defineStore("providers", {
       return usableChoices(state.providers);
     },
 
-    /** 选择器上显示的名字；没选或选的条目已消失时显示「默认模型」。 */
-    activeModel(state): string {
-      const model = state.selection?.model ?? "";
-      if (!model) return "默认模型";
-      return usableChoices(state.providers).some((c) => c.model === model) ? model : "默认模型";
+    /**
+     * 选择器上显示的名字：按**这一档的默认实例 id** 去找它对应的模型名。
+     *
+     * 档没配默认时显示的是**全局默认那一个的模型名** —— 顶栏要回答的是
+     * 「我这句话会打到哪个模型」，而不是「档里写没写那一行」。
+     * 两级都指不到（没配全局默认，或配的那个实例已经没了）才显示「默认模型」；
+     * 那种时刻服务端确实会回退到注册表里的第一个，而界面说不出它是谁。
+     */
+    activeModel: (state) => (defaultProviderId: string | null) => {
+      const usable = usableChoices(state.providers);
+      const hit = defaultProviderId
+        ? usable.find((c) => c.providerId === defaultProviderId)
+        : usable.find((c) => c.isDefault);
+      return hit ? hit.model : "默认模型";
     },
+
+    /** 这一档的默认实例在选择器上对应哪一行（找不到 = 不高亮，回落到「默认模型」那一项）。 */
+    choiceById: (state) => (providerId: string | null) =>
+      providerId === null
+        ? null
+        : (usableChoices(state.providers).find((c) => c.providerId === providerId) ?? null),
   },
 
   actions: {
-    async refresh(profile: string): Promise<void> {
-      const [{ sources }, { providers }] = await Promise.all([
-        api.listProviderSources(profile),
-        api.listProviders(profile),
+    async refresh(): Promise<void> {
+      const [{ sources }, { providers, error }] = await Promise.all([
+        api.listProviderSources(),
+        api.listProviders(),
       ]);
       this.sources = sources;
       this.providers = providers;
+      // 清单为空**且**服务端说了原因时，那个空是「读不出来」而不是「没配过」。
+      this.fileError = error ?? null;
 
       // 选中的源被删掉后，左栏不能停在一个不存在的 id 上；首次加载（或刷新页面）
       // 时也要挑一个，否则左栏列着源、右栏却说「还没有可编辑的供应商源」。
       if (!this.selectedSourceId || !sources.some((s) => s.id === this.selectedSourceId)) {
         this.selectedSourceId = sources[0]?.id ?? null;
       }
-
-      // 选择失效（实例被删、被禁用、或加载失败）时清掉，免得一直显示一个用不了的模型。
-      // 按 providerId 判而不是按 model 名判：后者在两份档之间不唯一，而这一份的列表里
-      // 名字相同、id 不同的两个实例会被读成同一个。
-      if (
-        this.selection &&
-        !this.choices.some((c) => c.providerId === this.selection?.providerId)
-      ) {
-        this.selectModel(profile, null, null);
-      }
     },
 
-    /** 首次进入页面：读回**这一份配置档**的上次选择，并拉一次配置。 */
-    async init(profile: string): Promise<void> {
-      this.selection = readSelection(profile);
+    /** 首次进入页面或重新打开选择器：拉一次全局配置。 */
+    async init(): Promise<void> {
       try {
-        await this.refresh(profile);
+        await this.refresh();
       } catch (err) {
         this.error = (err as Error).message;
       }
@@ -230,10 +191,10 @@ export const useProvidersStore = defineStore("providers", {
       this.availableModels = [];
     },
 
-    async createSource(profile: string, input: Partial<SourceDraft> = {}): Promise<string | null> {
+    async createSource(input: Partial<SourceDraft> = {}): Promise<string | null> {
       this.error = null;
       try {
-        const { source } = await api.createProviderSource(profile, {
+        const { source } = await api.createProviderSource({
           id: input.id ?? "",
           type: input.type ?? "openai",
           name: input.name,
@@ -244,7 +205,7 @@ export const useProvidersStore = defineStore("providers", {
         // 顺序不能反：selectedSourceId 的 watcher 要从 sources 里找到这一条
         // 才肯重建草稿，先选中再刷新会让它在还看不到新源时就跑掉，
         // 于是表单停在空草稿上，之后每次保存都提交给 `/provider-sources/`。
-        await this.refresh(profile);
+        await this.refresh();
         this.selectedSourceId = source.id;
         this.availableModels = [];
         return source.id;
@@ -255,15 +216,15 @@ export const useProvidersStore = defineStore("providers", {
     },
 
     /** 保存一个源的改动。只提交给出的字段，未出现的不动。 */
-    async saveSource(profile: string, id: string, patch: Partial<SourceDraft>): Promise<boolean> {
+    async saveSource(id: string, patch: Partial<SourceDraft>): Promise<boolean> {
       this.saving = true;
       this.error = null;
       try {
         // 不提交 id：源 id 创建后只读（避免 AstrBot 那种「改名要重写全部引用者」
         // 的复杂度），改它只会被服务端当成未知字段。
         const { id: _ignored, ...rest } = patch;
-        await api.updateProviderSource(profile, id, rest);
-        await this.refresh(profile);
+        await api.updateProviderSource(id, rest);
+        await this.refresh();
         return true;
       } catch (err) {
         this.error = (err as Error).message;
@@ -273,8 +234,8 @@ export const useProvidersStore = defineStore("providers", {
       }
     },
 
-    async removeSource(profile: string, id: string, cascade = false): Promise<void> {
-      await runAction(this, profile, () => api.deleteProviderSource(profile, id, cascade));
+    async removeSource(id: string, cascade = false): Promise<void> {
+      await runAction(this, () => api.deleteProviderSource(id, cascade));
     },
 
     /**
@@ -284,11 +245,11 @@ export const useProvidersStore = defineStore("providers", {
      * 要先 `saveSource()`——否则会用一个半成品凭据去问上游，
      * 拿到「密钥无效」还以为是密钥真错了。
      */
-    async fetchModels(profile: string, id: string): Promise<void> {
+    async fetchModels(id: string): Promise<void> {
       this.loadingModels = true;
       this.error = null;
       try {
-        const { models } = await api.fetchProviderModels(profile, id);
+        const { models } = await api.fetchProviderModels(id);
         this.availableModels = models;
       } catch (err) {
         this.availableModels = [];
@@ -299,7 +260,7 @@ export const useProvidersStore = defineStore("providers", {
     },
 
     /** 把一个模型挂到当前源上。 */
-    async addModel(profile: string, model: string): Promise<boolean> {
+    async addModel(model: string): Promise<boolean> {
       const source = this.selectedSourceId;
       if (!source) {
         this.error = "请先选择一个供应商源";
@@ -312,8 +273,8 @@ export const useProvidersStore = defineStore("providers", {
       }
 
       let ok = false;
-      await runAction(this, profile, async () => {
-        await api.createProvider(profile, {
+      await runAction(this, async () => {
+        await api.createProvider({
           // provider id 用「源/模型」拼出来，天然唯一且能一眼看出归属，
           // 这也正是 AstrBot 的生成规则。
           id: `${source}/${trimmed}`.replace(/[^A-Za-z0-9._-]/g, "-"),
@@ -326,38 +287,17 @@ export const useProvidersStore = defineStore("providers", {
       return ok;
     },
 
-    async removeModel(profile: string, id: string): Promise<void> {
-      await runAction(this, profile, () => api.deleteProvider(profile, id));
+    async removeModel(id: string): Promise<void> {
+      await runAction(this, () => api.deleteProvider(id));
     },
 
-    async setModelEnabled(profile: string, id: string, enabled: boolean): Promise<void> {
-      await runAction(this, profile, () => api.updateProvider(profile, id, { enabled }));
+    async setModelEnabled(id: string, enabled: boolean): Promise<void> {
+      await runAction(this, () => api.updateProvider(id, { enabled }));
     },
 
-    async setDefaultModel(profile: string, id: string): Promise<void> {
-      await runAction(this, profile, () => api.updateProvider(profile, id, { default: true }));
-    },
-
-    /** 记下模型选择（`providerId` 为空即回到默认），并按配置档持久化。 */
-    selectModel(profile: string, providerId: string | null, modelId: string | null): void {
-      if (!providerId || !modelId) {
-        this.selection = null;
-        writeSelection(profile, null);
-        return;
-      }
-      const choice = this.choices.find((c) => c.providerId === providerId);
-      if (!choice) {
-        // 选了这一份档的列表里没有的实例：不写，也不猜。
-        this.selection = null;
-        writeSelection(profile, null);
-        return;
-      }
-      this.selection = {
-        providerId: choice.providerId,
-        model: choice.model,
-        sourceId: choice.source,
-      };
-      writeSelection(profile, this.selection);
+    /** 设**全局**默认（`providers.json` 的保留键）。某一档自己的默认在配置档那边。 */
+    async setDefaultModel(id: string): Promise<void> {
+      await runAction(this, () => api.updateProvider(id, { default: true }));
     },
 
     clearError(): void {

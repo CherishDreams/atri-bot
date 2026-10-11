@@ -1,9 +1,12 @@
 /**
  * provider 配置的运行时存储。
  *
- * 这里承担「界面能改配置」这件事的**唯一**写入路径：读 `atri.config.json`、
+ * 这里承担「界面能改配置」这件事的**唯一**写入路径：读 `providers.json`、
  * 校验、改 `providerSources` / `providers` 两个键、写回；随后由调用方
  * 重建注册表让改动立刻生效。
+ *
+ * 那一份文件是**部署级全局**的：连接与模型实例不属于任何一份配置档，
+ * 配置档只引用其中一个实例作为自己的默认（`ProfileFileConfig.defaultProvider`）。
  *
  * ## 为什么是两层
  *
@@ -192,10 +195,11 @@ function pick(raw: WriteInput, keys: readonly string[]): WriteInput {
  * `filePath` 为 `null` 时才读注入的 `config.providers` / `config.providerSources`
  * （所谓 baseline）；给了 `filePath`，那个文件就是唯一真相，文件不存在即读空。
  *
- * 后半句是本次改动，以前不是这样：那时判据是「文件里是否出现了这两个键之一」，
- * 没有就退回 baseline。多配置档之下那是一台静默串档的机器 —— 配置档 B 的文件
- * 还没写过 provider 段，于是它读出 A 的那一份。今天每个 profile 的存储都只带
- * 自己那个文件、不带任何 baseline，所以「B 看见 A 的 provider」在结构上不可能发生。
+ * 后半句是既有的决定，它挡住的是一台**静默串档**的机器：以前判据是「文件里是否出现了
+ * 这两个键之一」，没有就退回 baseline，于是配置档 B 还没写过 provider 段时会读出 A 的那一份。
+ * 现在这一族只有一个调用者 —— 组合根给的是全局那份 `providers.json`
+ *（供应商不属于任何一份配置档），但规则本身留着：`test/provider-config.test.ts`
+ * 的多数用例走的是 `filePath: null` + baseline 那条只读路径。
  */
 export class ProviderConfigStore {
   #filePath: string | null;

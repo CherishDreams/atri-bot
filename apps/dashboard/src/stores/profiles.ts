@@ -22,6 +22,20 @@ export const useProfilesStore = defineStore("profiles", {
      * 但它不该被当成可用项：任何带它的 `?profile=` 都会拿到 503。
      */
     usable: (state): ProfileRecord[] => state.profiles.filter((p) => p.status === "ready"),
+
+    /**
+     * 某一档的默认 provider 实例 id；不知道是哪一份、或那一份还没在列表里时为 `null`
+     *（也就是「用全局默认」）。
+     *
+     * 从列表里现取，不另存一份「当前档的默认」：那样就有两个地方要说这件事，
+     * 而其中一个必然过期。
+     */
+    defaultProviderOf:
+      (state) =>
+      (profileId: string | null): string | null =>
+        profileId === null
+          ? null
+          : (state.profiles.find((p) => p.id === profileId)?.defaultProviderId ?? null),
   },
 
   actions: {
@@ -56,6 +70,18 @@ export const useProfilesStore = defineStore("profiles", {
 
     async rename(id: string, name: string): Promise<boolean> {
       return this.run(() => api.renameProfile(id, name));
+    },
+
+    /**
+     * 改这一档默认用的 provider 实例（`null` = 取消档级默认，回到全局那一个）。
+     *
+     * 与 `rename` 同一类写：动的都是这份档文件里的一个键，而清单本身在别处
+     *（`providers.json`，全局一份）。成功后一律重读列表 —— `defaultProviderId`
+     * 是服务端算出来的，本地猜不得，也**不能**先染上绿色再等回读：那一瞬间的绿
+     * 就是「界面说成功了而磁盘上不是」。
+     */
+    async setDefaultProvider(id: string, providerId: string | null): Promise<boolean> {
+      return this.run(() => api.setDefaultProvider(id, providerId));
     },
 
     async reload(id: string): Promise<boolean> {

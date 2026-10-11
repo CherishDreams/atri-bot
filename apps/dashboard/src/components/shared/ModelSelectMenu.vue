@@ -21,16 +21,36 @@
       </n-grid>
       <n-divider class="my-2!" />
 
+      <n-alert
+        v-if="profiles.error"
+        type="error"
+        :show-icon="false"
+        class="mb-2 text-sm"
+        title="没能改掉这一档的默认模型"
+      >
+        {{ profiles.error }}
+      </n-alert>
+
       <div class="max-h-[18rem] overflow-y-auto">
         <button
           type="button"
           class="row-base flex w-full items-center justify-between gap-2 px-2 py-1 text-left"
           @click="choose(null)"
         >
-          <span>默认模型</span>
+          <span class="min-w-0">
+            <span class="block truncate">默认模型</span>
+            <!-- 这一行点的不是「换一个模型」，而是「让这一档回到没有自己的默认」。
+                 所以要把那个默认**此刻**是谁写在下面，否则点了之后顶栏的名字变了，
+                 而用户不知道变去哪里 —— 全局默认是 `providers.json` 里那一条。 -->
+            <span v-if="globalDefaultModel" class="block truncate text-xs text-ink-faint">
+              {{ globalDefaultModel }}
+            </span>
+          </span>
+          <!-- 「默认模型」这一行说的是**这一档没有自己的默认**，于是走全局那一个
+               （`providers.json` 里的 `providers.default`）。它不是「无模型」。 -->
           <!-- 图标工厂是无函数组件，class 传不进去（会被 props 忽略），
                所以外层套一个 span 上色——svg 用的是 currentColor，跟着继承。 -->
-          <span v-if="providers.selection === null" class="shrink-0 text-primary">
+          <span v-if="currentId === null" class="shrink-0 text-primary">
             <component :is="CheckIcon" />
           </span>
         </button>
@@ -55,7 +75,7 @@
               {{ choice.source }} · {{ choice.type }}
             </span>
           </span>
-          <span v-if="providers.selection?.model === choice.model" class="shrink-0 text-primary">
+          <span v-if="choice.providerId === currentId" class="shrink-0 text-primary">
             <component :is="CheckIcon" />
           </span>
         </button>
@@ -75,7 +95,7 @@
       >
         <span
           class="active-model max-w-[8rem] truncate max-[480px]:max-w-[5rem] md:max-w-[16rem]"
-          >{{ providers.activeModel }}</span
+          >{{ providers.activeModel(currentId) }}</span
         >
         <span class="shrink-0 text-ink-faint"><component :is="ChevronIcon" /></span>
       </n-text>
@@ -85,6 +105,7 @@
 
 <script setup lang="ts">
 import { useProvidersStore, type ModelChoice } from "@/stores/providers";
+import { useProfilesStore } from "@/stores/profiles";
 import { useProfile } from "@/composables/useProfile";
 import type { SelectOption } from "naive-ui";
 import { computed, ref, watch } from "vue";
@@ -94,9 +115,25 @@ const CheckIcon = icon("check");
 const ChevronIcon = icon("chevronDown");
 
 const providers = useProvidersStore();
+const profiles = useProfilesStore();
 // 这个下拉只在配置档闸门**之内**渲染（顶栏跟着页面走），所以 null 只可能是直接深链进来、
 // 还没选档的那一刻 —— 那种时候它既不初始化也不写选择，而不是替用户猜一份档。
 const { profile } = useProfile();
+
+/**
+ * 高亮与顶栏文字都从**这一档的默认**推出来，而那份默认来自 `GET /profiles`，
+ * 不在浏览器里另存一份。
+ *
+ * 于是「点了没生效」是看不出来的假绿在这一处结构上不可能出现：绿勾跟着的是服务端的回读，
+ * 写失败时它留在原来那一行，而弹窗里会多一句失败原因。
+ */
+const currentId = computed(() => profiles.defaultProviderOf(profile.value));
+
+/** 全局默认那一条的模型名；档没有自己的默认时，它就是实际会用的那一个。 */
+const globalDefaultModel = computed(() => {
+  const hit = providers.choices.find((c) => c.isDefault);
+  return hit ? hit.model : "";
+});
 
 const visible = ref(false);
 const keyword = ref("");
@@ -112,7 +149,8 @@ watch(visible, (open) => {
   if (!open) return;
   keyword.value = "";
   sourceFilter.value = "all";
-  if (profile.value !== null) void providers.init(profile.value);
+  profiles.clearError();
+  void providers.init();
 });
 
 const sourceOptions = computed<SelectOption[]>(() => {
@@ -129,26 +167,27 @@ const filtered = computed<ModelChoice[]>(() => {
   });
 });
 
-function choose(choice: ModelChoice | null): void {
-  // 记的是**实例 id**，不是模型名：`ProviderRegistry.#resolveFor` 的第一级选路按实例 id，
-  // 而模型名不再跨配置档唯一（两份档都可以有 deepseek-chat）。
+async function choose(choice: ModelChoice | null): Promise<void> {
+  // 写的是**实例 id**，不是模型名：`ProviderRegistry.#resolveFor` 的第一级选路按实例 id，
+  // 而同一个模型名可以由两个实例提供（两个源都挂着 deepseek-chat）。
   if (profile.value === null) return;
-  providers.selectModel(profile.value, choice?.providerId ?? null, choice?.model ?? null);
+  await profiles.setDefaultProvider(profile.value, choice ? choice.providerId : null);
   visible.value = false;
 }
 
 /*
  * 顶栏上就显示着当前模型名，所以得有数据，不能等用户点开才拉。
  *
- * 用 `watch(profile, …, { immediate: true })` 而不是 `onMounted`：chat 侧的配置档闸门
- * （`ChatLayout` 里的 `ProfileGate`）在没选档时先渲染选择器，用户选完那一刻 profile 才从
- * null 变成有值 —— 只挂 onMounted 的话，这一处会在 profile 仍为 null 时白跑一次，
- * 顶栏随后一直空着，要等用户点开下拉才刷新。
+ * 清单是**全局一份**，所以它只在进页面时拉一次；profile 变了不必重拉 provider 列表
+ *（要变的只是高亮，而那是从 `profiles` 那份列表里现取的）。
+ * 仍用 `watch(…, { immediate: true })` 而不是 `onMounted`：chat 侧的配置档闸门
+ * （`ChatLayout` 里的 `ProfileGate`）在没选档时先渲染选择器，那种时刻拉一次也没坏处，
+ * 而 `onMounted` 在别的入口（深链直接进会话）里跑得更晚，顶栏会先空一下。
  */
 watch(
   profile,
   (pid) => {
-    if (pid !== null) void providers.init(pid);
+    if (pid !== null) void providers.init();
   },
   { immediate: true },
 );

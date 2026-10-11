@@ -105,6 +105,7 @@ async function harness(
     lock,
     events,
     profileId: "default",
+    defaultProviderId: null,
   });
   const session = await engine.sessions.create({ title: "测试" });
   const frames: ServerFrame[] = [];
@@ -363,6 +364,7 @@ test("工具集在一次运行内固定：中途改配置文件不影响在途�
     lock: new SessionLock(),
     events: new SessionEvents(),
     profileId: "default",
+    defaultProviderId: null,
   });
   const session = await engine.sessions.create({ title: "测试" });
 

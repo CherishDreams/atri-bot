@@ -118,7 +118,7 @@ export type ProviderInfo = {
      */
     enabled?: boolean;
     /**
-     * 是否为配置里的默认 provider
+     * 是不是**全局**默认（`providers.json` 里的保留键 `providers.default`）。某一档自己默认的可能是另一个，那在 `ProfileRecord.defaultProviderId` 上。
      */
     default?: boolean;
     /**
@@ -322,6 +322,10 @@ export type ProfileRecord = {
      * 加载失败的原因；正常为 `null`。只给操作者（4xx/5xx 的出口一律不带它，那句原文里有绝对路径）。
      */
     error: string | null;
+    /**
+     * 这一档默认用的 provider **实例 id**（全局那份清单里的）；`null` 表示用全局 `providers.default`。生效次序只有这两级。
+     */
+    defaultProviderId: string | null;
 };
 
 /**
@@ -360,7 +364,8 @@ export type ProviderSourceId = string;
 export type ToolId = string;
 
 /**
- * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+ * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+ * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
  */
 export type Profile = string;
 
@@ -661,7 +666,8 @@ export type SendMessageData = {
     };
     query: {
         /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
          */
         profile: string;
     };
@@ -718,7 +724,8 @@ export type StreamMessageData = {
     };
     query: {
         /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
          */
         profile: string;
     };
@@ -766,28 +773,15 @@ export type StreamMessageResponse = StreamMessageResponses[keyof StreamMessageRe
 export type ListProvidersData = {
     body?: never;
     path?: never;
-    query: {
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
-    };
+    query?: never;
     url: '/providers';
 };
 
 export type ListProvidersErrors = {
     /**
-     * 请求无效
-     */
-    400: ApiError;
-    /**
      * 未登录或会话已失效
      */
     401: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type ListProvidersError = ListProvidersErrors[keyof ListProvidersErrors];
@@ -798,6 +792,10 @@ export type ListProvidersResponses = {
      */
     200: {
         providers: Array<ProviderInfo>;
+        /**
+         * 整份 `providers.json` 读不出来时的原因（里面带着文件路径，只给操作者）；文件读得出来时为 `null`。这时 `providers` 是空表 —— 空与读不出是两件事。
+         */
+        error: string | null;
     };
 };
 
@@ -806,12 +804,7 @@ export type ListProvidersResponse = ListProvidersResponses[keyof ListProvidersRe
 export type CreateProviderData = {
     body: ProviderInput;
     path?: never;
-    query: {
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
-    };
+    query?: never;
     url: '/providers';
 };
 
@@ -828,10 +821,6 @@ export type CreateProviderErrors = {
      * 请求体超过 1 MB 上限
      */
     413: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type CreateProviderError = CreateProviderErrors[keyof CreateProviderErrors];
@@ -855,12 +844,7 @@ export type DeleteProviderData = {
          */
         id: string;
     };
-    query: {
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
-    };
+    query?: never;
     url: '/providers/{id}';
 };
 
@@ -877,10 +861,6 @@ export type DeleteProviderErrors = {
      * 资源不存在
      */
     404: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type DeleteProviderError = DeleteProviderErrors[keyof DeleteProviderErrors];
@@ -902,12 +882,7 @@ export type UpdateProviderData = {
          */
         id: string;
     };
-    query: {
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
-    };
+    query?: never;
     url: '/providers/{id}';
 };
 
@@ -928,10 +903,6 @@ export type UpdateProviderErrors = {
      * 请求体超过 1 MB 上限
      */
     413: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type UpdateProviderError = UpdateProviderErrors[keyof UpdateProviderErrors];
@@ -950,28 +921,15 @@ export type UpdateProviderResponse = UpdateProviderResponses[keyof UpdateProvide
 export type ListProviderSourcesData = {
     body?: never;
     path?: never;
-    query: {
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
-    };
+    query?: never;
     url: '/provider-sources';
 };
 
 export type ListProviderSourcesErrors = {
     /**
-     * 请求无效
-     */
-    400: ApiError;
-    /**
      * 未登录或会话已失效
      */
     401: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type ListProviderSourcesError = ListProviderSourcesErrors[keyof ListProviderSourcesErrors];
@@ -990,12 +948,7 @@ export type ListProviderSourcesResponse = ListProviderSourcesResponses[keyof Lis
 export type CreateProviderSourceData = {
     body: ProviderSourceInput;
     path?: never;
-    query: {
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
-    };
+    query?: never;
     url: '/provider-sources';
 };
 
@@ -1012,10 +965,6 @@ export type CreateProviderSourceErrors = {
      * 请求体超过 1 MB 上限
      */
     413: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type CreateProviderSourceError = CreateProviderSourceErrors[keyof CreateProviderSourceErrors];
@@ -1039,15 +988,11 @@ export type DeleteProviderSourceData = {
          */
         id: string;
     };
-    query: {
+    query?: {
         /**
          * 为真时连带删除引用该源的 provider
          */
         cascade?: boolean;
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
     };
     url: '/provider-sources/{id}';
 };
@@ -1065,10 +1010,6 @@ export type DeleteProviderSourceErrors = {
      * 资源不存在
      */
     404: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type DeleteProviderSourceError = DeleteProviderSourceErrors[keyof DeleteProviderSourceErrors];
@@ -1090,12 +1031,7 @@ export type UpdateProviderSourceData = {
          */
         id: string;
     };
-    query: {
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
-    };
+    query?: never;
     url: '/provider-sources/{id}';
 };
 
@@ -1116,10 +1052,6 @@ export type UpdateProviderSourceErrors = {
      * 请求体超过 1 MB 上限
      */
     413: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type UpdateProviderSourceError = UpdateProviderSourceErrors[keyof UpdateProviderSourceErrors];
@@ -1143,12 +1075,7 @@ export type FetchProviderModelsData = {
          */
         id: string;
     };
-    query: {
-        /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
-         */
-        profile: string;
-    };
+    query?: never;
     url: '/provider-sources/{id}/models';
 };
 
@@ -1165,10 +1092,6 @@ export type FetchProviderModelsErrors = {
      * 资源不存在
      */
     404: ApiError;
-    /**
-     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
-     */
-    503: ApiError;
 };
 
 export type FetchProviderModelsError = FetchProviderModelsErrors[keyof FetchProviderModelsErrors];
@@ -1187,7 +1110,8 @@ export type ListPluginsData = {
     path?: never;
     query: {
         /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
          */
         profile: string;
     };
@@ -1232,7 +1156,8 @@ export type ReloadPluginData = {
     };
     query: {
         /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
          */
         profile: string;
     };
@@ -1281,7 +1206,8 @@ export type UnloadPluginData = {
     };
     query: {
         /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
          */
         profile: string;
     };
@@ -1333,7 +1259,8 @@ export type SetPluginEnabledData = {
     };
     query: {
         /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
          */
         profile: string;
     };
@@ -1408,7 +1335,8 @@ export type ListToolsData = {
     path?: never;
     query: {
         /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
          */
         profile: string;
     };
@@ -1453,7 +1381,8 @@ export type SetToolEnabledData = {
     };
     query: {
         /**
-         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
          */
         profile: string;
     };
@@ -1655,6 +1584,55 @@ export type RenameProfileResponses = {
 };
 
 export type RenameProfileResponse = RenameProfileResponses[keyof RenameProfileResponses];
+
+export type SetDefaultProviderData = {
+    body: {
+        /**
+         * 全局清单里的 provider 实例 id；`null` 表示取消档级默认
+         */
+        providerId: string | null;
+    };
+    path: {
+        /**
+         * 配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/profiles/{id}/default-provider';
+};
+
+export type SetDefaultProviderErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
+};
+
+export type SetDefaultProviderError = SetDefaultProviderErrors[keyof SetDefaultProviderErrors];
+
+export type SetDefaultProviderResponses = {
+    /**
+     * 已写入这份配置档的文件
+     */
+    200: {
+        profile: ProfileRecord;
+    };
+};
+
+export type SetDefaultProviderResponse = SetDefaultProviderResponses[keyof SetDefaultProviderResponses];
 
 export type ReloadProfileData = {
     body?: never;

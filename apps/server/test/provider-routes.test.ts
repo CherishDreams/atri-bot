@@ -17,13 +17,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createApp } from "#app.ts";
-import { configFilePath } from "#config/file.ts";
+import { configFilePath, providersFilePath } from "#config/file.ts";
 import type { FileConfig } from "#config/file.ts";
 import { DEFAULT_PROFILE_ID, profileConfigPath, profilesRoot } from "#config/profiles.ts";
 import type { SourceEntry } from "#core/provider/store.ts";
 import type { ProviderListItem, ProviderMutationResult } from "#api/server.ts";
 import { makeTestConfig } from "./helpers/config.ts";
-import type { Session } from "@atri/shared";
+import type { ProfileRecord, Session } from "@atri/shared";
 
 /**
  * 桩上游记下的一次补全请求。
@@ -112,7 +112,9 @@ async function startApp(t: TestContext, preset?: FileConfig) {
   return {
     origin: `http://127.0.0.1:${app.address().port}`,
     root,
-    /** 运行期配置真正落在那个文件上（本阶段只有一个配置档，就是 `default`）。 */
+    /** 全局供应商配置落在那个文件上（连接与密钥是部署级一份，不再按档）。 */
+    providersPath: providersFilePath(dataDir),
+    /** 唯一那份配置档的文件：本条要证「供应商的写**不碰**它」。 */
     profilePath: profileConfigPath(profilesRoot(dataDir), DEFAULT_PROFILE_ID),
     stop: async () => {
       await app.stop();
@@ -164,17 +166,9 @@ interface ApiBody {
   deleted: string[];
   /** 失败响应：`{ error: "<中文说明>" }`（见 `api/http.ts` 的 sendError）。 */
   error: string;
+  /** 档级默认那条端点的返回：`{ profile: ProfileRecord }`。 */
+  profile: ProfileRecord;
   session: Session;
-}
-
-/**
- * 这一族端点都属于**某一份配置档**，不带 `?profile=` 一律 400（刻意没有隐式默认：
- * 回落 `default` 就是「界面在 B、写进 A、还回 201」那类静默错切的入口）。
- * 收在 `call()` 一处而不是每个调用点各拼一遍，是因为这里要证的不是「参数能不能缺」——
- * 那条由 `test/openapi-request.test.ts` 的规格派生守卫专门管。
- */
-function withProfile(path: string): string {
-  return `${path}${path.includes("?") ? "&" : "?"}profile=default`;
 }
 
 function call(
@@ -184,7 +178,7 @@ function call(
   path: string,
   body?: unknown,
 ): Promise<{ status: number; body: ApiBody }> {
-  return fetch(`${origin}/api/v1${withProfile(path)}`, {
+  return fetch(`${origin}/api/v1${path}`, {
     method,
     headers: { "content-type": "application/json", cookie },
     // GET 不允许带 body，连值为 undefined 的键都不能出现。
@@ -201,10 +195,15 @@ const post = (o: string, c: string, p: string, b?: unknown) => call(o, c, "POST"
 const del = (o: string, c: string, p: string) => call(o, c, "DELETE", p);
 
 /** 建会话、发一条消息、读完整条 SSE，返回助手回复文本。 */
-async function chat(origin: string, cookie: string, model?: string): Promise<string> {
+async function chat(
+  origin: string,
+  cookie: string,
+  model?: string,
+  profile: string = DEFAULT_PROFILE_ID,
+): Promise<string> {
   const { body: created } = await post(origin, cookie, "/sessions", { title: "t" });
   const res = await fetch(
-    `${origin}/api/v1${withProfile(`/sessions/${created.session.id}/messages/stream`)}`,
+    `${origin}/api/v1/sessions/${created.session.id}/messages/stream?profile=${profile}`,
     {
       method: "POST",
       headers: { "content-type": "application/json", cookie },
@@ -344,9 +343,130 @@ test("路由：源被引用时拒绝删除，cascade 才连带删掉", async (t)
   assert.deepEqual((await get(app.origin, cookie, "/providers")).body.providers, []);
 });
 
+/**
+ * 「档级默认」是这次改动里唯一一条**写在档里的**供应商引用，所以它要能被真的看见：
+ * 两份档各自默认打不同上游，不带 `model` 的消息各走各的。
+ *
+ * 为什么必须端到端证：`defaultProviderId` 的生效次序（请求带的 → 档的 → 全局的）落在
+ * 引擎与装配两处，任何一处接错都得到「A 档发的消息打了 B 的模型」这种只在多档部署上
+ * 才出现的错 —— 而它的界面症状只是「回复不太对」，没人会想到是选路。
+ */
+test("路由：两份配置档各设默认，不带 model 的消息各打各的上游", async (t) => {
+  const upstreamA = await startUpstream("来自 A");
+  const upstreamB = await startUpstream("来自 B");
+  const app = await startApp(t);
+  t.after(() => upstreamA.stop());
+  t.after(() => upstreamB.stop());
+  t.after(() => app.stop());
+  const cookie = await login(app.origin);
+
+  // 两个源与两个实例都建在**全局那一份**里（不带 profile）。
+  await post(app.origin, cookie, "/provider-sources", {
+    id: "a",
+    type: "openai",
+    baseUrl: upstreamA.baseUrl,
+    apiKey: "k",
+  });
+  await post(app.origin, cookie, "/providers", { id: "a-m", source: "a", model: "m" });
+  await post(app.origin, cookie, "/provider-sources", {
+    id: "b",
+    type: "openai",
+    baseUrl: upstreamB.baseUrl,
+    apiKey: "k",
+  });
+  await post(app.origin, cookie, "/providers", { id: "b-m", source: "b", model: "m" });
+
+  // 第二份档由 API 建。
+  const other = "second-profile";
+  assert.equal((await post(app.origin, cookie, "/profiles", { id: other })).status, 201);
+
+  // 各设一个默认。**刻意不设全局 `providers.default`**：那一级的回退由上一条用例管，
+  // 这里要单独证「档里那一级不是靠全局兜住的」。
+  assert.equal(
+    (
+      await post(app.origin, cookie, `/profiles/${DEFAULT_PROFILE_ID}/default-provider`, {
+        providerId: "a-m",
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await post(app.origin, cookie, `/profiles/${other}/default-provider`, {
+        providerId: "b-m",
+      })
+    ).status,
+    200,
+  );
+
+  assert.equal(await chat(app.origin, cookie, undefined), "来自 A");
+  assert.equal(await chat(app.origin, cookie, undefined, other), "来自 B");
+  // 请求里显式带的 model 仍然是第一级：档默认只补空缺，不覆盖明确的选择。
+  assert.equal(await chat(app.origin, cookie, "b-m"), "来自 B");
+  assert.equal(await chat(app.origin, cookie, "b-m", other), "来自 B");
+
+  // 发给上游的是配置里的模型名，不是实例 id（`#modelFor` 那一层）。
+  assert.equal(upstreamB.seen.at(-1).body.model, "m");
+
+  // 落盘：写进各自档文件，而全局那份一个字节都没动（档默认不是供应商配置）。
+  const globalFile = readFileSync(app.providersPath, "utf8");
+  assert.doesNotMatch(globalFile, /second-profile/);
+  const providers = (await get(app.origin, cookie, "/providers")).body.providers;
+  assert.deepEqual(
+    providers.map((x) => x.default),
+    providers.map(() => false),
+    "没有任何一条被设成默认，`default` 标注必须全是 false",
+  );
+});
+
+test("路由：把档默认指向清单里没有的 id 必须被拒，且档文件不许被改", async (t) => {
+  const app = await startApp(t);
+  t.after(() => app.stop());
+  const cookie = await login(app.origin);
+  const before = readFileSync(app.profilePath, "utf8");
+
+  const res = await post(app.origin, cookie, `/profiles/${DEFAULT_PROFILE_ID}/default-provider`, {
+    providerId: "ghost",
+  });
+  assert.equal(res.status, 400);
+  assert.match(String(res.body.error), /全局供应商清单里没有/);
+  assert.equal(readFileSync(app.profilePath, "utf8"), before, "被拒的写入还是碰到了档文件");
+
+  // 省略 `providerId` 与「显式清空」是两件事：前者必须被拒，
+  // 否则一次误发的空请求就会悄悄改掉某一档的默认模型。
+  const bare = await post(
+    app.origin,
+    cookie,
+    `/profiles/${DEFAULT_PROFILE_ID}/default-provider`,
+    {},
+  );
+  assert.equal(bare.status, 400);
+
+  // 清空要成功，而且**真的删掉那个键**（留一个空串会让下一次读它的人判断两次）。
+  await post(app.origin, cookie, "/providers", { id: "p", model: "m" });
+  const ok = await post(app.origin, cookie, `/profiles/${DEFAULT_PROFILE_ID}/default-provider`, {
+    providerId: "p",
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.profile.defaultProviderId, "p");
+  const cleared = await post(
+    app.origin,
+    cookie,
+    `/profiles/${DEFAULT_PROFILE_ID}/default-provider`,
+    { providerId: null },
+  );
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.profile.defaultProviderId, null);
+  assert.equal(
+    (JSON.parse(readFileSync(app.profilePath, "utf8")) as Record<string, unknown>).defaultProvider,
+    undefined,
+    "清空之后档文件里还留着那个键",
+  );
+});
+
 // --- 落盘与实时生效 ---------------------------------------------------------
 
-test("路由：改动写进配置档文件，而部署级 atri.config.json 一个字节都不动", async (t) => {
+test("路由：改动写进全局 providers.json，而配置档与部署级文件一个字节都不动", async (t) => {
   // 预置别的设置：provider 写入是读-改-写，一次失手就会连带抹掉这些敏感项。
   const app = await startApp(t, {
     port: 0,
@@ -359,6 +479,7 @@ test("路由：改动写进配置档文件，而部署级 atri.config.json 一�
   // 启动之后取一次快照：本条要证的是「写入之后部署级文件与写入前**逐字节相同**」，
   // 而不是「里面还有那几个键」。seed 只在配置档不存在时动一次，之后这条路径没人再碰它。
   const bootstrapBefore = readFileSync(configFilePath(app.root), "utf8");
+  const profileBefore = readFileSync(app.profilePath, "utf8");
 
   await post(app.origin, cookie, "/provider-sources", {
     id: "s",
@@ -367,9 +488,12 @@ test("路由：改动写进配置档文件，而部署级 atri.config.json 一�
   });
   await post(app.origin, cookie, "/providers", { id: "p", source: "s", model: "claude-x" });
 
-  const profile = JSON.parse(readFileSync(app.profilePath, "utf8"));
-  assert.equal(profile.providerSources.s.type, "anthropic");
-  assert.equal(profile.providers.p.model, "claude-x");
+  const globalFile = JSON.parse(readFileSync(app.providersPath, "utf8"));
+  assert.equal(globalFile.providerSources.s.type, "anthropic");
+  assert.equal(globalFile.providers.p.model, "claude-x");
+  // 供应商的写**不碰任何配置档**：那正是「全局一份」的全部含义。少了这一句，
+  // 「两处都写了一份」照样绿，而两处都写就是两个真源。
+  assert.equal(readFileSync(app.profilePath, "utf8"), profileBefore, "供应商的写动到了配置档文件");
 
   const bootstrap = JSON.parse(bootstrapBefore);
   assert.equal(bootstrap.auth.adminUser, "admin");
@@ -438,7 +562,7 @@ test("路由：删掉默认实例后保留键被清掉，选路回退到剩下�
   assert.equal((await get(app.origin, cookie, "/providers")).body.providers[0].default, true);
 
   await del(app.origin, cookie, "/providers/p");
-  const file = JSON.parse(readFileSync(app.profilePath, "utf8"));
+  const file = JSON.parse(readFileSync(app.providersPath, "utf8"));
   // 保留键不清的话会指向一个不存在的 id，而 `/providers` 上什么也看不出来。
   assert.equal("default" in file.providers, false);
 });
@@ -481,10 +605,10 @@ test("路由：存储故障回固定文案的 500，不把配置文件的路径�
   t.after(() => app.stop());
   const cookie = await login(app.origin);
 
-  // 启动之后再把**配置档文件**改坏：store 每次写都现读它，所以这一步必然让下一次写入失败
-  // （它不把坏文件当成空配置，那是更严重的故障）。改 bootstrap 是没用的 —— 运行期没人读它。
+  // 启动之后再把**全局供应商文件**改坏：store 每次写都现读它，所以这一步必然让下一次
+  // 写入失败（它不把坏文件当成空配置，那是更严重的故障）。改 bootstrap 是没用的 —— 运行期没人读它。
   const broken = "{ 这不是 JSON";
-  writeFileSync(app.profilePath, broken, "utf8");
+  writeFileSync(app.providersPath, broken, "utf8");
 
   const res = await post(app.origin, cookie, "/provider-sources", {
     id: "probe",
@@ -497,9 +621,28 @@ test("路由：存储故障回固定文案的 500，不把配置文件的路径�
   assert.equal(res.body.error, "服务器内部错误，详情见服务端日志");
   // 整个响应体里都不该出现路径：临时目录名、两层配置文件的**目录与文件名**都是可辨认的记号，
   // 缺了后一条的话，配置档那句「…/profiles/default/config.json」就能原样漏出去。
-  assert.doesNotMatch(JSON.stringify(res.body), /atri-routes|atri\.config\.json|profiles\/default/);
+  assert.doesNotMatch(JSON.stringify(res.body), /atri-routes|atri\.config\.json|providers\.json/);
   // 坏文件仍在原地，没被「顺手」覆盖掉 —— 覆盖等于把用户的其它设置抹了。
-  assert.equal(readFileSync(app.profilePath, "utf8"), broken);
+  assert.equal(readFileSync(app.providersPath, "utf8"), broken);
+
+  // **这份坏文件不许把每一档都拖成 failed**：以前只坏一档，现在全局一份读坏如果上抛，
+  // 症状是整个服务全部 503，而那一刻操作者最需要它活着去改这个文件。
+  const profiles = (
+    await fetch(`${app.origin}/api/v1/profiles`, {
+      headers: { cookie },
+    })
+  ).json() as Promise<{ profiles: { id: string; status: string }[] }>;
+  assert.deepEqual(
+    (await profiles).profiles.map((x) => [x.id, x.status]),
+    [[DEFAULT_PROFILE_ID, "ready"]],
+    "全局供应商文件读坏之后，配置档不该被算成 failed",
+  );
+  // 而它必须**说得出原因**：空清单与「读不出来」是两件事，混起来用户会去检查一个
+  // 本来就空的配置。
+  const listed = await get(app.origin, cookie, "/providers");
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body.providers, []);
+  assert.match(String(listed.body.error), /不是合法 JSON/);
 });
 
 /**

@@ -211,6 +211,14 @@ export interface ProfileRecord {
   status: ProfileStatus;
   /** 加载失败的原因；正常为 `null`（不是「没有错误所以键缺席」）。 */
   error: string | null;
+  /**
+   * 这一档默认用哪个 provider **实例**（`providers.json` 里的那一个 id）。
+   *
+   * `null` 表示没配档级默认，此时用全局 `providers.default`。生效次序只有这两级，
+   * 由该档的引擎在请求没带 `model` 时填 —— 供应商本身是部署级全局的，
+   * 「哪一档默认用哪个模型」才是档的属性。
+   */
+  defaultProviderId: string | null;
 }
 
 /**

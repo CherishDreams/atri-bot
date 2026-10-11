@@ -1,7 +1,8 @@
 /**
  * 配置档（profile）的文件层。
  *
- * 一份配置档 = 一套「跑法」：用哪些 provider、开哪些工具、单轮最多几步、开哪些插件。
+ * 一份配置档 = 一套「跑法」：开哪些工具、单轮最多几步、开哪些插件，以及默认用全局
+ * 供应商清单里的哪一个模型。
  * 它住在 `<dataDir>/profiles/<id>/config.json`，**一个配置档一个目录**而不是
  * `<id>.json`：它自己的插件数据（`plugins/<插件 id>/`）就躺在同一个 0700 子树下，
  * 而 `readdir` 也不必在「这是文件还是目录」上分叉。
@@ -334,6 +335,11 @@ export function setProfilePluginEnabled(
  * 目标不存在时**总是创建**，即使 bootstrap 里什么都没有：这样「至少有一份配置档」
  * 是启动的不变量，控制台的列表在新部署上不会空着。
  *
+ * 现在只搬 `tools` 与 `maxToolSteps`。**供应商不在其中**：它是部署级全局的一份，
+ * 落在 `providers.json`（由 `migrateProvidersToGlobal` 从 bootstrap 或各档里取一次）。
+ * 被否掉的做法是「照旧抄进配置档、再由合并搬出去」：那会让每次全新安装都由**我们自己**
+ * 在档文件里写出一个残留段，然后每次启动 warn 一句「你文件里有一段不再生效」。
+ *
  * 调用方（组合根）负责两件事：先建好 `profilesDir`，以及在本函数返回 `null` 之后
  * **不再**读 bootstrap 里那几段。
  *
@@ -349,14 +355,6 @@ export function seedProfile(
 
   const profile: ProfileFileConfig = {};
   const moved: string[] = [];
-  if (bootstrap.providers !== undefined) {
-    profile.providers = bootstrap.providers;
-    moved.push("providers");
-  }
-  if (bootstrap.providerSources !== undefined) {
-    profile.providerSources = bootstrap.providerSources;
-    moved.push("providerSources");
-  }
   if (bootstrap.tools !== undefined) {
     profile.tools = bootstrap.tools;
     moved.push("tools");

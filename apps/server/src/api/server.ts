@@ -131,7 +131,18 @@ const CONTENT_TYPES: Record<string, string> = {
  * 不含任何业务逻辑。路由处理函数直接委托给各个 manager。
  */
 export function createHttpServer(deps: HttpDeps) {
-  const { config, logger, version, sessions, lock, events, profiles, adapters, auth } = deps;
+  const {
+    config,
+    logger,
+    version,
+    sessions,
+    lock,
+    events,
+    profiles,
+    providerSurface,
+    adapters,
+    auth,
+  } = deps;
 
   const cookieName = auth.cookieName;
   const router = new Router();
@@ -405,33 +416,37 @@ export function createHttpServer(deps: HttpDeps) {
     }
   });
 
-  // --- provider 与 provider source ----------------------------------------
+  // --- 供应商：源与模型实例 ------------------------------------------------
   //
-  // 这一组是「配置层」而不是「运行时层」：读的是 atri.config.json 里的
+  // 这一组是「配置层」而不是「运行时层」：读的是 `providers.json` 里的
   // providerSources / providers，每次成功的写操作末尾都会重建注册表，
   // 因此改完不需要重启。
+  //
+  // 它们**不带 `?profile=`**：连接与密钥是部署级全局的一份，在这里保存一次，
+  // 每一档下一次发消息用的就是它。「这一档默认用清单里的哪一个」在
+  // `POST /profiles/{id}/default-provider` 上 —— 那才是档的属性。
 
   /**
-   * 配置层的 provider 列表，并标注它有没有真正加载成功。
+   * 全局清单，并标注每一条有没有真正加载成功。
    *
    * 与旧版的差别：这里返回配置里的**全部**条目（含被禁用、以及因缺源/类型
    * 拼错而加载失败的），而不是只返回注册表里活着的那些。配置页需要看见
    * 「我配了但它没生效」，旧语义下那种条目会凭空消失。
+   *
+   * `error` 那一根是「整个文件读不出来」时的原因：那种时刻清单只能是空的，
+   * 而「空」与「读不出」是两件必须分开说的事 —— 与上面每一条各自带 `error`
+   * 同一条理由。它来自配置读取的原文（带绝对路径），而这一层在鉴权闸门之内，
+   * 只给操作者，不进日志之外的任何地方。
    */
-  router.get(`${API_PREFIX}/providers`, async (req, res) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
-    const { providerConfig, providers } = bundle;
-    // 单独跑一遍工厂，只为拿到「谁没加载成功、为什么」——注册表里没有这个信息，
-    // 而配置页恰恰最需要它。注意取的是 `errors` 不是 `providers`：后者是**成功
-    // 构造出来的实例**，键名写反了会得到一个恒空的错误表，于是失败原因永远不显示。
-    // 错误取自装配那一次（见 `ProfileBundle.providerLoadErrors`），不在这里重跑工厂。
-    const failedById = bundle.providerLoadErrors();
-    const defaultId = providerConfig.defaultId;
+  router.get(`${API_PREFIX}/providers`, async (_req, res) => {
+    const { registry, loadErrors, view } = providerSurface;
+    const { entries, defaultId, error } = view();
+    // 错误取自装配那一次（见 `ProviderSurface.loadErrors`），不在这里重跑工厂。
+    const failedById = loadErrors();
 
-    const list: ProviderListItem[] = providerConfig.providers.map((rawEntry) => {
+    const list: ProviderListItem[] = entries.map((rawEntry) => {
       const entry = viewListEntry(rawEntry);
-      const loaded = providers.get(entry.id) !== null;
+      const loaded = registry.get(entry.id) !== null;
       const reason = failedById.get(entry.id);
       return {
         ...entry,
@@ -445,18 +460,16 @@ export function createHttpServer(deps: HttpDeps) {
           : { error: reason ?? "该 provider 未加载成功，请检查它引用的 provider source 是否存在" }),
       };
     });
-    sendJson(res, 200, { providers: list });
+    sendJson(res, 200, { providers: list, error });
   });
 
   router.post(`${API_PREFIX}/providers`, async (req, res) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const provider = bundle.providerConfig.createProvider(body);
-      bundle.reloadProviders();
+      const provider = providerSurface.config.createProvider(body);
+      providerSurface.rebuild();
       sendJson(res, 201, {
-        provider: viewProvider(provider, bundle.providerConfig.defaultId),
+        provider: viewProvider(provider, providerSurface.config.defaultId),
       });
     } catch (err) {
       fail(res, err);
@@ -464,24 +477,22 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   router.post(`${API_PREFIX}/providers/:id`, async (req, res, params) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const provider = bundle.providerConfig.updateProvider(params.id, body);
-      bundle.reloadProviders();
-      sendJson(res, 200, { provider: viewProvider(provider, bundle.providerConfig.defaultId) });
+      const provider = providerSurface.config.updateProvider(params.id, body);
+      providerSurface.rebuild();
+      sendJson(res, 200, {
+        provider: viewProvider(provider, providerSurface.config.defaultId),
+      });
     } catch (err) {
       fail(res, err);
     }
   });
 
-  router.delete(`${API_PREFIX}/providers/:id`, async (req, res, params) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
+  router.delete(`${API_PREFIX}/providers/:id`, async (_req, res, params) => {
     try {
-      const result = bundle.providerConfig.deleteProvider(params.id);
-      bundle.reloadProviders();
+      const result = providerSurface.config.deleteProvider(params.id);
+      providerSurface.rebuild();
       sendJson(res, 200, result);
     } catch (err) {
       fail(res, err);
@@ -493,19 +504,15 @@ export function createHttpServer(deps: HttpDeps) {
    * 与 AstrBot 的行为一致。该接口在鉴权闸门之内，仅管理员可取。
    * 若日后要收紧，改成 `hasApiKey` + 掩码即可，不影响其它设计。
    */
-  router.get(`${API_PREFIX}/provider-sources`, async (req, res) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
-    sendJson(res, 200, { sources: bundle.providerConfig.sources });
+  router.get(`${API_PREFIX}/provider-sources`, async (_req, res) => {
+    sendJson(res, 200, { sources: providerSurface.config.sources });
   });
 
   router.post(`${API_PREFIX}/provider-sources`, async (req, res) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const source = bundle.providerConfig.createSource(body);
-      bundle.reloadProviders();
+      const source = providerSurface.config.createSource(body);
+      providerSurface.rebuild();
       sendJson(res, 201, { source });
     } catch (err) {
       fail(res, err);
@@ -513,12 +520,10 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   router.post(`${API_PREFIX}/provider-sources/:id`, async (req, res, params) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
     const body = await readJson(req);
     try {
-      const source = bundle.providerConfig.updateSource(params.id, body);
-      bundle.reloadProviders();
+      const source = providerSurface.config.updateSource(params.id, body);
+      providerSurface.rebuild();
       sendJson(res, 200, { source });
     } catch (err) {
       fail(res, err);
@@ -527,13 +532,11 @@ export function createHttpServer(deps: HttpDeps) {
 
   /** 删除源。默认拒绝删除仍被引用的源，`?cascade=1` 才连带删掉引用者。 */
   router.delete(`${API_PREFIX}/provider-sources/:id`, async (req, res, params) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
     const cascade = searchOf(req).get("cascade");
     const isCascade = cascade === "1" || cascade === "true";
     try {
-      const result = bundle.providerConfig.deleteSource(params.id, { cascade: isCascade });
-      bundle.reloadProviders();
+      const result = providerSurface.config.deleteSource(params.id, { cascade: isCascade });
+      providerSurface.rebuild();
       sendJson(res, 200, result);
     } catch (err) {
       fail(res, err);
@@ -547,18 +550,18 @@ export function createHttpServer(deps: HttpDeps) {
    * 访问任意地址」的转发器。用户要先保存，再获取——与 AstrBot 的
    * 「保存并获取模型」按钮同一语义。
    */
-  router.post(`${API_PREFIX}/provider-sources/:id/models`, async (req, res, params) => {
-    const bundle = scopedProfile(req, res);
-    if (!bundle) return;
-    const { providerConfig } = bundle;
-    const source = providerConfig.getSource(params.id);
+  router.post(`${API_PREFIX}/provider-sources/:id/models`, async (_req, res, params) => {
+    // 不叫 `config`：外层已经有一个 `config`（`HttpDeps.config`，那份部署级配置），
+    // 同名会让「这个 handler 读的是哪一份配置」变成要靠肉眼分辨的事。
+    const { config: providerStore } = providerSurface;
+    const source = providerStore.getSource(params.id);
     if (!source) return sendError(res, 404, `未找到 id 为「${params.id}」的 provider source`);
 
     // 借工厂造一个只用来拉列表的实例：`listModels()` 只需 baseUrl / apiKey /
     // timeoutMs / type，这四样全部来自源，所以 model 填什么都无所谓。
     const { providers: built } = createProviders(
       { [params.id]: { source: params.id, model: MODEL_LIST_PROBE } },
-      { sources: providerConfig.sourceEntries() },
+      { sources: providerStore.sourceEntries() },
     );
     const probe = built[0];
     if (!probe) return sendError(res, 400, `provider source「${params.id}」的配置不合法`);
@@ -661,8 +664,9 @@ export function createHttpServer(deps: HttpDeps) {
 
   // --- 配置档 -------------------------------------------------------------
   //
-  // 这一组**不带 `profile` 参数**：它们操作的是「有哪些档」，而不是「某档里的东西」。
-  // 唯一带 `?profile=` 语义的是「这份档现在能不能用」，而那由 `records()` 的 status 说。
+  // 这一组**不带 `profile` 参数**：它们操作的是「有哪些档」以及「档与全局清单之间的
+  // 引用」，而不是「某档里的插件与工具」。唯一带 `?profile=` 语义的是「这份档现在
+  // 能不能用」，而那由 `records()` 的 status 说。
 
   router.get(`${API_PREFIX}/profiles`, async (_req, res) => {
     sendJson(res, 200, { profiles: profiles.records() });
@@ -688,6 +692,32 @@ export function createHttpServer(deps: HttpDeps) {
     }
     try {
       sendJson(res, 200, { profile: await profiles.rename(params.id, body.name) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * 改这一档默认用的 provider 实例（`{"providerId": null}` 是取消档级默认）。
+   *
+   * 这是「供应商全局、跑法按档」这条分界上唯一一条**写在档里**的供应商引用：
+   * 清单本身在 `providers.json`，而「这一档默认打哪一个模型」属于这一档。
+   * 存在的理由是删掉浏览器本地那份选择（`localStorage`）—— 换台机器就换一个默认
+   * 不是「偏好」，是配置，而配置必须落在文件里、能被备份、也不该看不见。
+   */
+  router.post(`${API_PREFIX}/profiles/:id/default-provider`, async (req, res, params) => {
+    const body = await readJson(req);
+    // 必须**显式**给出这一键：`{}` 不等于「取消默认」。省略与清空是两件事，
+    // 让它们都表示清空，就会有一次误发的空请求悄悄改掉某一档的默认模型。
+    if (body.providerId === undefined) {
+      return sendError(res, 400, "必须提供 `providerId`（字符串，或显式的 null 表示取消）");
+    }
+    if (typeof body.providerId !== "string" && body.providerId !== null) {
+      return sendError(res, 400, "`providerId` 必须是字符串或 null");
+    }
+    try {
+      const profile = await profiles.setDefaultProvider(params.id, body.providerId);
+      sendJson(res, 200, { profile });
     } catch (err) {
       fail(res, err);
     }

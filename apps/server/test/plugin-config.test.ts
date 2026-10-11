@@ -6,9 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginManager, pluginRuntimeConfig } from "#plugins/manager.ts";
 import { createApp } from "#app.ts";
-import { ensurePrivateDir } from "#config/file.ts";
+import { ensurePrivateDir, providersFilePath } from "#config/file.ts";
 import type { AppConfig } from "#config/index.ts";
-import { DEFAULT_PROFILE_ID, profileConfigPath, profilesRoot } from "#config/profiles.ts";
 import type { Logger } from "#core/logger.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
@@ -124,11 +123,11 @@ test("插件只看到白名单里的运行期配置", async (t) => {
   // 否则「插件没看到秘密」就成了在空输入上证明的一句空话。
   const configDump = JSON.stringify(config);
   assert.ok(configDump.includes(ADMIN_PASSWORD), "测试配置里没带上口令，守卫失去意义");
-  const profileDump = readFileSync(
-    profileConfigPath(profilesRoot(config.dataDir), DEFAULT_PROFILE_ID),
-    "utf8",
-  );
-  assert.ok(profileDump.includes(API_KEY), "配置档文件里没带上 apiKey，守卫失去意义");
+  // apiKey 现在躺在**全局那份**供应商文件里（`providers.json`），不在配置档文件里。
+  // 这一句换位置不是为了跟着改代码，而是因为守卫的要点没变：秘密必须真的存在于这个
+  // 部署里，否则「插件没看到秘密」就成了在空输入上证明的一句空话。
+  const providersDump = readFileSync(providersFilePath(config.dataDir), "utf8");
+  assert.ok(providersDump.includes(API_KEY), "providers.json 里没带上 apiKey，守卫失去意义");
   const pluginDump = JSON.stringify(globalThis.__ctxConfig);
   assert.ok(!pluginDump.includes(ADMIN_PASSWORD), "口令泄漏到了 ctx.config");
   assert.ok(!pluginDump.includes(API_KEY), "apiKey 泄漏到了 ctx.config");

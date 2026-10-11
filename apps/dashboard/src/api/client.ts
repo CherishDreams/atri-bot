@@ -23,6 +23,7 @@ import {
   logout as logoutOp,
   me as meOp,
   renameProfile as renameProfileOp,
+  setDefaultProvider as setDefaultProviderOp,
   reloadPlugin as reloadPluginOp,
   setPluginEnabled as setPluginEnabledOp,
   setToolEnabled as setToolEnabledOp,
@@ -257,37 +258,37 @@ export async function setToolEnabled(profile: string, id: string, enabled: boole
 }
 
 // --- 模型 provider -----------------------------------------------------------
+//
+// 这一族**都不带 `profile`**：源与实例是部署级全局的一份（服务端的 `providers.json`），
+// 在这里保存一次，每一档下一次发消息用的就是它。「这一档默认用清单里的哪一个」
+// 在 `setDefaultProvider` 上 —— 那才是档的属性。
 
-export async function listProviders(profile: string) {
-  return body(await listProvidersOp({ query: { profile } }));
+export async function listProviders() {
+  return body(await listProvidersOp());
 }
 
-export async function createProvider(profile: string, input: ProviderInput) {
-  return body(await createProviderOp({ body: input, query: { profile } }));
+export async function createProvider(input: ProviderInput) {
+  return body(await createProviderOp({ body: input }));
 }
 
-export async function updateProvider(profile: string, id: string, patch: ProviderUpdate) {
-  return body(await updateProviderOp({ path: { id }, body: patch, query: { profile } }));
+export async function updateProvider(id: string, patch: ProviderUpdate) {
+  return body(await updateProviderOp({ path: { id }, body: patch }));
 }
 
-export async function deleteProvider(profile: string, id: string) {
-  return body(await deleteProviderOp({ path: { id }, query: { profile } }));
+export async function deleteProvider(id: string) {
+  return body(await deleteProviderOp({ path: { id } }));
 }
 
-export async function listProviderSources(profile: string) {
-  return body(await listProviderSourcesOp({ query: { profile } }));
+export async function listProviderSources() {
+  return body(await listProviderSourcesOp());
 }
 
-export async function createProviderSource(profile: string, input: ProviderSourceInput) {
-  return body(await createProviderSourceOp({ body: input, query: { profile } }));
+export async function createProviderSource(input: ProviderSourceInput) {
+  return body(await createProviderSourceOp({ body: input }));
 }
 
-export async function updateProviderSource(
-  profile: string,
-  id: string,
-  patch: ProviderSourceUpdate,
-) {
-  return body(await updateProviderSourceOp({ path: { id }, body: patch, query: { profile } }));
+export async function updateProviderSource(id: string, patch: ProviderSourceUpdate) {
+  return body(await updateProviderSourceOp({ path: { id }, body: patch }));
 }
 
 /**
@@ -296,8 +297,8 @@ export async function updateProviderSource(
  * 不传 cascade 时，若还有 provider 引用该源，服务端回 400 并列出引用者——
  * 这里不替调用方做决定，让它把服务端的解释原样展示给用户。
  */
-export async function deleteProviderSource(profile: string, id: string, cascade = false) {
-  return body(await deleteProviderSourceOp({ path: { id }, query: { cascade, profile } }));
+export async function deleteProviderSource(id: string, cascade = false) {
+  return body(await deleteProviderSourceOp({ path: { id }, query: { cascade } }));
 }
 
 /**
@@ -306,8 +307,8 @@ export async function deleteProviderSource(profile: string, id: string, cascade 
  * 没有 baseUrl/apiKey 参数：凭据来自服务端已落盘的配置，否则这个端点会变成
  * 「带任意凭证访问任意地址」的转发器。因此调用方必须先保存改动再调用。
  */
-export async function fetchProviderModels(profile: string, id: string) {
-  return body(await fetchProviderModelsOp({ path: { id }, query: { profile } }));
+export async function fetchProviderModels(id: string) {
+  return body(await fetchProviderModelsOp({ path: { id } }));
 }
 
 // --- WebSocket（codegen 不覆盖，手写保留）-----------------------------------
@@ -420,6 +421,16 @@ export async function createProfile(id: string, name?: string) {
 /** 只改显示名。**不改目录名** —— 目录一动，那份档的插件数据就跟丢了。 */
 export async function renameProfile(id: string, name: string) {
   return body(await renameProfileOp({ path: { id }, body: { name } }));
+}
+
+/**
+ * 改这份配置档默认用的 provider 实例（全局那份清单里的 id）。
+ *
+ * 传 `null` 是**取消档级默认**，回到全局 `providers.default`，与「不提交这一键」是两件事
+ *（服务端对后者回 400），所以这里的参数类型是 `string | null` 而不是可选。
+ */
+export async function setDefaultProvider(id: string, providerId: string | null) {
+  return body(await setDefaultProviderOp({ path: { id }, body: { providerId } }));
 }
 
 export async function reloadProfile(id: string) {

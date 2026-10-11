@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client/index.js';
-import type { AuthStatusData, AuthStatusResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, ReloadProfileData, ReloadProfileErrors, ReloadProfileResponses, RenameProfileData, RenameProfileErrors, RenameProfileResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
+import type { AuthStatusData, AuthStatusResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, ReloadProfileData, ReloadProfileErrors, ReloadProfileResponses, RenameProfileData, RenameProfileErrors, RenameProfileResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -157,7 +157,7 @@ export const streamMessage = <ThrowOnError extends boolean = false>(options: Opt
  * 返回配置里的**全部** provider 条目，并标注它有没有真正加载成功。
  * 与旧版「只返回运行时已注册的」不同：配置页需要看得见「我配了但它没生效」。
  */
-export const listProviders = <ThrowOnError extends boolean = false>(options: Options<ListProvidersData, ThrowOnError>): RequestResult<ListProvidersResponses, ListProvidersErrors, ThrowOnError> => (options.client ?? client).get<ListProvidersResponses, ListProvidersErrors, ThrowOnError>({
+export const listProviders = <ThrowOnError extends boolean = false>(options?: Options<ListProvidersData, ThrowOnError>): RequestResult<ListProvidersResponses, ListProvidersErrors, ThrowOnError> => (options?.client ?? client).get<ListProvidersResponses, ListProvidersErrors, ThrowOnError>({
     responseType: 'json',
     url: '/providers',
     ...options
@@ -211,7 +211,7 @@ export const updateProvider = <ThrowOnError extends boolean = false>(options: Op
  * **明文返回 `apiKey`**：配置页要能把原值填回输入框，这是有意的取舍。
  * 该接口在鉴权闸门之内，仅管理员可取。
  */
-export const listProviderSources = <ThrowOnError extends boolean = false>(options: Options<ListProviderSourcesData, ThrowOnError>): RequestResult<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError> => (options.client ?? client).get<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError>({
+export const listProviderSources = <ThrowOnError extends boolean = false>(options?: Options<ListProviderSourcesData, ThrowOnError>): RequestResult<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError> => (options?.client ?? client).get<ListProviderSourcesResponses, ListProviderSourcesErrors, ThrowOnError>({
     responseType: 'json',
     url: '/provider-sources',
     ...options
@@ -381,6 +381,24 @@ export const deleteProfile = <ThrowOnError extends boolean = false>(options: Opt
 export const renameProfile = <ThrowOnError extends boolean = false>(options: Options<RenameProfileData, ThrowOnError>): RequestResult<RenameProfileResponses, RenameProfileErrors, ThrowOnError> => (options.client ?? client).post<RenameProfileResponses, RenameProfileErrors, ThrowOnError>({
     responseType: 'json',
     url: '/profiles/{id}/rename',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 设这一档默认的 provider 实例
+ *
+ * 供应商清单是**全局一份**，而「这一档默认用其中哪一个」属于这一档，写进它自己的文件。
+ * `{"providerId": null}` 是取消档级默认，回到全局 `providers.default`。
+ * 引用的实例必须在全局清单里存在，否则 400：让它指着一个不存在的 id，症状不是报错而是
+ * 每条消息静默落到注册表的回退上 —— 界面显示你选了 A，回的却是 B。
+ */
+export const setDefaultProvider = <ThrowOnError extends boolean = false>(options: Options<SetDefaultProviderData, ThrowOnError>): RequestResult<SetDefaultProviderResponses, SetDefaultProviderErrors, ThrowOnError> => (options.client ?? client).post<SetDefaultProviderResponses, SetDefaultProviderErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/profiles/{id}/default-provider',
     ...options,
     headers: {
         'Content-Type': 'application/json',

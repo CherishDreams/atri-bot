@@ -35,6 +35,14 @@ export interface EngineDeps {
   events: SessionEvents;
   /** 这个引擎代表哪一份配置档 —— 只用来在共享锁里登记持有者。 */
   profileId: string;
+  /**
+   * 这一档默认用哪个 provider 实例；`null` 表示「没有档级默认，用全局那一个」。
+   *
+   * 生效次序是 `请求带的 model → 档.defaultProvider → 全局 providers.default`。
+   * 第三级不在这里写：那是注册表自己的回退（`#resolveFor`），供应商全局一份之后
+   * 它本来就是全局的。这里只补前两级的差。
+   */
+  defaultProviderId: string | null;
 }
 
 export interface HandleMessageOptions {
@@ -65,6 +73,7 @@ export interface HandleMessageOptions {
  */
 export class AgentEngine {
   sessions: SessionManager;
+  /** 全局那一份注册表（供应商是部署级的，不再按配置档各建一套）。 */
   providers: ProviderRegistry;
   tools: ToolRegistry;
   toolConfig: ToolConfigStore;
@@ -72,6 +81,12 @@ export class AgentEngine {
   lock: SessionLock;
   events: SessionEvents;
   profileId: string;
+  /**
+   * 这一档的默认 provider 实例。可变，因为改它是一次配置写入：
+   * `POST /profiles/{id}/default-provider` 先落盘，再由组合根更新这里，
+   * 下一次发消息立刻用的是新值 —— 不必等一次重载。
+   */
+  defaultProviderId: string | null;
 
   constructor({
     sessions,
@@ -82,6 +97,7 @@ export class AgentEngine {
     lock,
     events,
     profileId,
+    defaultProviderId,
   }: EngineDeps) {
     this.sessions = sessions;
     this.providers = providers;
@@ -91,6 +107,7 @@ export class AgentEngine {
     this.lock = lock;
     this.events = events;
     this.profileId = profileId;
+    this.defaultProviderId = defaultProviderId;
   }
 
   /**
@@ -125,7 +142,15 @@ export class AgentEngine {
       if (!session) throw new ApiError("会话不存在", 404);
       this.events.emit({ type: "message", message: userMessage });
 
-      const reply = await this.#runLoop({ session, model, onDelta, onMessage, signal });
+      const reply = await this.#runLoop({
+        session,
+        // 请求没带 model 时用**这一档**的默认，而不是直接交给注册表：注册表现在是
+        // 全局一份，它的 `default` 是部署级的默认，替不了「这一档默认用另一个模型」。
+        model: model ?? this.defaultProviderId ?? undefined,
+        onDelta,
+        onMessage,
+        signal,
+      });
       return reply;
     } finally {
       // 写在 finally 是这条锁的全部要点：上游报错、工具抛错、客户端断开、撞步数上限

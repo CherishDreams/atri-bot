@@ -34,11 +34,11 @@
     },
     {
       "name": "providers",
-      "description": "模型实例配置"
+      "description": "模型实例配置（部署级全局一份，住在 `providers.json`）"
     },
     {
       "name": "provider-sources",
-      "description": "模型供应商连接配置"
+      "description": "模型供应商连接配置（部署级全局一份，住在 `providers.json`）"
     },
     {
       "name": "status",
@@ -46,7 +46,7 @@
     },
     {
       "name": "profiles",
-      "description": "配置档本身。这一族的每个 operation 都**不带** `?profile=` 参数：它们操作的是「有哪些档」，而不是「某档里的东西」。"
+      "description": "配置档本身。这一族的每个 operation 都**不带** `?profile=` 参数：它们操作的是「有哪些档」以及「档与全局清单之间的引用」，而不是「某档里的东西」。"
     }
   ],
   "paths": {
@@ -490,35 +490,27 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["providers"],
+                  "required": ["providers", "error"],
                   "properties": {
                     "providers": {
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/ProviderInfo"
                       }
+                    },
+                    "error": {
+                      "type": ["string", "null"],
+                      "description": "整份 `providers.json` 读不出来时的原因（里面带着文件路径，只给操作者）；文件读得出来时为 `null`。这时 `providers` 是空表 —— 空与读不出是两件事。"
                     }
                   }
                 }
               }
             }
           },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true,
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Profile"
-          }
-        ]
+        }
       },
       "post": {
         "operationId": "createProvider",
@@ -560,17 +552,8 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true,
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Profile"
-          }
-        ]
+        }
       }
     },
     "/providers/{id}": {
@@ -582,9 +565,6 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProviderId"
-          },
-          {
-            "$ref": "#/components/parameters/Profile"
           }
         ],
         "requestBody": {
@@ -625,12 +605,8 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true
+        }
       },
       "delete": {
         "operationId": "deleteProvider",
@@ -640,9 +616,6 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProviderId"
-          },
-          {
-            "$ref": "#/components/parameters/Profile"
           }
         ],
         "responses": {
@@ -664,12 +637,8 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true
+        }
       }
     },
     "/provider-sources": {
@@ -698,22 +667,10 @@
               }
             }
           },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true,
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Profile"
-          }
-        ]
+        }
       },
       "post": {
         "operationId": "createProviderSource",
@@ -754,17 +711,8 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true,
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Profile"
-          }
-        ]
+        }
       }
     },
     "/provider-sources/{id}": {
@@ -776,9 +724,6 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProviderSourceId"
-          },
-          {
-            "$ref": "#/components/parameters/Profile"
           }
         ],
         "requestBody": {
@@ -819,12 +764,8 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true
+        }
       },
       "delete": {
         "operationId": "deleteProviderSource",
@@ -843,9 +784,6 @@
               "type": "boolean"
             },
             "description": "为真时连带删除引用该源的 provider"
-          },
-          {
-            "$ref": "#/components/parameters/Profile"
           }
         ],
         "responses": {
@@ -867,12 +805,8 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true
+        }
       }
     },
     "/provider-sources/{id}/models": {
@@ -884,9 +818,6 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProviderSourceId"
-          },
-          {
-            "$ref": "#/components/parameters/Profile"
           }
         ],
         "responses": {
@@ -908,12 +839,8 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProfileUnavailable"
           }
-        },
-        "x-profile-scoped": true
+        }
       }
     },
     "/plugins": {
@@ -1444,6 +1371,66 @@
         }
       }
     },
+    "/profiles/{id}/default-provider": {
+      "post": {
+        "operationId": "setDefaultProvider",
+        "summary": "设这一档默认的 provider 实例",
+        "description": "供应商清单是**全局一份**，而「这一档默认用其中哪一个」属于这一档，写进它自己的文件。\n`{\"providerId\": null}` 是取消档级默认，回到全局 `providers.default`。\n引用的实例必须在全局清单里存在，否则 400：让它指着一个不存在的 id，症状不是报错而是\n每条消息静默落到注册表的回退上 —— 界面显示你选了 A，回的却是 B。",
+        "tags": ["profiles"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProfileId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["providerId"],
+                "properties": {
+                  "providerId": {
+                    "type": ["string", "null"],
+                    "description": "全局清单里的 provider 实例 id；`null` 表示取消档级默认"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已写入这份配置档的文件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["profile"],
+                  "properties": {
+                    "profile": {
+                      "$ref": "#/components/schemas/ProfileRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          }
+        }
+      }
+    },
     "/profiles/{id}/reload": {
       "parameters": [
         {
@@ -1566,7 +1553,7 @@
         "schema": {
           "type": "string"
         },
-        "description": "要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套 provider / 工具开关 / 插件启用清单。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。"
+        "description": "要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。\n**供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。"
       },
       "ProfileId": {
         "name": "id",
@@ -1852,7 +1839,7 @@
           },
           "default": {
             "type": "boolean",
-            "description": "是否为配置里的默认 provider"
+            "description": "是不是**全局**默认（`providers.json` 里的保留键 `providers.default`）。某一档自己默认的可能是另一个，那在 `ProfileRecord.defaultProviderId` 上。"
           },
           "loaded": {
             "type": "boolean",
@@ -2139,7 +2126,7 @@
       },
       "ProfileRecord": {
         "type": "object",
-        "required": ["id", "name", "path", "status", "error"],
+        "required": ["id", "name", "path", "status", "error", "defaultProviderId"],
         "properties": {
           "id": {
             "type": "string"
@@ -2158,6 +2145,10 @@
           "error": {
             "type": ["string", "null"],
             "description": "加载失败的原因；正常为 `null`。只给操作者（4xx/5xx 的出口一律不带它，那句原文里有绝对路径）。"
+          },
+          "defaultProviderId": {
+            "type": ["string", "null"],
+            "description": "这一档默认用的 provider **实例 id**（全局那份清单里的）；`null` 表示用全局 `providers.default`。生效次序只有这两级。"
           }
         }
       }

@@ -309,6 +309,21 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
     "renameProfile",
     "reloadProfile",
     "deleteProfile",
+    // 「这一档默认用全局清单里的哪一个」写在档自己的文件里，但路径参数就是档 id，
+    // 与 rename / reload 同构，不需要再有一份 query 参数。
+    "setDefaultProvider",
+    // 供应商这一族整体是**部署级全局**的一份（`providers.json`）：连接与密钥按档各存一份
+    // 只会让同一个 apiKey 躺在 N 个文件里，而「换一档换一套后端」从来没人在用。
+    // 带 `profile` 反而危险 —— 它会让「在 A 上改了源、B 却以为自己也有」变成可能。
+    "listProviders",
+    "createProvider",
+    "updateProvider",
+    "deleteProvider",
+    "listProviderSources",
+    "createProviderSource",
+    "updateProviderSource",
+    "deleteProviderSource",
+    "fetchProviderModels",
   ]);
 
   interface SpecOp {
@@ -407,5 +422,25 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
         "带上 profile 仍然报「缺少 profile」—— 守卫被写成了无条件拒绝",
       );
     });
+  }
+});
+
+/**
+ * 作用域守卫的**另一半**：上面那份 `GLOBAL` 清单只说「这些端点不要求带 `profile`」，
+ * 它挡不住「有人把 `scopedProfile` 那道守卫又挪回这些 handler 上」—— 那时候清单照旧、
+ * 标记照旧没有，而配置页全体 400。
+ *
+ * 所以这里反向打一次真请求：供应商这一族**不属于任何一份配置档**，不带参数就必须能用。
+ * 红了怎么办：那是有人给这一族加回了档级守卫 —— 先确认 `providers.json` 是不是真的
+ * 该按档各存一份（要改回去得同时改规格、这份守卫、和 dashboard 的调用点）。
+ */
+test("供应商端点不带 profile 也能用（它们是部署级全局那一份）", async (t) => {
+  const h = await start(t);
+  for (const path of ["/providers", "/provider-sources"]) {
+    const res = await fetch(`${h.origin}/api/v1${path}`, { headers: { cookie: h.cookie } });
+    // 边界收窄：失败响应也是 JSON，解析不出来时按空对象处理。
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    assert.equal(res.status, 200, `${path} 不带 profile 回了 ${res.status}：${body.error ?? ""}`);
+    assert.doesNotMatch(String(body.error ?? ""), /缺少 profile/, `${path} 又开始要求配置档了`);
   }
 });

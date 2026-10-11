@@ -33,9 +33,10 @@ import { DEFAULT_MAX_TOOL_STEPS } from "#core/tool/store.ts";
  * `tools` / 非默认的 `maxToolSteps` 会真的写进 `<root>/atri.config.json`**。
  * 那两个存储现在的规则是「给了 `filePath`，那个文件就是唯一真相」，注入的 baseline
  * 只在 `filePath: null` 时生效 —— 测试想「启动时就有这些 provider」，就得让它们躺在
- * 文件里。写的是 **bootstrap** 而不是配置档文件，因为 `createApp` 启动时会把这几段
- * 一次性 seed 进 `profiles/default/config.json`：于是每个用 provider 的测试都顺路
- * 走了一遍生产路径（包括 seed 本身），而不是绕过它去手写内部布局。
+ * 某个被读的文件里。写的是 **bootstrap** 而不是任何运行期文件，因为 `createApp` 启动时
+ * 会把它们各搬一次：`tools` / `maxToolSteps` 进 `profiles/default/config.json`（seed），
+ * 供应商进 `data/providers.json`（全局那一份）。于是每个用 provider 的测试都顺路走完了
+ * 这两条生产迁移，而不是绕过它们去手写内部布局。
  * 仍然**只写非默认的那几键**：全写会让每一个测试都凭空多出一个配置文件，
  * 而「文件不存在」本身是要被某些用例覆盖的状态。
  */

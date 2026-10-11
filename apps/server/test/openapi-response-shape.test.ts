@@ -93,6 +93,7 @@ const ORDER = [
   "listProviders",
   "createProvider",
   "updateProvider",
+  "setDefaultProvider",
   "createSession",
   "listSessions",
   "sendMessage",
@@ -663,6 +664,12 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
     }
     case "updateProvider":
       return at(`/providers/${"{id}"}`, { name: "改名后的实例", default: true });
+    case "setDefaultProvider":
+      // 「这一档默认用全局清单里的哪一个」——引用的是上面刚建好的那个实例，
+      // 用一个真实存在的 id 才能让这条驱动走到 200 那一支。
+      return call("POST", `/profiles/${ids.profileId}/default-provider`, {
+        providerId: ids.providerId,
+      });
     case "deleteProvider": {
       const created = await call("POST", "/providers", {
         id: "guard-victim",

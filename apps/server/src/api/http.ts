@@ -6,7 +6,7 @@ import type { AppConfig } from "#config/index.ts";
 import type { AgentEngine } from "#core/agent/engine.ts";
 import type { AuthManager } from "#core/auth/manager.ts";
 import type { Logger } from "#core/logger.ts";
-import type { ProviderConfigStore } from "#core/provider/store.ts";
+import type { ProviderConfigStore, ProviderEntry } from "#core/provider/store.ts";
 import type { ProviderRegistry } from "#core/provider/registry.ts";
 import type { ToolConfigStore } from "#core/tool/store.ts";
 import type { ToolRegistry } from "#core/tool/registry.ts";
@@ -21,8 +21,12 @@ import type { PluginManager } from "#plugins/manager.ts";
  *
  * 这个形状只存在于 HTTP 层：它是「一次请求要用的那一套东西」的打包，
  * 而打包这件事本身由 `app.ts` 做（用对象字面量 + 闭包，不起类）。
- * 与 `ProviderListItem` / `ProviderMutationResult` 同一个先例 —— 它们也声明在这里，
- * 因为「这个类型只服务于传输层的响应形状」，放进 `core/` 反而会让 core 认识 HTTP。
+ *
+ * 这里**没有** provider 相关的字段了：供应商（连接与模型清单）是部署级全局的一份，
+ * 见 `ProviderSurface`。档里只剩「这一档默认用其中哪一个」，也就是 `defaultProviderId`。
+ * 曾经这里是 `providerConfig` / `providers` / `reloadProviders` / `providerLoadErrors`
+ * 四根字段，每档一套 —— 那套的理由（"换一档换一套后端"）被否掉了：安装插件、配密钥
+ * 都是文件系统与部署级动作，按档复制只会让同一个密钥躺在 N 份文件里。
  */
 export interface ProfileBundle {
   id: string;
@@ -30,24 +34,56 @@ export interface ProfileBundle {
   name: string;
   /** 这份档的配置文件路径，只用于日志与 `GET /profiles` 的 `path`。 */
   path: string;
-  providers: ProviderRegistry;
-  providerConfig: ProviderConfigStore;
-  /** 配置写成功后重建整张注册表，由组合根提供（见 `app.ts` 的 rebuildProviders）。 */
-  reloadProviders: () => ProviderRegistry;
   /**
-   * 最近一次装配里没加载成功的 provider（`id -> 中文原因`），由 `rebuildProviders()` 写。
+   * 这一档默认用的 provider 实例 id（`null` = 用全局 `providers.default`）。
    *
-   * 存在的理由是不给 HTTP 层第二次装配的机会：它以前在这里自己调一次
-   * `createProviders()` 来「诊断」，于是那条路径不传 logger（工厂里的 info 每次
-   * `GET /providers` 都被丢掉）、重读一遍 `process.env` 的密钥，而且与真正的装配
-   * 迟早对同一个字段给出不同答案 —— architecture.md 说 `rebuildProviders()` 是唯一
-   * 装配路径，那么错误也只能有这一个来源。
+   * 与 `name` 一样是**可变**的：`POST /profiles/{id}/default-provider` 先落盘再改这里
+   * 和 `bundle.engine`，那样下一次发消息立刻生效，而不必等一次重载。
    */
-  providerLoadErrors: () => Map<string, string>;
+  defaultProviderId: string | null;
   tools: ToolRegistry;
   toolConfig: ToolConfigStore;
   plugins: PluginManager;
   engine: AgentEngine;
+}
+
+/**
+ * 全局供应商配置的**读视图**：清单 + 默认项 + 「文件读不出来时的那句原因」。
+ *
+ * 为什么要有这一层，而不是让 handler 直接读 `ProviderConfigStore.providers`：
+ * 那个 getter 在文件是半截 JSON 时**抛**，而抛出去的消息里带着绝对路径，且它的后果是
+ * 「整个配置页打不开」。装配那一次已经把它 catch 进错误表了，读路径必须同源 ——
+ * 于是这里把「读不出来」表达成一个字段，而不是表达成一次异常。
+ */
+export interface ProvidersView {
+  entries: ProviderEntry[];
+  defaultId: string | null;
+  /** 整个文件读不出来时的原因；`null` 表示读得出来（此时 `entries` 就是真实清单）。 */
+  error: string | null;
+}
+
+/**
+ * 供应商这一层的装配面，由组合根注入。跨配置档**只有一份**。
+ *
+ * 存在的理由是「写配置的那条路」与「读配置的那条路」必须共用同一个注册表和同一份
+ * 失败表：`api/` 以前在 `GET /providers` 里自己调一次 `createProviders()` 来「诊断」，
+ * 于是那条路径不传 logger、重读一遍 `process.env` 的密钥，并且迟早与真正的装配
+ * 对同一个字段给出不同答案。
+ */
+export interface ProviderSurface {
+  /** 全局那份读写存储（写操作直接落在它上面，然后调 `rebuild()`）。 */
+  config: ProviderConfigStore;
+  /** 由 `rebuild()` 填的那一份注册表；每一档的引擎共用它。 */
+  registry: ProviderRegistry;
+  /** 一次成功的写之后重建整张注册表 —— **唯一**装配路径。 */
+  rebuild(): ProviderRegistry;
+  /** 此刻的配置视图，永不抛（见 `ProvidersView`）。 */
+  view(): ProvidersView;
+  /**
+   * 最近一次装配里没加载成功的 provider（`id -> 中文原因`）。
+   * 由 `rebuild()` 整份重写（不是累加），所以它永远与注册表同源。
+   */
+  loadErrors(): Map<string, string>;
 }
 
 /**
@@ -79,6 +115,13 @@ export interface ProfileDirectory {
   create(id: string, name?: string): Promise<ProfileRecord>;
   /** 只改给人看的名字（写回文件的 `name`），**不改目录名** —— 目录一动，插件数据就跟丢。 */
   rename(id: string, name: string): Promise<ProfileRecord>;
+  /**
+   * 改这一档默认用的 provider 实例；传 `null` 是「取消档级默认，回到全局那一个」。
+   *
+   * `providerId` 必须在全局清单里存在，否则抛（400）：让它指着一个不存在的实例，
+   * 后果是每条消息静默落到注册表的回退上 —— 界面显示的是你选的模型，回的却是另一个。
+   */
+  setDefaultProvider(id: string, providerId: string | null): Promise<ProfileRecord>;
   /** 重读文件并换上新的对象图，然后卸载旧的。失败时保留正在服务的那一份并抛。 */
   reload(id: string): Promise<ProfileRecord>;
   /**
@@ -98,13 +141,14 @@ export interface ProfileDirectory {
  * `createHttpServer` 的依赖，由组合根 `app.ts` 注入。
  *
  * 字段类型用各 manager 的**具体类**而不是 `Pick<>`：传输层本来就该知道 manager 的
- * 真实 API（`providerConfig.providers` / `auth.cookieName` / `plugins.reload`…），
- * 它不知道的是业务规则。`Pick` 在这里只会变成一坨比类本身更长的清单。
+ * 真实 API（`auth.cookieName` / `plugins.reload`…），它不知道的是业务规则。`Pick`
+ * 在这里只会变成一坨比类本身更长的清单。
  *
- * 注意这里**没有** `providers` / `tools` / `plugins` / `engine` 了：那些都属于某一份
- * 配置档，要从 `profiles` 里按请求带来的 `?profile=` 取。留下它们就等于留一条
+ * 属于某一份配置档的东西（`tools` / `plugins` / `engine`）不在这里：那些要从
+ * `profiles` 按请求带来的 `?profile=` 取，留下它们就等于留一条
  * 「handler 忘了选档就用了一份不知道谁的对象图」的活路。
- * 跨配置档共享的只有三样：会话存储、会话锁、事件总线。
+ * 跨配置档共享的是四样：会话存储、会话锁、事件总线，以及 `providerSurface` ——
+ * 供应商是部署级的，配置页改一次全局生效。
  */
 export interface HttpDeps {
   config: AppConfig;
@@ -121,6 +165,7 @@ export interface HttpDeps {
   lock: SessionLock;
   events: SessionEvents;
   profiles: ProfileDirectory;
+  providerSurface: ProviderSurface;
   adapters: AdapterManager;
 }
 

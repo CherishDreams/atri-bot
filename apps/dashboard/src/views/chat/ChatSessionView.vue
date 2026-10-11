@@ -4,13 +4,11 @@ import { useRoute, useRouter } from "vue-router";
 import { connect, type LiveStatus } from "@/api/client";
 import { captureAnchor } from "@/components/shared/scrollAnchor";
 import { useAuthStore } from "@/stores/auth";
-import { useProvidersStore } from "@/stores/providers";
 import { useSessionsStore } from "@/stores/sessions";
 import { useProfile } from "@/composables/useProfile";
 
 const auth = useAuthStore();
 const sessions = useSessionsStore();
-const providers = useProvidersStore();
 /** 发消息是作用域化的：这一轮用哪一套模型与工具，由路由上的那一份档决定。 */
 const { profile } = useProfile();
 const route = useRoute();
@@ -108,9 +106,10 @@ async function submitMessage(text: string): Promise<void> {
   if (profile.value === null) return;
 
   draft.value = "";
-  // 带上顶栏选中的**实例 id**（不是模型名：名字不再跨配置档唯一，见 `stores/providers.ts`
-  // 的 `selection`）；没选就交给服务端按自己的默认选路。
-  await sessions.send(profile.value, content, providers.selection?.providerId);
+  // **不带 model**：用哪个模型是这一档的属性（档文件里的 `defaultProvider`），
+  // 由该档的引擎在 `model` 缺省时填。以前这里带的是浏览器 localStorage 里那份选择，
+  // 于是「同一条消息在两台浏览器上是两个模型」——那是配置，不是偏好，见提交正文。
+  await sessions.send(profile.value, content);
 
   // 发送失败时把内容还回输入框，否则用户白打一遍字。
   // 条件是 draft 仍为空：用户在等回复期间又打了字，不能把人家的字覆盖掉。

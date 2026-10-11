@@ -12,7 +12,7 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
  *
  * **这一侧没有模型选择器**（以前有）。判据不是审美而是「它在这儿不做事」：
  * bot 侧发消息走 `components/Conversation.vue` 的 `send(profile, text)`，
- * 根本不传 model，所以那颗选择器改的 `selection` 对 bot 平台没有任何行为影响，
+ * 根本不传 model，所以那颗选择器对 bot 平台没有任何行为影响，
  * 只是占掉顶栏 128px 的一个装饰 —— 而「这一档用哪个模型」在 chat 侧才是需要随手调的事。
  * 其余三个控件（主题、平台切换、汉堡）与 chat 共用同一批组件。
  *

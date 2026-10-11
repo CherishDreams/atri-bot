@@ -69,7 +69,7 @@ test("列目录只认合规的目录，忽略散落的文件与坏名字", (t) =
   assert.deepEqual(listProfileDirs(join(root, "nope")), []);
 });
 
-test("seed：把「跑法」四段搬进配置档，部署级段落留在原地", (t) => {
+test("seed：只搬属于档的那两段，供应商不抄进档里（它是全局一份）", (t) => {
   const root = tmpRoot(t, "atri-profiles-seed-");
   const profiles = profilesRoot(root);
   const moved = seedProfile(profiles, DEFAULT_PROFILE_ID, {
@@ -80,17 +80,17 @@ test("seed：把「跑法」四段搬进配置档，部署级段落留在原地"
     tools: { current_time: { enabled: true } },
     maxToolSteps: 9,
   });
-  assert.deepEqual(moved, ["providers", "providerSources", "tools", "maxToolSteps"]);
+  assert.deepEqual(moved, ["tools", "maxToolSteps"]);
 
   const filePath = profileConfigPath(profiles, DEFAULT_PROFILE_ID);
   assert.ok(filePath.endsWith(join(DEFAULT_PROFILE_ID, PROFILE_FILE_NAME)));
   const profile = readProfileConfig(filePath);
-  assert.deepEqual(Object.keys(profile).toSorted(), [
-    "maxToolSteps",
-    "providerSources",
-    "providers",
-    "tools",
-  ]);
+  assert.deepEqual(Object.keys(profile).toSorted(), ["maxToolSteps", "tools"]);
+  // 供应商**没有**被抄进来：抄了就等于由框架自己写出第二份真源，而且下一次启动还得
+  // warn 一句「你档里有一段不再生效」——那是我们自己刚写的。它由
+  // `migrateProvidersToGlobal` 直接收进 `providers.json`。
+  assert.equal(profile.providers, undefined);
+  assert.equal(profile.providerSources, undefined);
   // 口令与端口**没有**跟过来：配置档不是第二个 `atri.config.json`。
   assert.equal(profile.auth, undefined);
   assert.equal(profile.port, undefined);
@@ -277,7 +277,7 @@ test("一份配置档坏了不拖垮别的：坏文件只让它自己读不出�
   assert.throws(() => readProfileConfig(bad), /不是合法 JSON/);
 });
 
-/** 起一个真 app，返回它的 root 与配置档文件路径（`dataDir` 显式传，不让 helper 的默认值隐身）。 */
+/** 起一个真 app，返回它的 root 与两类运行期文件的路径（`dataDir` 显式传，不让 helper 的默认值隐身）。 */
 async function runApp(t: TestContext, bootstrap: Record<string, unknown>) {
   const root = tmpRoot(t, "atri-profiles-app-");
   const dataDir = join(root, "data");
@@ -285,11 +285,17 @@ async function runApp(t: TestContext, bootstrap: Record<string, unknown>) {
   const app = await createApp(makeTestConfig({ root, dataDir }));
   await app.start();
   t.after(() => app.stop());
-  return { app, root, profilePath: profileConfigPath(profilesRoot(dataDir), DEFAULT_PROFILE_ID) };
+  return {
+    app,
+    root,
+    dataDir,
+    profilePath: profileConfigPath(profilesRoot(dataDir), DEFAULT_PROFILE_ID),
+    providersPath: providersFilePath(dataDir),
+  };
 }
 
-test("端到端：首次启动把 bootstrap 的 provider seed 进配置档，之后改 bootstrap 不再有影响", async (t) => {
-  const { root, profilePath } = await runApp(t, {
+test("端到端：首次启动把 bootstrap 的供应商收进全局 providers.json，跑法段进配置档；之后改 bootstrap 都不再有影响", async (t) => {
+  const { root, dataDir, profilePath, providersPath } = await runApp(t, {
     logLevel: "error",
     auth: { adminUser: "admin", adminPassword: "pw" },
     providerSources: { s: { type: "openai", baseUrl: "https://example.invalid/v1", apiKey: "k" } },
@@ -297,16 +303,27 @@ test("端到端：首次启动把 bootstrap 的 provider seed 进配置档，之
     maxToolSteps: 9,
   });
 
-  // 第一次启动：seed 跑过，配置档里带着那几段；`data/profiles` 与档位目录都是 0700。
-  const seeded = JSON.parse(readFileSync(profilePath, "utf8"));
-  assert.deepEqual(Object.keys(seeded.providerSources), ["s"]);
+  // 第一次启动：供应商进**全局那一份**，配置档里只有跑法。
+  const seeded = JSON.parse(readFileSync(profilePath, "utf8")) as Record<string, unknown>;
   assert.equal(seeded.maxToolSteps, 9);
-  assert.equal(statSync(profilesRoot(join(root, "data"))).mode & 0o777, 0o700);
+  assert.equal(seeded.providers, undefined, "供应商被抄进了配置档，于是档里也有一份真源");
+  assert.equal(seeded.providerSources, undefined);
+  const globalProviders = JSON.parse(readFileSync(providersPath, "utf8")) as {
+    providerSources: Record<string, unknown>;
+    providers: Record<string, unknown>;
+  };
+  assert.deepEqual(Object.keys(globalProviders.providerSources), ["s"]);
+  assert.deepEqual(Object.keys(globalProviders.providers), ["p"]);
+  assert.equal(statSync(profilesRoot(dataDir)).mode & 0o777, 0o700);
+  // 全局那份里躺着 apiKey，所以它必须与配置文件同一档权限（`dataDir` 是 0700 目录，
+  // 但这条不是靠目录兜底就能省掉的：写过一次之后它是 0600，读的人不必猜）。
+  assert.equal(statSync(providersPath).mode & 0o777, 0o600);
 
-  // 第二次启动同一个 root：把 bootstrap 改成另一套 provider，配置档必须**原样不动**。
+  // 第二次启动同一个 root：把 bootstrap 改成另一套 provider，两个文件都必须**原样不动**。
   // 这一条是「不删 bootstrap 里的键，但它不再是真源」的全部含义 —— 少了它，
   // 下一次改动就会在两个文件之间来回漂移，而界面上看到的永远是后写的那一个。
   const before = readFileSync(profilePath, "utf8");
+  const globalBefore = readFileSync(providersPath, "utf8");
   writeFileSync(
     configFilePath(root),
     JSON.stringify({
@@ -316,12 +333,11 @@ test("端到端：首次启动把 bootstrap 的 provider seed 进配置档，之
       providers: { other: { source: "other", model: "z" } },
     }),
   );
-  const second = await createApp(
-    makeTestConfig({ root, dataDir: join(root, "data"), staticDir: join(root, "nope") }),
-  );
+  const second = await createApp(makeTestConfig({ root, dataDir, staticDir: join(root, "nope") }));
   await second.start();
   t.after(() => second.stop());
   assert.equal(readFileSync(profilePath, "utf8"), before, "第二次启动又跑了一遍 seed");
+  assert.equal(readFileSync(providersPath, "utf8"), globalBefore, "第二次启动又搬了一遍供应商");
 });
 
 /**
