@@ -85,6 +85,7 @@ const ORDER = [
   "listProfiles",
   "createProfile",
   "renameProfile",
+  "getProfileConfig",
   "reloadProfile",
   "listProviderSources",
   "createProviderSource",
@@ -590,6 +591,9 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
     }
     case "renameProfile":
       return call("POST", `/profiles/${ids.profileId}/rename`, { name: "改名后的档" });
+    case "getProfileConfig":
+      // 放在 rename 之后：这一条要顺带证明读回的是**此刻**的档（名字已经改过）。
+      return call("GET", `/profiles/${ids.profileId}/config`);
     case "reloadProfile":
       return call("POST", `/profiles/${ids.profileId}/reload`);
     case "deleteProfile": {

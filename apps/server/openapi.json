@@ -1371,6 +1371,40 @@
         }
       }
     },
+    "/profiles/{id}/config": {
+      "get": {
+        "operationId": "getProfileConfig",
+        "summary": "读一份配置档的可编辑内容（工作台草稿起点）",
+        "description": "把「这一档现在是什么」一次给全：默认模型、单轮步数、工具启用状态、插件启用状态。\n存在的理由不是省三次往返，而是**原子性**：分开读的那三份之间没有一致性保证，\n两次请求之间恰好有人改了档，草稿的起点就是自相矛盾的，而下一次保存会把这份矛盾写回磁盘。\n四段各自仍由原来的存储现算，这个端点只做搬运。",
+        "tags": ["profiles"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProfileId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "这一档的可编辑内容",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        }
+      }
+    },
     "/profiles/{id}/default-provider": {
       "post": {
         "operationId": "setDefaultProvider",
@@ -2149,6 +2183,42 @@
           "defaultProviderId": {
             "type": ["string", "null"],
             "description": "这一档默认用的 provider **实例 id**（全局那份清单里的）；`null` 表示用全局 `providers.default`。生效次序只有这两级。"
+          }
+        }
+      },
+      "ProfileConfig": {
+        "type": "object",
+        "description": "一份配置档此刻的可编辑内容，配置工作台的草稿起点。四段一次读回，避免界面拼三个端点时读到自相矛盾的起点。不引入第二份真源：每一段仍由各自的存储现算，这个响应只做搬运。",
+        "required": ["id", "name", "defaultProviderId", "maxToolSteps", "tools", "plugins"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "给人看的名字；配置档没写 `name` 时等于 id。"
+          },
+          "defaultProviderId": {
+            "type": ["string", "null"],
+            "description": "这一档默认的 provider **实例** id（全局那份清单里的）；`null` 表示用全局 `providers.default`。"
+          },
+          "maxToolSteps": {
+            "type": "integer",
+            "description": "单轮允许的工具步数，给的是**夹取后的生效值**（引擎实际用的那一个）。不返回文件里的原值：那会出现「界面写着 999、实际跑 50」，而两个数都\"没错\"。"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolInfo"
+            },
+            "description": "与 `GET /tools?profile=<id>` 同一份计算（`viewTool` + 每次现读档文件），所以两处永远不会不一致。"
+          },
+          "plugins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PluginInfo"
+            },
+            "description": "与 `GET /plugins?profile=<id>` 同源（运行态的 `PluginManager.list()`）。"
           }
         }
       }

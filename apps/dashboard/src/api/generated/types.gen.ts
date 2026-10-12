@@ -329,6 +329,33 @@ export type ProfileRecord = {
 };
 
 /**
+ * 一份配置档此刻的可编辑内容，配置工作台的草稿起点。四段一次读回，避免界面拼三个端点时读到自相矛盾的起点。不引入第二份真源：每一段仍由各自的存储现算，这个响应只做搬运。
+ */
+export type ProfileConfig = {
+    id: string;
+    /**
+     * 给人看的名字；配置档没写 `name` 时等于 id。
+     */
+    name: string;
+    /**
+     * 这一档默认的 provider **实例** id（全局那份清单里的）；`null` 表示用全局 `providers.default`。
+     */
+    defaultProviderId: string | null;
+    /**
+     * 单轮允许的工具步数，给的是**夹取后的生效值**（引擎实际用的那一个）。不返回文件里的原值：那会出现「界面写着 999、实际跑 50」，而两个数都"没错"。
+     */
+    maxToolSteps: number;
+    /**
+     * 与 `GET /tools?profile=<id>` 同一份计算（`viewTool` + 每次现读档文件），所以两处永远不会不一致。
+     */
+    tools: Array<ToolInfo>;
+    /**
+     * 与 `GET /plugins?profile=<id>` 同源（运行态的 `PluginManager.list()`）。
+     */
+    plugins: Array<PluginInfo>;
+};
+
+/**
  * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。必须挂在**具体 operation** 上，不要「顺手归位」到 path-item 的 parameters：那里会被同一路径下的每个方法共享，`DELETE /sessions/{id}` 因此在 SDK 里 advertise 两个服务端从不读的参数（handler 压根不看 query），而三道规格守卫谁也看不见这种说谎。
  */
 export type PageLimit = number;
@@ -1584,6 +1611,44 @@ export type RenameProfileResponses = {
 };
 
 export type RenameProfileResponse = RenameProfileResponses[keyof RenameProfileResponses];
+
+export type GetProfileConfigData = {
+    body?: never;
+    path: {
+        /**
+         * 配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/profiles/{id}/config';
+};
+
+export type GetProfileConfigErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type GetProfileConfigError = GetProfileConfigErrors[keyof GetProfileConfigErrors];
+
+export type GetProfileConfigResponses = {
+    /**
+     * 这一档的可编辑内容
+     */
+    200: ProfileConfig;
+};
+
+export type GetProfileConfigResponse = GetProfileConfigResponses[keyof GetProfileConfigResponses];
 
 export type SetDefaultProviderData = {
     body: {

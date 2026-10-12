@@ -698,6 +698,39 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   /**
+   * 一份配置档「此刻是什么」的完整读回，配置工作台的草稿起点。
+   *
+   * 为什么要一个端点而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
+   * 那三份之间没有原子性 —— 两次请求之间恰好有人改了或新建了一份档，草稿的起点就成了
+   * 自相矛盾的，而下一次保存会把这份矛盾整个写回磁盘。一次读，四段同源。
+   *
+   * 它**不引入第二份真源**：工具与步数走 `bundle.toolConfig`（每次现读那份档文件）、
+   * 插件走 `bundle.plugins.list()`（运行态）、默认模型走 `bundle.defaultProviderId`
+   *（装配时从档文件读进来的），这里一行都不重算 —— 与 `GET /tools` 共用 `viewTool`，
+   * 所以两处永远不会给出两个答案。
+   */
+  router.get(`${API_PREFIX}/profiles/:id/config`, async (_req, res, params) => {
+    // 404 与 503 分开，与 `scopedProfile` 同一条判据：「没这东西」与「你配坏了」是两件事。
+    // 503 那句刻意不带原因原文（里面躺着绝对路径），原因在 `GET /profiles` 的 `error` 里。
+    const status = profiles.status(params.id);
+    if (status === null) return sendError(res, 404, `没有这份配置档: ${params.id}`);
+    const bundle = profiles.get(params.id);
+    if (bundle === null) {
+      return sendError(res, 503, `配置档「${params.id}」当前不可用，原因见 GET /profiles`);
+    }
+    sendJson(res, 200, {
+      id: bundle.id,
+      name: bundle.name,
+      defaultProviderId: bundle.defaultProviderId,
+      maxToolSteps: bundle.toolConfig.maxSteps(),
+      tools: bundle.tools
+        .list()
+        .map((tool) => viewTool(tool, bundle.toolConfig.isEnabled(tool.id))),
+      plugins: bundle.plugins.list(),
+    });
+  });
+
+  /**
    * 改这一档默认用的 provider 实例（`{"providerId": null}` 是取消档级默认）。
    *
    * 这是「供应商全局、跑法按档」这条分界上唯一一条**写在档里**的供应商引用：

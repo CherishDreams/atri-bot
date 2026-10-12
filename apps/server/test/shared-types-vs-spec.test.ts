@@ -32,6 +32,7 @@ const COMPARABLE = [
   "Message",
   "PluginInfo",
   "PluginStatus",
+  "ProfileConfig",
   "ProfileRecord",
   "ProfileStatus",
   "ProviderInfo",

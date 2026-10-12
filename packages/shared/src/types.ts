@@ -222,9 +222,37 @@ export interface ProfileRecord {
 }
 
 /**
+ * 一份配置档**此刻的可编辑内容**，配置工作台的草稿起点。
+ *
+ * 为什么要一个端点而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
+ * 那三份之间没有原子性 —— 两次请求之间恰好有人改了或新建了一份档，草稿的起点就是
+ * 自相矛盾的，而下一次保存会把这份矛盾整个写回磁盘。一次读，四段同源。
+ *
+ * 它**不引入第二份真源**：每一段仍由各自的存储现算（工具与步数读这份档的文件、
+ * 插件是运行态、`defaultProviderId` 来自装配），这个端点只做搬运。
+ */
+export interface ProfileConfig {
+  id: string;
+  /** 给人看的名字；配置档没写 `name` 时等于 id。 */
+  name: string;
+  /** 这一档默认的 provider **实例** id；`null` = 用全局 `providers.default`。 */
+  defaultProviderId: string | null;
+  /**
+   * 单轮允许的工具步数，给的是**夹取后的生效值**（引擎实际用的那一个）。
+   *
+   * 不返回文件里的原值：那样会出现「界面写着 999、实际跑 50」，而这两个数在
+   * 同一次读里都"没错" —— 只留一个数，界面无从说谎。
+   */
+  maxToolSteps: number;
+  tools: ToolInfo[];
+  plugins: PluginInfo[];
+}
+
+/**
  * 已通过鉴权的账号。目前只有单一管理员，因此只有用户名；
  * 凭证本身从不进入响应体，一律走 HttpOnly Cookie。
- */ export interface AuthUser {
+ */
+export interface AuthUser {
   username: string;
 }
 
