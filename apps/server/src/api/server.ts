@@ -85,6 +85,25 @@ function viewTool(tool: ToolDefinition, enabled: boolean): ToolInfo {
 }
 
 /**
+ * 一份对象图 -> `ProfileConfig` 响应体。
+ *
+ * 抽出来给读和写两条路由共用：保存之后必须**回读**，界面拿到的要是服务端此刻的事实，
+ * 而不是它自己发出去的那份草稿 —— 而"回读"与"读"若是两份实现，保存就会开始说谎。
+ * 每一段仍由各自的存储现算，这里只做搬运（与 `GET /tools` 共用 `viewTool`）。
+ */
+function profileConfigView(bundle: ProfileBundle) {
+  return {
+    id: bundle.id,
+    name: bundle.name,
+    defaultProviderId: bundle.defaultProviderId,
+    // 夹取后的生效值，不是文件里的原值：见 `ProfileConfig.maxToolSteps` 的注释。
+    maxToolSteps: bundle.toolConfig.maxSteps(),
+    tools: bundle.tools.list().map((tool) => viewTool(tool, bundle.toolConfig.isEnabled(tool.id))),
+    plugins: bundle.plugins.list(),
+  };
+}
+
+/**
  * 探针实例的占位模型名。`listModels()` 不看模型，但工厂要求 model 非空，
  * 且这个值永远不会被发到上游——用个显眼的名字，万一出现在日志里也能一眼认出。
  */
@@ -169,6 +188,20 @@ export function createHttpServer(deps: HttpDeps) {
       sendError(res, 400, "缺少 profile 参数（要操作哪一份配置档）");
       return null;
     }
+    return profileById(res, id);
+  }
+
+  /**
+   * 按**路径里的档 id** 取那一份对象图，不可用的直接回掉。
+   *
+   * 三条判据与 `scopedProfile` 完全同一条（400 缺参数 / 404 没这东西 / 503 你配坏了），
+   * 差别只在 id 从哪来：`/profiles/{id}/…` 那一族（rename / reload / default-provider /
+   * config）的档 id 本来就在路径上，再要求一份 query 参数就是同一个值写两遍 ——
+   * 而两处不一致时听谁的，是一件没有答案的事。
+   *
+   * @returns 可用的一份对象图；已经回完响应时返回 `null`，调用方直接 `return`
+   */
+  function profileById(res: ServerResponse, id: string): ProfileBundle | null {
     const status = profiles.status(id);
     if (status === null) {
       sendError(res, 404, `没有这份配置档: ${id}`);
@@ -176,6 +209,7 @@ export function createHttpServer(deps: HttpDeps) {
     }
     const bundle = profiles.get(id);
     if (bundle === null) {
+      // 503 那句刻意不带原因原文：`readConfigFileAt` 的消息里躺着配置文件的绝对路径。
       sendError(res, 503, `配置档「${id}」当前不可用，原因见 GET /profiles`);
       return null;
     }
@@ -703,31 +737,33 @@ export function createHttpServer(deps: HttpDeps) {
    * 为什么要一个端点而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
    * 那三份之间没有原子性 —— 两次请求之间恰好有人改了或新建了一份档，草稿的起点就成了
    * 自相矛盾的，而下一次保存会把这份矛盾整个写回磁盘。一次读，四段同源。
-   *
-   * 它**不引入第二份真源**：工具与步数走 `bundle.toolConfig`（每次现读那份档文件）、
-   * 插件走 `bundle.plugins.list()`（运行态）、默认模型走 `bundle.defaultProviderId`
-   *（装配时从档文件读进来的），这里一行都不重算 —— 与 `GET /tools` 共用 `viewTool`，
-   * 所以两处永远不会给出两个答案。
    */
   router.get(`${API_PREFIX}/profiles/:id/config`, async (_req, res, params) => {
-    // 404 与 503 分开，与 `scopedProfile` 同一条判据：「没这东西」与「你配坏了」是两件事。
-    // 503 那句刻意不带原因原文（里面躺着绝对路径），原因在 `GET /profiles` 的 `error` 里。
-    const status = profiles.status(params.id);
-    if (status === null) return sendError(res, 404, `没有这份配置档: ${params.id}`);
-    const bundle = profiles.get(params.id);
-    if (bundle === null) {
-      return sendError(res, 503, `配置档「${params.id}」当前不可用，原因见 GET /profiles`);
+    const bundle = profileById(res, params.id);
+    if (!bundle) return;
+    sendJson(res, 200, profileConfigView(bundle));
+  });
+
+  /**
+   * 保存这份档的多段配置。校验、落盘、运行态对账全在组合根（`ProfileDirectory.updateConfig`），
+   * 这里只搬请求与响应。
+   *
+   * `failed` 那一段不是错误码而是**部分生效的清单**：插件那颗 `setup()` 抛错时，
+   * 同一批里前面的开关已经真的生效了。那种时刻回一个 200 而让界面回到原样，
+   * 或者回一个 4xx 而把已生效的悄悄留着，都是本仓最恨的形状 —— 所以两样都给。
+   */
+  router.post(`${API_PREFIX}/profiles/:id/config`, async (req, res, params) => {
+    const body = await readJson(req);
+    try {
+      const { failed } = await profiles.updateConfig(params.id, body);
+      // 回读。走 `profileById` 而不是 `profiles.get`：并发的一次 `DELETE /profiles/:id`
+      // 之后这份档可能已经不在了，那时要说的是「这份档当前不可用」，不是一个 null 字段。
+      const bundle = profileById(res, params.id);
+      if (!bundle) return;
+      sendJson(res, 200, { config: profileConfigView(bundle), failed });
+    } catch (err) {
+      fail(res, err);
     }
-    sendJson(res, 200, {
-      id: bundle.id,
-      name: bundle.name,
-      defaultProviderId: bundle.defaultProviderId,
-      maxToolSteps: bundle.toolConfig.maxSteps(),
-      tools: bundle.tools
-        .list()
-        .map((tool) => viewTool(tool, bundle.toolConfig.isEnabled(tool.id))),
-      plugins: bundle.plugins.list(),
-    });
   });
 
   /**

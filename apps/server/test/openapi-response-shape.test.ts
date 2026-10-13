@@ -86,6 +86,7 @@ const ORDER = [
   "createProfile",
   "renameProfile",
   "getProfileConfig",
+  "saveProfileConfig",
   "reloadProfile",
   "listProviderSources",
   "createProviderSource",
@@ -594,6 +595,15 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
     case "getProfileConfig":
       // 放在 rename 之后：这一条要顺带证明读回的是**此刻**的档（名字已经改过）。
       return call("GET", `/profiles/${ids.profileId}/config`);
+    case "saveProfileConfig": {
+      // 两样都要：`maxToolSteps` 走「省略即不动」那条 diff 语义（发整档就等于把它测漏了），
+      // 而那颗**按设计起不来**的夹具插件让 `failed` 真的带上元素 —— 空数组会让这一层的
+      // 形状检查假绿，那是这个守卫自己的规矩（见 EMPTY_OK 那段注释）。
+      return call("POST", `/profiles/${ids.profileId}/config`, {
+        maxToolSteps: 7,
+        plugins: { "fixture-broken": { enabled: true } },
+      });
+    }
     case "reloadProfile":
       return call("POST", `/profiles/${ids.profileId}/reload`);
     case "deleteProfile": {

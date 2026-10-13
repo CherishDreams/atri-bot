@@ -10,7 +10,9 @@ import { ProviderRegistry } from "./core/provider/registry.ts";
 import { createProviders, readDefaultProviderId } from "./core/provider/factory.ts";
 import { ProviderConfigStore } from "./core/provider/store.ts";
 import { ToolRegistry } from "./core/tool/registry.ts";
-import { ToolConfigStore } from "./core/tool/store.ts";
+// 上下界只写一处（见 `core/tool/store.ts` 那条注释）：这里拿它做**写入**的校验，
+// 而同一对数字在读文件时用来夹取 —— 两种用法刻意不同，判据也写在那儿。
+import { MAX_MAX_TOOL_STEPS, MIN_MAX_TOOL_STEPS, ToolConfigStore } from "./core/tool/store.ts";
 import { createBuiltinTools } from "./core/tool/builtins.ts";
 import { AuthManager } from "./core/auth/manager.ts";
 import { ApiError, errorMessage } from "./core/errors.ts";
@@ -56,6 +58,49 @@ function disabledPluginsOf(profile: ProfileFileConfig): string[] {
   return Object.entries(profile.plugins ?? {})
     .filter(([, toggle]) => toggle?.enabled === false)
     .map(([id]) => id);
+}
+
+/**
+ * `POST /profiles/{id}/config` 能改的顶层键。**白名单而不是黑名单**：
+ * 放任意键进来就等于把这份档文件开成一台远程编辑器 —— 它能改写残留的 `providers` 段
+ *（那是已经全局化的死键，写回去就又有两个真源），也能塞进任何我们不认识的东西。
+ * 秘密会换名字、会新增，黑名单每一次都迟到（AGENTS.md 里插件白名单那条同判据）。
+ */
+const PROFILE_PATCH_KEYS = ["defaultProvider", "maxToolSteps", "tools", "plugins"] as const;
+
+/**
+ * 把 `{ "<id>": { enabled: boolean } }` 那一段验成一张可应用的清单。
+ *
+ * `label` 是错误文案里的名词（工具 / 插件）：拒掉一个不存在的开关时，
+ * 「不存在」必须说得出是**哪一族**不存在，否则用户去翻错的那一页。
+ */
+function asToggles(
+  value: unknown,
+  section: string,
+  label: string,
+  exists: (id: string) => boolean,
+): [string, boolean][] {
+  if (value === undefined) return [];
+  // 形状判据与 HTTP 入口那条一致：非 null、是对象、不是数组。
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(`\`${section}\` 必须是一个对象（键是 ${label} id）`, 400);
+  }
+  const out: [string, boolean][] = [];
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!exists(key)) {
+      throw new ApiError(
+        `${label}「${key}」不存在，改不了一个不存在的开关（${section} 段的键必须是 ${label} id）`,
+        400,
+      );
+    }
+    const enabled =
+      raw !== null && typeof raw === "object" ? (raw as { enabled?: unknown }).enabled : raw;
+    if (typeof enabled !== "boolean") {
+      throw new ApiError(`${label}「${key}」的 \`enabled\` 必须是布尔值`, 400);
+    }
+    out.push([key, enabled]);
+  }
+  return out;
 }
 
 /** 一份对象图 -> 它在目录里的那条状态。`ready` 的四个字段永远从同一个来源算。 */
@@ -516,6 +561,125 @@ export async function createApp(config: AppConfig) {
       const state = states.get(id);
       if (state) states.set(id, { ...state, defaultProviderId: providerId });
       return recordOf(id);
+    },
+    /**
+     * 一次写入这份档的多段配置（配置工作台的「保存」）。
+     *
+     * 三条判据都不是风格：
+     *
+     * - **先全部验完，再动磁盘**。一半改成功、一半因为笔误失败，留下的是「界面上配好了、
+     *   实际跑的是一套混合状态」，而那种状态只能靠猜来排查。宁可整批不写。
+     * - **顶层键白名单**（见 `PROFILE_PATCH_KEYS`）。
+     * - **插件那一段走管理器**，不并进那一次文件写入：`setEnabled` 会真的加载/卸载那颗
+     *   插件并自己落盘，绕过它写文件会得到「文件说开了、运行态没跑」。它可能中途失败
+     *   （`setup()` 抛错），那时前面几颗已经生效 —— 那种时刻如实回 `failed[]`。
+     *
+     * 被否掉的两种做法，写下来免得被重新发明：**① 写完调 `reload(id)`** —— 那会重建
+     * 整张对象图、给每颗插件重新求值（带 cache-busting 的 import）并把正在跑的插件
+     * `unloadAll()`，代价远大于逐颗 `setEnabled`；**② 因为这份档占着某个会话就拒绝保存**
+     * —— 与 `remove()` 不同，这里什么都不拆：`tools` 与 `maxToolSteps` 是**每轮现读**
+     *（`AgentEngine.#declaredTools` / `maxSteps()`），在跑的那一轮继续用它自己那份视图，
+     * 下一条消息才用新的。
+     */
+    async updateConfig(id, body) {
+      assertProfileId(id);
+      for (const key of Object.keys(body)) {
+        if (!(PROFILE_PATCH_KEYS as readonly string[]).includes(key)) {
+          throw new ApiError(
+            `不认识的配置段「${key}」，能改的只有 ${PROFILE_PATCH_KEYS.join(" / ")}`,
+            400,
+          );
+        }
+      }
+      if (!states.has(id)) throw new ApiError(`没有这份配置档: ${id}`, 404);
+      const bundle = bundles.get(id);
+      if (!bundle) {
+        // failed 的档没有对象图，也就没有「这套开关属于哪张注册表」可说；
+        // 原因由 `GET /profiles` 的 `error` 给操作者（那句里带绝对路径）。
+        throw new ApiError(`配置档「${id}」当前不可用，原因见 GET /profiles`, 503);
+      }
+
+      // 校验一次做完，并把**收窄后的值**留成局部量：下面那段读-改-写里再对
+      // `body.xxx` 做 typeof 判断的话，编译器与读代码的人都得跟着判第二遍。
+      let nextDefault: string | null | undefined;
+      if (body.defaultProvider !== undefined) {
+        const value: unknown = body.defaultProvider;
+        if (typeof value !== "string" && value !== null) {
+          throw new ApiError("`defaultProvider` 必须是字符串或 null", 400);
+        }
+        if (value !== null && providerConfig.getProvider(value) === null) {
+          // 与 `setDefaultProvider` 同一句判据：让它指着一个不存在的实例，症状不是报错而是
+          // 每条消息静默落到注册表的回退上 —— 界面显示你选了 A，回的却是全局默认那个。
+          throw new ApiError(
+            `全局供应商清单里没有 provider「${value}」，不能把它设成这份配置档的默认`,
+            400,
+          );
+        }
+        nextDefault = value;
+      }
+
+      let nextSteps: number | undefined;
+      if (body.maxToolSteps !== undefined) {
+        const value: unknown = body.maxToolSteps;
+        if (typeof value !== "number" || !Number.isInteger(value)) {
+          throw new ApiError("`maxToolSteps` 必须是整数（单轮允许的工具步数）", 400);
+        }
+        if (value < MIN_MAX_TOOL_STEPS || value > MAX_MAX_TOOL_STEPS) {
+          // **不夹取**：给请求夹值等于「你要 999 我只存 50 且不说」，而界面上那个 999
+          // 会变成一句谎。读文件时夹是另一件事（手写的配置不该让服务起不来）。
+          throw new ApiError(
+            `maxToolSteps 必须在 ${MIN_MAX_TOOL_STEPS} 到 ${MAX_MAX_TOOL_STEPS} 之间`,
+            400,
+          );
+        }
+        nextSteps = value;
+      }
+
+      const tools = asToggles(body.tools, "tools", "工具", (tid) => bundle.tools.get(tid) !== null);
+      const plugins = asToggles(
+        body.plugins,
+        "plugins",
+        "插件",
+        (pid) => bundle.plugins.get(pid) !== null,
+      );
+
+      // --- 到这里全部验完了，下面才开始动磁盘与运行态 -----------------------
+      if (nextDefault !== undefined || nextSteps !== undefined || tools.length > 0) {
+        updateProfileConfig(profileConfigPath(profilesDir, id), (file) => {
+          if (nextDefault !== undefined) {
+            // `null` 是「取消档级默认」，删键而不是留空串：留着 `""` 会让下一次读它的人判断两次。
+            if (nextDefault === null) delete file.defaultProvider;
+            else file.defaultProvider = nextDefault;
+          }
+          if (nextSteps !== undefined) file.maxToolSteps = nextSteps;
+          for (const [tid, enabled] of tools) {
+            const current = file.tools ?? {};
+            // 展开保留这一段里我们不认识的键（`ToolToggle` 是开放类型，与插件段同一条理由）。
+            current[tid] = { ...current[tid], enabled };
+            file.tools = current;
+          }
+        });
+      }
+      if (nextDefault !== undefined) {
+        bundle.defaultProviderId = nextDefault;
+        // 引擎上那份才是发消息时真正读的那一个：只改 bundle 会得到「界面已经改了，
+        // 下一条消息还是老模型」，而要等一次重载才生效这件事没有任何地方会说。
+        bundle.engine.defaultProviderId = nextDefault;
+        const state = states.get(id);
+        if (state) states.set(id, { ...state, defaultProviderId: nextDefault });
+      }
+
+      const failed: { id: string; error: string }[] = [];
+      for (const [pid, enabled] of plugins) {
+        try {
+          await bundle.plugins.setEnabled(pid, enabled);
+        } catch (err) {
+          // 不中断：后面那些开关是用户在同一批里明确要改的，一颗插件起不来
+          // 不该让它们全部不回。每一条都点名，界面按条标红。
+          failed.push({ id: pid, error: errorMessage(err) });
+        }
+      }
+      return { failed };
     },
     async reload(id) {
       assertProfileId(id);

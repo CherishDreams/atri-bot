@@ -25,9 +25,16 @@ export interface ToolStoreConfig {
  * 解析默认值与非法兜底若各写一份，改一个忘一个就会出现「配置文件里的默认与代码的默认不同」。
  */
 export const DEFAULT_MAX_TOOL_STEPS = 5;
-/** 夹住配置值的上下界：写成 0 或 1e6 都是笔误，不该变成「立刻停」或「无限跑」。 */
-const MIN_MAX_TOOL_STEPS = 1;
-const MAX_MAX_TOOL_STEPS = 50;
+/**
+ * 夹住配置值的上下界：写成 0 或 1e6 都是笔误，不该变成「立刻停」或「无限跑」。
+ *
+ * 导出的理由与 `DEFAULT_MAX_TOOL_STEPS` 同一条 —— 只写一处。**但两处的用法刻意不同**：
+ * 读文件时越界是夹取 + warn（手写的配置不该让服务起不来），而控制台的写入越界是 **400**
+ * （`app.ts` 的 `updateConfig`）。给请求夹值等于「你要 999 我只存 50 且不说」，
+ * 那正是 `session/manager.ts` 的 `MAX_PAGE_SIZE` 注释拒掉的那种静默改写。
+ */
+export const MIN_MAX_TOOL_STEPS = 1;
+export const MAX_MAX_TOOL_STEPS = 50;
 
 /**
  * 工具开关的存储。所有方法都是同步的：配置是小文件，每次读-改-写的代价

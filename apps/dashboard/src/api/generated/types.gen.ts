@@ -356,6 +356,57 @@ export type ProfileConfig = {
 };
 
 /**
+ * 配置工作台「保存」发的那一批改动。**全部键可选**：省略的键表示不动，所以它是 diff 而不是整档替换 —— 另一个标签页改过的项不会被这里悄悄写回旧值。
+ * 顶层出现这四个之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。
+ */
+export type ProfileConfigPatch = {
+    /**
+     * 这一档默认的 provider **实例** id（全局那份清单里的）；`null` 取消档级默认。
+     */
+    defaultProvider?: string | null;
+    /**
+     * 单轮允许的工具步数，1..50。**越界回 400 而不是夹取**：静默改成别的值会让界面上的数字与实际生效的数字分家。
+     */
+    maxToolSteps?: number;
+    /**
+     * `工具 id -> { enabled }`。id 必须是这颗工具真的存在（内置或插件注册），否则 400。
+     */
+    tools?: {
+        [key: string]: {
+            enabled: boolean;
+        };
+    };
+    /**
+     * `插件 id -> { enabled }`。这一段走 PluginManager.setEnabled（会真的加载/卸载并自己落盘），因此它可能中途失败 —— 失败项出现在响应的 `failed` 里。
+     */
+    plugins?: {
+        [key: string]: {
+            enabled: boolean;
+        };
+    };
+};
+
+/**
+ * 保存的结果：`config` 是**服务端此刻的事实**（不是界面发出去的那份草稿），`failed` 是同一批里没能生效的插件项。
+ */
+export type ProfileConfigSaveResult = {
+    config: ProfileConfig;
+    /**
+     * 空数组是正常结果，因此不套用「空数组算假绿」那条判据。
+     */
+    failed: Array<{
+        /**
+         * 没能改动的插件 id
+         */
+        id: string;
+        /**
+         * 中文原因，来自那颗插件自己抛的东西
+         */
+        error: string;
+    }>;
+};
+
+/**
  * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。必须挂在**具体 operation** 上，不要「顺手归位」到 path-item 的 parameters：那里会被同一路径下的每个方法共享，`DELETE /sessions/{id}` 因此在 SDK 里 advertise 两个服务端从不读的参数（handler 压根不看 query），而三道规格守卫谁也看不见这种说谎。
  */
 export type PageLimit = number;
@@ -1649,6 +1700,52 @@ export type GetProfileConfigResponses = {
 };
 
 export type GetProfileConfigResponse = GetProfileConfigResponses[keyof GetProfileConfigResponses];
+
+export type SaveProfileConfigData = {
+    body: ProfileConfigPatch;
+    path: {
+        /**
+         * 配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/profiles/{id}/config';
+};
+
+export type SaveProfileConfigErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type SaveProfileConfigError = SaveProfileConfigErrors[keyof SaveProfileConfigErrors];
+
+export type SaveProfileConfigResponses = {
+    /**
+     * 已写入并回读；`failed` 非空表示部分生效
+     */
+    200: ProfileConfigSaveResult;
+};
+
+export type SaveProfileConfigResponse = SaveProfileConfigResponses[keyof SaveProfileConfigResponses];
 
 export type SetDefaultProviderData = {
     body: {

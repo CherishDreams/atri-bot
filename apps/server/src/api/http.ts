@@ -122,6 +122,23 @@ export interface ProfileDirectory {
    * 后果是每条消息静默落到注册表的回退上 —— 界面显示的是你选的模型，回的却是另一个。
    */
   setDefaultProvider(id: string, providerId: string | null): Promise<ProfileRecord>;
+  /**
+   * 一次写入这份档的多段配置 —— 配置工作台那个「保存」按钮背后的东西。
+   *
+   * 收的是**请求体原样**（`Record<string, unknown>`）而不是一个收窄好的类型：
+   * 「拒掉不认识的键」本身就是这条端点的行为之一，把它做成编译期形状就等于
+   * 让运行时校验无处可测。校验规则见 `app.ts` 的实现注释。
+   *
+   * 返回的 `failed` 只可能来自插件那一段（`setEnabled` 会真的加载它，`setup()` 抛错
+   * 就是失败），它不是错误码而是**部分生效的清单**：那种时刻必须点名，
+   * 而不是回一个 200 让界面回到原样。
+   */
+  updateConfig(
+    id: string,
+    body: Record<string, unknown>,
+  ): Promise<{
+    failed: { id: string; error: string }[];
+  }>;
   /** 重读文件并换上新的对象图，然后卸载旧的。失败时保留正在服务的那一份并抛。 */
   reload(id: string): Promise<ProfileRecord>;
   /**

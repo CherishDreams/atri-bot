@@ -1403,6 +1403,54 @@
             "$ref": "#/components/responses/ProfileUnavailable"
           }
         }
+      },
+      "post": {
+        "operationId": "saveProfileConfig",
+        "summary": "保存这份配置档的多段改动",
+        "description": "配置工作台那个「保存」按钮。一次请求写多段，三条判据：\n**先全部验完再动磁盘**（一半成功一半失败留下的是「界面上配好了、实际跑的是混合状态」）；\n**顶层键白名单**（只认 defaultProvider / maxToolSteps / tools / plugins）；\n**插件那一段走管理器**，因为绕过它写文件会得到「文件说开了、运行态没跑」。\n响应回读而不是把草稿原样返回：界面必须看到服务端的事实。",
+        "tags": ["profiles"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProfileId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileConfigPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已写入并回读；`failed` 非空表示部分生效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileConfigSaveResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        }
       }
     },
     "/profiles/{id}/default-provider": {
@@ -2219,6 +2267,74 @@
               "$ref": "#/components/schemas/PluginInfo"
             },
             "description": "与 `GET /plugins?profile=<id>` 同源（运行态的 `PluginManager.list()`）。"
+          }
+        }
+      },
+      "ProfileConfigPatch": {
+        "type": "object",
+        "description": "配置工作台「保存」发的那一批改动。**全部键可选**：省略的键表示不动，所以它是 diff 而不是整档替换 —— 另一个标签页改过的项不会被这里悄悄写回旧值。\n顶层出现这四个之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。",
+        "properties": {
+          "defaultProvider": {
+            "type": ["string", "null"],
+            "description": "这一档默认的 provider **实例** id（全局那份清单里的）；`null` 取消档级默认。"
+          },
+          "maxToolSteps": {
+            "type": "integer",
+            "description": "单轮允许的工具步数，1..50。**越界回 400 而不是夹取**：静默改成别的值会让界面上的数字与实际生效的数字分家。"
+          },
+          "tools": {
+            "type": "object",
+            "description": "`工具 id -> { enabled }`。id 必须是这颗工具真的存在（内置或插件注册），否则 400。",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["enabled"]
+            }
+          },
+          "plugins": {
+            "type": "object",
+            "description": "`插件 id -> { enabled }`。这一段走 PluginManager.setEnabled（会真的加载/卸载并自己落盘），因此它可能中途失败 —— 失败项出现在响应的 `failed` 里。",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["enabled"]
+            }
+          }
+        }
+      },
+      "ProfileConfigSaveResult": {
+        "type": "object",
+        "description": "保存的结果：`config` 是**服务端此刻的事实**（不是界面发出去的那份草稿），`failed` 是同一批里没能生效的插件项。",
+        "required": ["config", "failed"],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ProfileConfig"
+          },
+          "failed": {
+            "type": "array",
+            "description": "空数组是正常结果，因此不套用「空数组算假绿」那条判据。",
+            "items": {
+              "type": "object",
+              "required": ["id", "error"],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "没能改动的插件 id"
+                },
+                "error": {
+                  "type": "string",
+                  "description": "中文原因，来自那颗插件自己抛的东西"
+                }
+              }
+            }
           }
         }
       }

@@ -312,8 +312,9 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
     // 「这一档默认用全局清单里的哪一个」写在档自己的文件里，但路径参数就是档 id，
     // 与 rename / reload 同构，不需要再有一份 query 参数。
     "setDefaultProvider",
-    // 同理：读「这一档现在是什么」也是 path 带档 id，不给它再加一个 query 参数。
+    // 同理：读/写「这一档现在是什么」都是 path 带档 id，不再加一个 query 参数。
     "getProfileConfig",
+    "saveProfileConfig",
     // 供应商这一族整体是**部署级全局**的一份（`providers.json`）：连接与密钥按档各存一份
     // 只会让同一个 apiKey 躺在 N 个文件里，而「换一档换一套后端」从来没人在用。
     // 带 `profile` 反而危险 —— 它会让「在 A 上改了源、B 却以为自己也有」变成可能。
