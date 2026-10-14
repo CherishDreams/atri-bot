@@ -9,12 +9,15 @@ import {
   deleteProviderSource as deleteProviderSourceOp,
   deleteSession as deleteSessionOp,
   fetchProviderModels as fetchProviderModelsOp,
+  getProfileConfig as getProfileConfigOp,
   getSession as getSessionOp,
   createProfile as createProfileOp,
   deleteProfile as deleteProfileOp,
   listPlugins as listPluginsOp,
+  listAdapters as listAdaptersOp,
   listProfiles as listProfilesOp,
   reloadProfile as reloadProfileOp,
+  saveProfileConfig as saveProfileConfigOp,
   listProviderSources as listProviderSourcesOp,
   listProviders as listProvidersOp,
   listSessions as listSessionsOp,
@@ -37,6 +40,7 @@ import type {
   ProviderSourceInput,
   ProviderSourceUpdate,
   ProviderUpdate,
+  ProfileConfigPatch,
   StreamChunk,
 } from "./generated/index.js";
 // `client` 这个单例只从 client.gen.ts 导出，没有经 index.ts 再导出；
@@ -391,7 +395,10 @@ export function connect(
 }
 
 export type {
+  AdapterInfo,
   Message,
+  ProfileConfig,
+  ProfileConfigPatch,
   ProviderInfo,
   ProviderSource,
   ProviderSourceInput,
@@ -400,6 +407,14 @@ export type {
   ProviderInput,
   ToolInfo,
 } from "./generated/index.js";
+
+/**
+ * 接入端列表。**只读**：`adapters` 段今天只能改 `atri.config.json`，没有写端点。
+ * `enabled` 与 `bound` 是两件事（没关掉 / 绑的档现在可用），两个都为真才真的在收流量。
+ */
+export async function listAdapters() {
+  return body(await listAdaptersOp());
+}
 
 // --- 配置档 ---------------------------------------------------------------
 
@@ -435,6 +450,28 @@ export async function setDefaultProvider(id: string, providerId: string | null) 
 
 export async function reloadProfile(id: string) {
   return body(await reloadProfileOp({ path: { id } }));
+}
+
+/**
+ * 一份配置档此刻的可编辑内容（默认模型、单轮步数、工具与插件的开关）。
+ *
+ * 四段一次读而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
+ * 那三份之间没有原子性，两次请求之间恰好有人改了档，草稿的起点就自相矛盾，
+ * 而下一次保存会把这份矛盾写回磁盘。
+ */
+export async function getProfileConfig(id: string) {
+  return body(await getProfileConfigOp({ path: { id } }));
+}
+
+/**
+ * 保存这批改动。`patch` 是 **diff**：省略的键服务端不动，所以另一个标签页
+ * 改过的项不会被这里悄悄写回旧值。
+ *
+ * 返回的 `config` 是服务端**回读**的那一份（不是把草稿原样还回来），而 `failed`
+ * 是同一批里没能生效的插件项 —— 它非空时界面必须点名，不能显示成全部成功。
+ */
+export async function saveProfileConfig(id: string, patch: ProfileConfigPatch) {
+  return body(await saveProfileConfigOp({ path: { id }, body: patch }));
 }
 
 /**
