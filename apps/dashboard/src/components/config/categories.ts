@@ -74,3 +74,15 @@ export function categoryOf(key: unknown): Category {
   const found = CATEGORIES.find((c) => c.key === key);
   return found ?? CATEGORIES[0]!;
 }
+
+/**
+ * 搜索判据：任一字段包含关键词（大小写不敏感）。
+ *
+ * 只有一处实现，面板与左菜单的「有没有命中」都调它 —— 两处各写一遍的话，
+ * 迟早出现「菜单灰着而点进去有结果」这种互相打脸的界面。
+ */
+export function matches(keyword: string, ...texts: (string | undefined)[]): boolean {
+  const needle = keyword.trim().toLowerCase();
+  if (!needle) return true;
+  return texts.some((text) => (text ?? "").toLowerCase().includes(needle));
+}

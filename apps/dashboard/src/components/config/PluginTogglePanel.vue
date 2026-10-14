@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useProfileConfigStore } from "@/stores/profileConfig";
+import { matches } from "./categories";
 import ConfigCard from "./ConfigCard.vue";
 import ConfigItem from "./ConfigItem.vue";
 
@@ -15,8 +16,13 @@ import ConfigItem from "./ConfigItem.vue";
  * `failed` 上一次加载抛错了（目录还在，等一次重载）。`failed` 的那颗**不禁用开关**：
  * 再打开一次就是重试它，而藏起来会让人以为插件没了。
  */
+const props = defineProps<{ keyword?: string }>();
 const draft = useProfileConfigStore();
-const plugins = computed(() => draft.loaded?.plugins ?? []);
+const plugins = computed(() =>
+  (draft.loaded?.plugins ?? []).filter((p) =>
+    matches(props.keyword ?? "", p.name, p.id, p.description),
+  ),
+);
 
 /**
  * 标签说的是**此刻运行态**，开关说的是**草稿**，两者刻意分开：

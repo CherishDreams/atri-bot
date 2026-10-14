@@ -35,10 +35,13 @@ const router = useRouter();
 const { profile } = useProfile();
 
 /**
- * 不带的两个：`providerConfig` 与 `profiles` 在路由表上标了 `noProfile`，
- * 给它们挂一个与页面无关的档名，等于在 URL 上谎称「这一页是按档的」。
+ * 不带的那一个：`profiles` 在路由表上标了 `noProfile`（它管的是「有哪些档」），
+ * 给它挂一个与页面无关的档名，等于在 URL 上谎称「这一页是按档的」。
+ *
+ * 供应商页曾经也是 `noProfile` 的独立路由；现在它是配置工作台的「全局」分类，
+ * 跟着工作台的链接走，不再单列。
  */
-const PROFILE_ROUTES = new Set(["console", "toolsConfig"]);
+const PROFILE_ROUTES = new Set(["console", "config"]);
 
 function to(name: string) {
   return {
@@ -49,9 +52,10 @@ function to(name: string) {
 
 const items: { key: string; label: string; icon: IconName }[] = [
   { key: "console", label: "控制台", icon: "console" },
-  { key: "providerConfig", label: "供应商配置", icon: "provider" },
-  { key: "toolsConfig", label: "工具", icon: "tool" },
-  { key: "profiles", label: "配置档", icon: "settings" },
+  // 工具、插件、供应商、运行参数都在这一页里，侧栏因此从四项收成三项 ——
+  // 「切完档再去各个页面配」的形态到此为止（用户的原话）。
+  { key: "config", label: "配置", icon: "settings" },
+  { key: "profiles", label: "配置档", icon: "layers" },
 ];
 
 const menuOptions = computed<MenuOption[]>(() =>

@@ -17,15 +17,23 @@ export const router = createRouter({
       meta: { requiresAuth: true },
       children: [
         { path: "", name: "console", component: ConsoleView },
+        // 配置工作台：左上角切档 + 左侧分类 + 右侧配置项。工具、插件、档默认、步数都在这一页，
+        // 所以它**需要** `?profile=`（本档那几类是写在档文件里的）。
+        {
+          path: "config",
+          name: "config",
+          component: () => import("@/views/ConfigWorkbench.vue"),
+        },
+        // 两个旧入口保留成 redirect，而不是删掉：它们可能已经出现在别人的书签或文档里。
+        // 用函数形式是为了把 `?profile=` 一并带过去 —— 丢掉它的话，从旧链接进来会先"换一档"。
+        {
+          path: "tools",
+          redirect: (to) => ({ name: "config", query: { ...to.query, cat: "tools" } }),
+        },
         {
           path: "provider",
-          name: "providerConfig",
-          component: () => import("@/views/ProviderConfig.vue"),
-          // 供应商（源与模型实例）是**部署级全局的一份**，这一页不属于任何配置档，
-          // 所以它和「配置档」页一样是 `noProfile`： URL 上不该出现一个与页面无关的档名。
-          meta: { noProfile: true },
+          redirect: (to) => ({ name: "config", query: { ...to.query, cat: "providers" } }),
         },
-        { path: "tools", name: "toolsConfig", component: () => import("@/views/ToolsView.vue") },
         // 这一页自己**不需要** ?profile=：它管的是「有哪些档」，所以它是那个让你挑档的页面，
         // 而不是一个挑了档才能用的页面。`noProfile` 就是把这个例外写进路由表 ——
         // 下面的守卫给所有其它已鉴权路由补 `?profile=`，漏标这一条会让「管理配置档」本身

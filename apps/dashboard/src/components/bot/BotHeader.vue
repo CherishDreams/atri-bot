@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RouterLink } from "vue-router";
 import logoUrl from "@/assets/images/logo.png";
+import { icon } from "@/components/shared/icons";
 import PlatformSwitch from "@/components/shared/PlatformSwitch.vue";
 import ThemeToggle from "@/components/shared/ThemeToggle.vue";
 import TopBarMenu from "@/components/shared/TopBarMenu.vue";
@@ -22,13 +23,28 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
  * 裁图只会多出一份要跟着原图更新的派生资源。
  *
  * 宽高比 3.0 的整图在 60px 顶栏里宽约 180px，不会挤压右侧控件。
+ *
+ * ≤768px 多一颗汉堡：侧栏在那个断点收进抽屉（`BotLayout`），没有它就再也到不了
+ * 「控制台 / 配置 / 配置档」。它放在 logo 之前，与 AstrBot 的顶栏同一位置。
  */
+const emit = defineEmits<{ (e: "toggle-nav"): void }>();
+const MenuIcon = icon("menu");
 </script>
 
 <template>
   <header
     class="atri-bot-header flex h-[var(--atri-header-h)] w-full items-center gap-3 border-b-1 border-line px-4"
   >
+    <!-- 只在窄屏出现（`md:hidden`：≥768px 隐藏）。侧栏那时已经收进抽屉。 -->
+    <button
+      type="button"
+      class="atri-nav-toggle -ml-1 shrink-0 cursor-pointer rounded p-1.5 text-ink-muted hover:bg-tint hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary md:hidden"
+      aria-label="打开导航"
+      @click="emit('toggle-nav')"
+    >
+      <component :is="MenuIcon" />
+    </button>
+
     <!-- 点 logo 回控制台：这是 bot 平台的主页。
          `self-stretch` 不能省：顶栏是 items-center 的 flex 容器，
          直接子项的高度是内容撑出来的（auto），此时图片的 h-full（height:100%）

@@ -4,6 +4,7 @@ import type { HTMLAttributes, VNodeChild } from "vue";
 import { useRouter } from "vue-router";
 import type { DropdownDividerOption, DropdownOption } from "naive-ui";
 import { useAuthStore } from "@/stores/auth";
+import { useProfile } from "@/composables/useProfile";
 import { icon } from "./icons.js";
 
 /**
@@ -16,6 +17,9 @@ import { icon } from "./icons.js";
  */
 const router = useRouter();
 const auth = useAuthStore();
+// 配置工作台按档存配置，所以这个入口要把当前档带上 —— 与侧栏链接同一条理由
+//（当前档只存在于 URL 里，丢一次就等于让守卫替用户重选一份）。
+const { profile } = useProfile();
 
 /**
  * n-dropdown 的 options 实际类型是内部的 DropdownMixedOption，没有从顶层导出，
@@ -27,6 +31,11 @@ const MenuIcon = icon("menu");
 
 const menuItems = computed<MenuItem[]>(() => [
   { key: "console", label: "返回控制台", icon: icon("console") },
+  {
+    key: "config",
+    label: "配置",
+    icon: icon("settings"),
+  },
   { key: "new-session", label: "新建会话", icon: icon("plus") },
   // 退出登录单独分组：以后新增的普通功能都放上面，它会一直留在最后一段。
   { type: "divider", key: "divider-account" },
@@ -50,12 +59,17 @@ function menuProps(): HTMLAttributes {
  */
 
 async function onSelect(key: string): Promise<void> {
+  // 三个作用域页面都带着当前档 `?profile=`：这个菜单从 bot 与 chat 两侧都能打开，
+  // 不带的话，从 chat 里点「配置」会先被守卫补一次档 —— 而它补的不一定是刚在用的那份。
   switch (key) {
     case "console":
-      await router.push({ name: "console" });
+      await router.push({ name: "console", query: { profile: profile.value } });
+      break;
+    case "config":
+      await router.push({ name: "config", query: { profile: profile.value } });
       break;
     case "new-session":
-      await router.push({ name: "chat-new" });
+      await router.push({ name: "chat-new", query: { profile: profile.value } });
       break;
     case "logout":
       await auth.logout();

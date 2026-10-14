@@ -46,6 +46,22 @@ function sameDraft(a: Draft, b: Draft): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/**
+ * 深拷贝草稿。**不用 `structuredClone`**：Pinia 的 state 是响应式 Proxy，而
+ * `structuredClone` 对它是 `DataCloneError` —— 更糟的是这个异常在 Vue 的事件处理器里
+ * 会被吞成一条 `console.error`，症状是「点放弃没反应、切页也切不走」（脏标记没被清，
+ * 路由守卫继续拦），而界面上没有任何错误。实测就是这么坏的。
+ * 这份结构只有字符串、数字与两层 Record，手写拷贝比引入依赖可靠。
+ */
+function copyDraft(draft: Draft): Draft {
+  return {
+    defaultProviderId: draft.defaultProviderId,
+    maxToolSteps: draft.maxToolSteps,
+    tools: { ...draft.tools },
+    plugins: { ...draft.plugins },
+  };
+}
+
 /** 开关段只发变了的项：`{current_time: true}` 而不是整张表。 */
 function diffToggles(
   before: Record<string, boolean>,
@@ -169,7 +185,7 @@ export const useProfileConfigStore = defineStore("profileConfig", {
 
     /** 丢掉草稿：只在「确认放弃未保存改动」之后调用，所以它必须显式存在。 */
     discard(): void {
-      if (this.original) this.draft = structuredClone(this.original);
+      if (this.original) this.draft = copyDraft(this.original);
       this.error = null;
     },
 

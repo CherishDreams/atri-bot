@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useProfileConfigStore } from "@/stores/profileConfig";
+import { matches } from "./categories";
 import ConfigCard from "./ConfigCard.vue";
 import ConfigItem from "./ConfigItem.vue";
 
@@ -10,9 +11,17 @@ import ConfigItem from "./ConfigItem.vue";
  * 目录与说明来自 `GET /profiles/{id}/config` 的 `tools`（与 `GET /tools` 同一份计算），
  * 所以这里不再抄一遍名称/描述；开关改动只落在草稿里，按「保存」才写回档文件。
  */
+const props = defineProps<{ keyword?: string }>();
 const draft = useProfileConfigStore();
-const tools = computed(() => draft.loaded?.tools ?? []);
-const enabledCount = computed(() => tools.value.filter((t) => draft.toolEnabled(t.id)).length);
+const tools = computed(() =>
+  (draft.loaded?.tools ?? []).filter((t) =>
+    matches(props.keyword ?? "", t.name, t.id, t.description),
+  ),
+);
+const total = computed(() => draft.loaded?.tools.length ?? 0);
+const enabledCount = computed(
+  () => (draft.loaded?.tools ?? []).filter((t) => draft.toolEnabled(t.id)).length,
+);
 </script>
 
 <template>
@@ -43,6 +52,9 @@ const enabledCount = computed(() => tools.value.filter((t) => draft.toolEnabled(
         />
       </template>
     </ConfigItem>
-    <template #footer> 已启用 {{ enabledCount }} / {{ tools.length }} </template>
+    <template #footer>
+      已启用 {{ enabledCount }} / {{ total }}
+      <template v-if="tools.length !== total">（筛出 {{ tools.length }} 项）</template>
+    </template>
   </ConfigCard>
 </template>
