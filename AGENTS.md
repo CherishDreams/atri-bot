@@ -343,6 +343,10 @@ Vue 3 + vue-router + Pinia + UnoCSS(presetWind4) + naive-ui，`<script setup lan
   「代码风格」那条）。给其中一个包加另一种写法，就是给下一个「顺手统一」的人留坑。
 - **状态若能从路由推出，就不要存本地**。平台切换的高亮是 `computed(() => route.path...)`，
   写成 `ref` 会立刻出现「停在 chat 但按钮显示 bot」——刷新、前进后退、直接粘贴深链时局部状态都不跟着走。
+  **唯一的例外是配置工作台的草稿**（`stores/profileConfig.ts`）：路由说的是「哪一份档、
+  哪一类」，而没保存的编辑在哪儿都不存在 —— 它不会被路由或服务端推出来。这个例外有代价，
+  所以三件事一起到位才算成立：脏点看得见、保存键亮着、离开与切档都要拦。它也**不写
+  `localStorage`**：草稿存在的意义就是被丢掉（存或弃），跨刷新留住只会让人以为没丢。
 - `src/api/client.ts` 是**唯一的** HTTP/WS 出口。401 在那里统一转成 `UnauthorizedError`，
   调用方不要各自判断状态码。
 - **凭证只走 `HttpOnly` Cookie**，前端不持有也不存储任何令牌，不要往 `localStorage` 放任何凭证。

@@ -233,6 +233,34 @@ chat 侧传的也只是清单里的实例 id）。此前本仓是按档各一套
 今天仓库里还没有任何适配器实现，所以这条接缝的**组合根接线**只有单元测试覆盖 ——
 第一个真适配器落地时要补的就是那条端到端，这条判断写在 `test/adapters.test.ts` 末尾。
 
+### 档级配置的批量写
+
+配置工作台点一次「保存」，服务端收到的是一条 `POST /profiles/{id}/config`。它有三条
+与仓库其余写路径不同的规则，各有一个失效场景在背后：
+
+- **只收 diff**（省略的键不动）。整档替换会让「另一个标签页刚改过、这一页拿着旧草稿保存」
+  变成一次静默回滚；diff 把回滚范围限制在用户真的动过的那几项，也让档文件里用户手写的
+  未知键不会被带进请求。
+- **白名单顶层键**（`defaultProvider` / `maxToolSteps` / `tools` / `plugins`）。放任意键
+  进来等于把这份档文件开成一台远程编辑器 —— 它能改写残留的 `providers` 段（已经全局化的
+  死键，写回去就又有两个真源）。
+- **先全部验完再动磁盘**。一半成功一半失败留下的是「界面上配好了、实际跑的是一套混合状态」，
+  只能靠猜来排查；宁可整批不写。唯一的例外是插件：那一段必须走 `PluginManager.setEnabled`
+  （它会真的加载/卸载并自己落盘），而 `setup()` 抛错只有到真正加载时才知道 —— 于是响应
+  里带 `failed[]` 点名，而不是回一个让界面回到原样的 200。
+
+被否掉的两条路：**写完调 `reload(id)`** —— 重建整张对象图、给每颗插件重新求值（带
+cache-busting 的 import）、把正在跑的插件 `unloadAll()`，代价远大于逐颗 `setEnabled`；
+**因为占着会话就拒绝保存** —— 与 `remove()` 不同这里什么都不拆，`tools` 与 `maxToolSteps`
+是每轮现读（`AgentEngine` 的 `#declaredTools` / `maxSteps()`），在跑的那一轮继续用它自己
+那份视图，下一条消息才用新的。
+
+`updateConfig` 与 `setDefaultProvider` 一样是 `ProfileDirectory` 上的方法，判断在
+`app.ts`、传输在 `api/server.ts`。读的那一半（`GET /profiles/{id}/config`）刻意不新增
+存储方法：四段直接由 `bundle.toolConfig` / `bundle.tools` / `bundle.plugins` /
+`bundle.defaultProviderId` 现算，与 `GET /tools` 共用 `viewTool` —— 两处各写一遍的话，
+工作台显示的开关会与发消息时生效的那套漂移。
+
 `ProfileDirectory` 刻意**不是 `core/` 的类**：它持有的那份对象图必须包含 `PluginManager`，
 而分层检查的 `ALLOWED.core = {core, config}` 不允许 `core/` import `plugins/`。
 于是接口声明在 `api/http.ts`，对象在 `app.ts` 用字面量 + 闭包构造 —— 与
@@ -838,12 +866,13 @@ src/
 ├── api/
 │ ├── client.ts 唯一的 HTTP/WS 出口（手写）
 │ └── generated/ 由 openapi.json 生成的类型化 SDK（入库，不手改）
-├── stores/ auth / sessions / plugins / providers / profiles（Pinia）
+├── stores/ auth / sessions / plugins / providers / profiles / profileConfig（Pinia）
 ├── router/index.ts 路由、登录守卫，以及给作用域页面补 `?profile=` 的那一条
 ├── layouts/ bot/BotLayout（顶栏 + 侧栏） / chat/ChatLayout（侧栏 + 顶栏）
-├── views/ LoginView / ConsoleView / ProviderConfig / ProfilesView / chat 下的创建与会话页
+├── views/ LoginView / ConsoleView / ConfigWorkbench / ProfilesView / chat 下的创建与会话页
 └── components/
 ├── shared/ icons / TopBarMenu / PlatformSwitch / ModelSelectMenu / ProfileGate
+├── config/ 配置工作台：分类表 / 分类菜单 / 卡片与行 / 六个分类面板 / 档切换与保存
 ├── bot/ BotHeader / BotNavigation
 ├── chat/ ChatHeader / Navigation
 └── provider/ ProviderCard
@@ -854,7 +883,9 @@ src/
 
 控制台（bot）与聊天（chat）是两套布局，各自有**自己的顶栏组件**，右侧控件则共用：
 
-- `components/bot/BotHeader.vue` —— 左侧 logo，右侧 `PlatformSwitch` + `ThemeToggle` + `TopBarMenu`。
+- `components/bot/BotHeader.vue` —— 左侧汉堡（≤767px 才出现）+ logo，右侧
+  `PlatformSwitch` + `ThemeToggle` + `TopBarMenu`。侧栏在那个断点收进 `n-drawer`，
+  汉堡是窄屏下到达「控制台 / 配置 / 配置档」的唯一入口。
 - `components/chat/ChatHeader.vue` —— 左侧模型选择器，右侧同样是那三个控件。
 
 **bot 侧没有模型选择器**（以前有）。判据不是审美而是「它在这儿不做事」：bot 侧发消息走的
@@ -883,6 +914,9 @@ src/
   「返回控制台 / 新建会话 / 退出登录」的唯一入口。让装饰性宽度先让路。
   这里以前还有一条 `max-width: 414px` 把 logo **整块收起**，那是给模型选择器腾地方的；
   选择器已经从这一侧撤掉，那条规则的前提不再成立，于是也删掉了（现在 375 档仍留得下 logo）。
+- **侧栏收起用 767px，不是 768px**：汉堡按钮是 `md:hidden`（≥768 隐藏），侧栏那条若也写
+  `max-width: 768px`，768 这一档会同时「侧栏隐藏 + 汉堡隐藏」，导航彻底消失。浏览器实测
+  就是这么撞上的 —— 两个断点必须刚好接上，中间不留那一像素的缝。
 
 几条约束：
 
@@ -910,17 +944,31 @@ src/
   守卫同时保证 `GET /profiles` 那份列表在手——**包括 URL 已经带着档名的那些导航**：
   顶栏要显示的「这一档默认用哪个模型」是档级属性，只在 `GET /profiles` 的返回里，
   列表为空时界面的症状是安静地显示「默认模型」，而档里明明配了另一个。
-- **`/provider`（供应商配置）与 `/profiles`（配置档本身）标了 `noProfile`**：前者是全局一份
-  清单，后者管的是「有哪些档」，URL 上挂一个与页面无关的档名会让人以为它们是档级的。
+- **配置工作台（`/config?profile=&cat=`）是唯一一个「一类一屏」的地方**：左上角是当前档的
+  切换器，左侧分类分「本配置档」与「全局」两组，右侧是该分类的条目。分类进 URL 的理由与
+  `?profile=` 相同（刷新/后退/贴链接一致）；而**只改 `?cat=` 不触发离开守卫**（同一条
+  route record），所以切分类不会弹未保存提示 —— 它本来就不丢草稿。
+- **档级那几类走草稿 + 一次保存**，这是「状态能从路由推出就不存本地」的**唯一例外**，
+  判据写进 `stores/profileConfig.ts`：路由说的是「哪一份档、哪一类」，而没保存的编辑
+  在哪儿都不存在（不在 URL、也不在服务端）。它不写 `localStorage`：草稿存在的意义就是被
+  丢掉，而离开/切档时的拦截让「丢掉」成为结构而不是运气。
+- **切档与离开是两道闸门**：`onBeforeRouteLeave` 管去别的页面，切档得自己拦 ——
+  `?profile=` 变化仍是同一条 route record，vue-router 不跑离开守卫。两条走同一个弹窗
+  （保存并离开 / 放弃并离开 / 留在本页）。
+- **`/profiles`（配置档本身）标了 `noProfile`**，`/tools` 与 `/provider` 只剩 redirect
+  （把 `?profile=` 一并带进 `/config` 的分类）。供应商不是 `noProfile` 页面了：它是工作台
+  里「全局」那一组，URL 上有档名没有关系 —— 那一组的内容不按档变。
 - **模型选择器写的是档文件**：它调 `POST /profiles/{id}/default-provider`，成功之后靠
   `GET /profiles` 的回读上色，所以点错了、写失败了都留在原来那一行并且有一句中文原因，
   而不是先变绿再等人发现。发消息**不**带 model。
 
-### 供应商配置页
+### 供应商面板
 
-`views/ProviderConfig.vue` 是「源列表 + 源详情」的两栏工作台，状态全在
+`components/config/ProvidersPanel.vue` 是一个「源列表 + 源详情」的两栏工作台（从旧的
+`views/ProviderConfig.vue` 整体搬来），挂在配置工作台的「供应商」分类下，状态全在
 `stores/providers.ts`（那一份 store 现在没有任何「当前档」的概念：清单是全局的）。
-三个容易做错的地方：
+它自己管理滚动与选中，所以工作台**不给它套页面内边距** —— 两层滚动条并排出现是这类
+嵌套工作台最常见的坏法。三个容易做错的地方：
 
 - **store 的私有辅助必须是模块级函数**。Pinia 把 actions 挂到另一个对象上执行，
   action 里的 `this.#privateFn()` 会因为 `this` 上根本没有那个私有名字而抛 `TypeError`。
