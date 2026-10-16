@@ -88,18 +88,31 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 | 层               | 文件                             | 里面是什么                                                                       | 谁写它                                            |
 | ---------------- | -------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------- |
 | 部署级（启动）   | `atri.config.json`（仓库根）     | 监听地址与端口、日志级别、数据目录、插件安装目录、适配器开关、静态目录、登录口令 | 手写；`auth.adminPassword` 由服务端首次启动时填入 |
-| 部署级（运行期） | `data/providers.json`            | 供应商：`providerSources`（连接与密钥）与 `providers`（模型实例清单 + 全局默认） | 控制台的供应商配置页，或手写                      |
-| 配置档           | `data/profiles/<id>/config.json` | 这份「跑法」开哪些工具、单轮最多几步、开哪些插件，默认用清单里的哪一个模型       | 控制台的「配置」页，或手写                        |
+| 部署级（运行期） | `data/providers.json`            | 供应商：`providerSources`（连接与密钥）与 `providers`（模型实例清单 + 全局默认） | 控制台的「供应商」页，或手写                      |
+| 配置档           | `data/profiles/<id>/config.json` | 这份「跑法」开哪些工具、单轮最多几步、开哪些插件，默认用清单里的哪一个模型       | 控制台的「配置文件」页，或手写                    |
 
 为什么供应商不按配置档各存一份：它里面是**密钥与端点**，按档复制只会让同一个 `apiKey`
 躺在 N 个文件里，而「换一档换一套后端」在真实使用里从来没有发生过（bot 侧发消息根本不传
 model）。这一条分界与 AstrBot 一致：除了配置文件，其余都是全局的，配置档只管启用与默认值。
 
-控制台把这三层收在**一个「配置」页**里（照 AstrBot 的配置文件页）：左上角显示并切换当前
-配置档，左侧分类分「本配置档」（默认模型 / 工具 / 插件 / 运行参数）与「全局」（供应商 /
-接入端），右侧是该分类的配置项。档级那几类**先改草稿、点「保存」才写回**（离开或切档时
-会拦一道）；全局那两类是改了立刻生效。以前那种「切完档再去工具页、供应商页各配一遍」
-的形态已经没有了：`/tools` 与 `/provider` 只是转进这个页面对应分类的旧链接。
+控制台把这三层分成**一页 + 三个整页**（照 AstrBot）：
+
+- **「配置文件」页**（`/config`）：左上角显示并切换当前配置，左侧三类（默认模型 / 工具 /
+  运行参数），右侧是该分类的配置项。三类都**先改草稿、点「保存」才写回**（离开或
+  切档时会拦一道）。`/tools` 只是转进「工具」分类的旧链接。
+- **「插件」页**（`/plugins`）：已安装的插件、它们在这份配置里的启用状态，以及按
+  `_conf_schema.json` 渲染的配置表单。启停与配置都是**即时动作**；保存配置后插件自动重载。
+- **「供应商」页**（`/providers`）：部署级全局一份，增删源与模型**即时**写回
+  `data/providers.json`。`/provider` 是它的旧链接。
+- **「接入平台」页**（`/adapters`）：只读，配置在 `atri.config.json` 的 `adapters` 段。
+- 配置本身的增删不单独占一页：在「配置文件」页左上角的切换器里点「管理配置」。
+  创建后**不能改名**（id 是目录名），删除会连同 `profiles/<id>/` 一起移除。
+
+供应商与接入平台不放进「配置文件」页：它们属于部署，不属于某一份配置。留在里面时的症状是
+左上角明明写着当前配置名、而那一项改的东西立刻对所有配置生效 —— 分组标题挡不住这种误读。
+它们各自是左侧主导航的一整项，AstrBot 的「模型提供商」「平台配置」就在这个位置。
+插件同样不在工作台里：它的配置是「改一项、保存即重载」，与工作台的「草稿 + 一次保存」
+不是同一种语义，合在一页会让两套写入方式并存。
 
 解析顺序对**启动那一份**成立：**内置默认值 → `atri.config.json` → 环境变量**。
 环境变量可参考 `.env.example`；`atri.config.example.json` 复制成 `atri.config.json`，
@@ -124,15 +137,15 @@ model）。这一条分界与 AstrBot 一致：除了配置文件，其余都是
 它们已经是个摆设，并说清真源在哪个文件）。`default` 这个名字没有任何运行期特权：
 它只是第一次落盘的位置，控制台会优先把界面切到它，而每个请求仍然把档名写在 URL 上。
 
-### 接入端绑定到配置档
+### 接入平台绑定到配置
 
-`adapters.<id>.profile` 说这个平台**跑在哪份配置档**上。适配器本身留在部署级文件里：
+`adapters.<id>.profile` 说这个平台**跑在哪份配置**上。适配器本身留在部署级文件里：
 它占的资源是部署级的（一个监听端口、一个 webhook 回调地址、一个平台的机器人 token），
 要选的是「这个平台用哪一套模型与工具」。
 
-绑定指不到一份可用配置档时，那个适配器**不会被启动**，并单独报一条 error ——
+绑定指不到一份可用配置时，那个适配器**不会被启动**，并单独报一条 error ——
 不退回 `default`，也不挑第一个能用的档：跑错一套配置没有任何症状，平台侧的流量照样进来。
-`GET /adapters` 把两件事分开报：`enabled`（你没关掉它）与 `bound`（它绑的那份档现在可用），
+`GET /adapters` 把两件事分开报：`enabled`（你没关掉它）与 `bound`（它绑的那份配置现在可用），
 两个都为真才真的在收流量。没写 `profile` 的适配器是 `enabled: true` + `bound: false`。
 
 ## 登录鉴权
@@ -259,14 +272,14 @@ pnpm dev
 上游的模型列表通常比本地配置新，本地列表不该当成硬闸门。
 
 单个 provider 配错（类型拼错、引用了不存在的 source）只会记一条日志，不影响其它
-provider 启动，并且在控制台的供应商配置页里以 `loaded: false` + 原因显示出来；
+provider 启动，并且在控制台的「供应商」页里以 `loaded: false` + 原因显示出来；
 但如果配了 `default` 而它恰好加载失败，**不会静默换个 provider**——
 否则请求会悄悄打到另一个模型上，只留一条 warn 日志说明会回退。
 某一档的 `defaultProvider` 指着没加载成功的那一个时同样是只 warn 不报错。
 `enabled: false` 是**有意关闭**，只记 info 日志、不算故障，也不出现在模型选择器里。
 
 `data/providers.json` 整个被改坏（手改成半截 JSON）时服务**照常起**：供应商注册表退化成
-空的、每条消息走回声兜底，而供应商配置页会把那句读不出来的原因显示出来。
+空的、每条消息走回声兜底，而「供应商」页会把那句读不出来的原因显示出来。
 这是刻意的：那一时刻操作者最需要这个服务活着好去改这个文件，而把所有配置档都标成
 不可用等于把改它的机会一起收走。
 
@@ -280,24 +293,26 @@ provider 启动，并且在控制台的供应商配置页里以 `loaded: false` 
 
 ### 在控制台里配置
 
-配置页的「供应商」分类（也就是旧的「供应商配置」页）可以直接增删源与模型，改动**写回
+「供应商」页（`/providers`；旧的 `/provider` 与上一版配置页里的「供应商」分类都指向这里）
+可以直接增删源与模型，改动**写回
 `data/providers.json`**（全局那一份）并立即生效，不需要重启——在这里保存一次，每一档下一次
-发消息用的就是它。这一分类属于「全局」那一组，改动是即时的，不跟着页面上那个「保存」键走。
+发消息用的就是它。这一页不跟着「配置文件」页那个「保存」键走，改动是即时的。
 「获取模型列表」会拿**已保存的**凭证去打上游的 `GET /models`，所以源有未保存改动时按钮会
 变成「保存并获取模型列表」。上游没有 `/models` 时可以用「自定义模型」手填模型 id 绕过。
 
-同一页的「默认模型」分类改的是当前配置档的 `defaultProvider`（清单里挑一个实例），
+「配置文件」页的「默认模型」分类改的是当前配置档的 `defaultProvider`（清单里挑一个实例），
 **要按保存**；chat 顶栏那个模型选择器是它的快捷入口，写的是同一个键、走同一个服务端校验，
 所以两处显示的永远是同一个默认，换浏览器、换设备也一样。
 
-工具、插件与单轮步数也在这一页：它们都是**这一档**的属性，同样要点保存。
+工具与单轮步数也在「配置文件」页：它们都是**这一档**的属性，同样要点保存。
+插件启停与插件配置在「插件」页，保存即生效。
 
 两点需要知情：
 
 - **`GET /provider-sources` 会明文返回 `apiKey`**，表单也是明文渲染（便于核对粘贴
   是否出错）。该接口仅管理员可访问，但密钥确实会回到浏览器，请不要在共享机器上使用。
 - `baseUrl` 指向内网地址时，服务端会**代为请求**那个地址。这属于管理员的正常用法
-  （自建网关），因此不做地址白名单；但这也意味着该配置页等同于一台内网请求代理，
+  （自建网关），因此不做地址白名单；但这也意味着「供应商」页等同于一台内网请求代理，
   不要把管理员账号给不可信的人。
 
 ## 生产部署
@@ -319,7 +334,8 @@ pnpm start            # 或 node apps/server/src/index.ts
 `dataDir`（默认 `data/`，可用 `ATRI_DATA_DIR` 或配置文件里的 `dataDir` 改）下有四样运行状态：
 `sessions.sqlite`（全部对话历史）、`providers.json`（供应商：连接、密钥与全局默认）、
 `profiles/<id>/config.json`（各配置档的跑法，含「默认用清单里哪一个」）、
-以及 `plugins/<插件 id>/`（各插件自己存的东西，框架不管理内容）。
+以及 `profiles/<id>/plugins/<插件 id>/`（插件自己的数据与配置值；其中 `config.json`
+由框架按 schema 读-改-写，其余内容框架不管理）。
 **登录口令在 `atri.config.json`。** **需要备份的就是这几样**，
 其余（`apps/dashboard/dist`）可由源码重新构建。
 `providers.json` 与配置档文件里都可能有明文 `apiKey`，所以它们与 `dataDir` 一起带走时
@@ -327,7 +343,8 @@ pnpm start            # 或 node apps/server/src/index.ts
 整个 `dataDir` 的权限是 `0700`：保护落在**目录**上，`sessions.sqlite` 的 WAL 边车
 （`-wal` / `-shm`）由 SQLite 按 umask 反复重建，逐文件收紧是一次性的假安全感。
 `plugins/` 下**有目录不等于那个插件在跑**：加载失败的插件也留下了它已经写过的数据
-（框架从不删任何东西），是否可用请看控制台的插件页或 `list_plugins`。
+（框架不会因为卸载/禁用插件删任何东西；删除整份配置时它的目录才一起消失），
+是否可用请看控制台的插件页或 `list_plugins`。
 
 - **容器里把 `dataDir` 挂成 volume**，否则重建容器等于清空所有历史。
 - **`data/` 与 `atri.config.json` 都相对仓库根解析，从哪儿启动都一样。** 这个默认值曾经是
@@ -356,6 +373,8 @@ pnpm start            # 或 node apps/server/src/index.ts
 - **插件** —— 一个目录，内含 `index.js`，默认导出
   `{ id, name, version, description?, config?, setup(ctx), teardown?() }`
   （也支持默认导出工厂函数 `(shared) => 上述对象`）。目录来自配置中的 `pluginDirs`。
+  目录里还可以放一份可选的 `_conf_schema.json`：它声明这个插件有哪些用户可配置项，
+  控制台按它渲染表单，值落在插件自己的数据目录（见[插件配置](#插件配置)）。
   要存数据用 `ctx.dataDir`（见[插件的动态加载](#插件的动态加载)），**不要**写进插件自己那个目录 ——
   那个目录是会被升级覆盖、被用户改名的。参见 `apps/server/plugins/hello`。
 - **适配器** —— 实现 `start()`/`stop()` 并注册到 `AdapterManager`；
@@ -379,7 +398,7 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 - **Provider** —— 模型的出站适配。内置 `openai` 与 `anthropic` 两种实现，
   在 `data/providers.json`（**部署级全局一份**，不属于任何配置档）里按类型声明，
-  或者在控制台的「配置 → 供应商」分类里配。引擎从不 import 具体的模型 SDK。
+  或者在控制台的「供应商」页里配。引擎从不 import 具体的模型 SDK。
   详见[模型 provider](#模型-provider)。
 
 > 命名上注意区分三端：**adapter** 指入站接入（QQ、Discord、webhook…），契约是长驻的
@@ -397,7 +416,8 @@ pnpm start            # 或 node apps/server/src/index.ts
   **逆序**自动释放，无需手写清理。
 
 `PluginManager` 提供 `load(dir)` / `reload(id)` / `unload(id)` / `setEnabled(id, bool)`，
-并在 `stop()` 时 `unloadAll()`。控制台右侧面板可执行重载 / 启用 / 禁用 / 卸载。
+并在 `stop()` 时 `unloadAll()`。控制台右侧的快捷面板与「插件」页都可执行重载 / 启用 /
+禁用 / 卸载；带配置项的插件还能在「插件」页打开配置抽屉。
 
 **一颗插件坏了只影响它自己。** 加载（含 `setup()`）抛错的插件被记为 `failed` 并带上失败原因，
 `loadAll()` 记下这一条后继续扫下一个 —— 启动不会因为它退出，控制台插件页显示原因与「重载」，
@@ -414,10 +434,14 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 插件上下文 `ctx` 暴露：
 
-- `logger`、`config`：日志器与**插件可见的配置**。`config` 是白名单视图，目前只有
+- `logger`、`config`：日志器与**插件可见的运行期配置**。`config` 是白名单视图，目前只有
   `pluginDirs` 一条键；口令、provider 的 `apiKey` 这类运行期配置不会交到插件手上
   （理由见 [插件可见的配置](./docs/architecture.md#插件可见的配置白名单视图)）。
   插件默认导出里声明的 `config` 段会合并进来，同名时插件的键优先。
+- `pluginConfig`：**用户为这个插件填的值**。键由插件目录里的 `_conf_schema.json` 声明；
+  值是 schema 默认值被 `<dataDir>/profiles/<配置档 id>/plugins/<插件 id>/config.json`
+  里的合法项覆盖之后的结果。它**不**并进 `ctx.config`：后者是框架主动交出去的白名单，
+  前者是用户数据，混在一起就分不清「框架给的」与「用户填的」。
 - `ctx.effect(fn | { dispose() }, label?)`：登记副作用，卸载时逆序自动释放，返回提前释放函数
 - `ctx.subscribe(emitter, event, handler)`：订阅 emitter，并在卸载时自动退订
 - `ctx.dataDir`：这个插件**自己**的数据目录（绝对路径），首次访问时才创建。
@@ -427,7 +451,9 @@ pnpm start            # 或 node apps/server/src/index.ts
   升级会被整个替换、改名会换目录，写在那儿的数据跟着一起没。
   目录位置是 `<dataDir>/profiles/<配置档 id>/plugins/<你的 id>`，所以**卸载、禁用、
   重命名插件目录都不会丢数据**，
-  而框架从不删它（要清理请自己 `rm -rf data/profiles/<配置档 id>/plugins/<id>`）。
+  框架也不会因为这些动作删它（要只清理这一个插件的数据，请自己
+  `rm -rf data/profiles/<配置档 id>/plugins/<id>`）；只有**删除整份配置**时，
+  它的整个 `profiles/<id>/` 目录才一起消失。
   id 必须能当目录名用（小写字母/数字开头，只含 `a-z0-9._-`，≤64 字符）——
   不合规的插件在登记那一刻就被拒，见上面的失败表
 - **同一个 `index.js` 会按配置档各求值一次。** 插件安装是全局的（部署级 `pluginDirs`），
@@ -441,35 +467,72 @@ pnpm start            # 或 node apps/server/src/index.ts
   五个键。拿不到同伴的目录，也拿不到它们的失败原因（那是第三方文本，里面可能有绝对路径）；
   要每次读现值而不是存下来，因为插件是在运行期被加载、重载与启停的
 
+### 插件配置
+
+插件目录里放一份 `_conf_schema.json`（与 AstrBot 同名同格式），控制台的「插件」页就会
+按它渲染一张表单。v1 支持六种类型：
+
+```json
+{
+  "greeting": { "type": "string", "description": "问候语", "default": "你好" },
+  "max_items": { "type": "int", "description": "条目上限", "default": 5, "min": 1, "max": 50 },
+  "ratio": { "type": "float", "description": "阈值", "default": 0.5, "min": 0, "max": 1 },
+  "verbose": { "type": "bool", "description": "详细日志", "default": false },
+  "style": {
+    "type": "select",
+    "description": "风格",
+    "options": ["简洁", "详细"],
+    "default": "简洁"
+  },
+  "prompt": { "type": "text", "description": "提示词", "default": "" }
+}
+```
+
+几条约定：
+
+- `description` 必填；`default` 的类型必须与 `type` 一致，`select` 的默认值必须在
+  `options` 里；`min` / `max` 只用于 `int` / `float`。schema 顶层是对象、最多 100 项。
+- schema 不合法（坏 JSON、不支持的 `type`、缺 `description`…）只会让表单不可用，
+  原因显示在抽屉顶部；**插件本身照常加载与运行**。
+- 值是**每份配置档各一份**的：`<dataDir>/profiles/<配置档 id>/plugins/<插件 id>/config.json`，
+  目录 `0700`、文件 `0600`。框架只覆盖 schema 声明过的键，手写的其它键原样保留；
+  `config.json` 是这个目录里的**保留文件名**，插件自己存东西请换一个名字。
+- 保存后，`active` / `failed` 的插件自动重载，`setup()` 重新跑并读到新的 `ctx.pluginConfig`；
+  禁用中的插件只落盘、不加载。重载失败不会回滚已保存的值，响应里的 `reloadError` 把
+  「保存成功」与「生效失败」分开说。
+- 配置文件坏到读不出来时插件记为 `failed`，但表单仍然可以打开；保存会以表单值重建它 ——
+  这是操作者的修复路径。重建会丢掉坏文件里已经无法解析的字节。
+
 ## API
 
 基础路径 `/api/v1`：
 
-| 方法         | 路径                                            | 说明                                                                                    |
-| ------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
-| GET          | `/health`                                       | 存活检查（公开）                                                                        |
-| POST         | `/auth/login`、`/auth/logout`                   | 登录 / 登出（公开，见上）                                                               |
-| GET          | `/auth/me`、`/auth/status`                      | 当前用户 / 是否需要登录                                                                 |
-| GET / POST   | `/sessions`                                     | 列出（默认最新 100 个，创建序 + `nextCursor`）/ 创建会话                                |
-| GET / DELETE | `/sessions/:id`                                 | 读取（默认**最新 100 条**消息 + `nextCursor`）/ 删除会话                                |
-| POST         | `/sessions/:id/messages`                        | 发送用户消息，等完整回复后返回（同会话串行，占用中返回 409）                            |
-| POST         | `/sessions/:id/messages/stream`                 | 同上，但以 SSE 逐段推送回复增量（409 在开流**之前**判，所以是状态码而不是流里的错误帧） |
-| GET          | `/providers`、`/plugins`、`/adapters`、`/tools` | 供控制台使用的状态                                                                      |
-| POST/DELETE  | `/providers`、`/providers/:id`                  | 新增 / 修改 / 删除模型实例                                                              |
-| GET          | `/provider-sources`                             | 列出 provider source（**明文含 apiKey**）                                               |
-| POST/DELETE  | `/provider-sources`、`/provider-sources/:id`    | 新增 / 修改 / 删除 provider source                                                      |
-| POST         | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                                                          |
-| POST         | `/plugins/:id/reload`                           | 重载插件（销毁旧实例并重新求值代码）                                                    |
-| POST         | `/plugins/:id/unload`                           | 卸载插件（释放副作用并移除）                                                            |
-| POST         | `/plugins/:id/enable`                           | 在**这份配置档**里启用 / 禁用插件，body `{ "enabled": true }`（插件本身是全局安装的）   |
-| POST         | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填）                                     |
-| GET          | `/profiles`                                     | 列出全部配置档及其加载状态（含 `failed` 与它的原因）                                    |
-| POST         | `/profiles`                                     | 新建配置档，body `{ id, name? }`                                                        |
-| GET          | `/profiles/:id/config`                          | 读一份配置档的可编辑内容（工作台草稿起点：默认模型 / 步数 / 工具 / 插件一次读回）       |
-| POST         | `/profiles/:id/config`                          | 保存这批改动（只发 diff；插件失败项在响应的 `failed` 里点名）                           |
-| POST         | `/profiles/:id/rename`、`/profiles/:id/reload`  | 改显示名 / 重读配置文件并换上新的对象图                                                 |
-| POST         | `/profiles/:id/default-provider`                | 设这一档默认的 provider 实例，body `{ "providerId": "<实例 id>" }`；`null` 取消档级默认 |
-| DELETE       | `/profiles/:id`                                 | 下线配置档（**不删文件**；它正被某个会话占用时返回 409）                                |
+| 方法         | 路径                                            | 说明                                                                                             |
+| ------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| GET          | `/health`                                       | 存活检查（公开）                                                                                 |
+| POST         | `/auth/login`、`/auth/logout`                   | 登录 / 登出（公开，见上）                                                                        |
+| GET          | `/auth/me`、`/auth/status`                      | 当前用户 / 是否需要登录                                                                          |
+| GET / POST   | `/sessions`                                     | 列出（默认最新 100 个，创建序 + `nextCursor`）/ 创建会话                                         |
+| GET / DELETE | `/sessions/:id`                                 | 读取（默认**最新 100 条**消息 + `nextCursor`）/ 删除会话                                         |
+| POST         | `/sessions/:id/messages`                        | 发送用户消息，等完整回复后返回（同会话串行，占用中返回 409）                                     |
+| POST         | `/sessions/:id/messages/stream`                 | 同上，但以 SSE 逐段推送回复增量（409 在开流**之前**判，所以是状态码而不是流里的错误帧）          |
+| GET          | `/providers`、`/plugins`、`/adapters`、`/tools` | 供控制台使用的状态                                                                               |
+| POST/DELETE  | `/providers`、`/providers/:id`                  | 新增 / 修改 / 删除模型实例                                                                       |
+| GET          | `/provider-sources`                             | 列出 provider source（**明文含 apiKey**）                                                        |
+| POST/DELETE  | `/provider-sources`、`/provider-sources/:id`    | 新增 / 修改 / 删除 provider source                                                               |
+| POST         | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                                                                   |
+| POST         | `/plugins/:id/reload`                           | 重载插件（销毁旧实例并重新求值代码）                                                             |
+| POST         | `/plugins/:id/unload`                           | 卸载插件（释放副作用并移除）                                                                     |
+| POST         | `/plugins/:id/enable`                           | 在**这份配置档**里启用 / 禁用插件，body `{ "enabled": true }`（插件本身是全局安装的）            |
+| GET          | `/plugins/:id/config`                           | 读这个插件的 schema 与当前生效值；schema / 配置坏了也会返回原因（`schemaError` / `configError`） |
+| POST         | `/plugins/:id/config`                           | 保存插件配置，body `{ values: [{ key, value }] }`；保存后尝试重载，失败原因在 `reloadError`      |
+| POST         | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填）                                              |
+| GET          | `/profiles`                                     | 列出全部配置档及其加载状态（含 `failed` 与它的原因）                                             |
+| POST         | `/profiles`                                     | 新建配置档，body `{ id, name? }`                                                                 |
+| GET          | `/profiles/:id/config`                          | 读一份配置档的可编辑内容（工作台草稿起点：默认模型 / 步数 / 工具 / 插件一次读回）                |
+| POST         | `/profiles/:id/config`                          | 保存这批改动（只发 diff；插件失败项在响应的 `failed` 里点名；改动当场生效）                      |
+| POST         | `/profiles/:id/default-provider`                | 设这一档默认的 provider 实例，body `{ "providerId": "<实例 id>" }`；`null` 取消档级默认          |
+| DELETE       | `/profiles/:id`                                 | 删除一份配置（连同 `profiles/<id>/` 目录；正被某个会话占用时返回 409）                           |
 
 除标注「公开」的路径外，其余接口都需要登录（未登录返回 401）。
 
@@ -481,7 +544,7 @@ pnpm start            # 或 node apps/server/src/index.ts
 后者是**部署级全局一份**的供应商配置（按档各要一个 `profile` 反而会让「在 A 上改了源、
 B 以为自己也有」变成可能）。
 
-`/profiles/:id/*` 那一族（rename / reload / default-provider / config）的档 id 在**路径**里，
+`/profiles/:id/*` 那一族（default-provider / config）的档 id 在**路径**里，
 所以既不要求也不接受 `?profile=` —— 同一个值写两遍，两处不一致时听谁的是个没有答案的问题。
 对话历史是**全局一份** sqlite，不属于任何一份配置档。
 

@@ -36,7 +36,7 @@ function onInput(value: string): void {
 
 <template>
   <div
-    class="atri-config-toolbar flex min-h-[3rem] items-center gap-3 border-b-1 border-line bg-surface px-3 py-1.5"
+    class="atri-config-toolbar flex min-h-[3.5rem] items-center gap-3 border-b-1 border-line bg-surface px-4 py-2"
   >
     <ProfileSwitcher
       :current="props.current"
@@ -44,7 +44,8 @@ function onInput(value: string): void {
       @switch="(id) => emit('switch', id)"
       @manage="emit('manage')"
     />
-    <span class="hidden text-xs text-ink-faint md:block">配置工作台</span>
+    <span class="hidden text-ink-faint md:block">/</span>
+    <span class="hidden text-13px font-medium text-ink-muted md:block">配置文件</span>
 
     <div class="ml-auto flex items-center gap-1">
       <n-input

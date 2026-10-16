@@ -6,8 +6,13 @@
  *
  * `ctx` 提供：
  *   - logger：只读日志器
- *   - config：插件可见的配置（白名单视图，目前只有 pluginDirs），
+ *   - config：插件可见的**运行期**配置（白名单视图，目前只有 pluginDirs），
  *     再合并上本插件自己声明的 `config` 段；口令与 provider 的 apiKey 不会到这里
+ *   - pluginConfig：用户为**这个插件**填的值。声明在旁边的 `_conf_schema.json` 里
+ *     （本目录有一份：一个 string + 一个 bool），控制台按它渲染表单，值落在
+ *     `<dataDir>/profiles/<配置档 id>/plugins/<你的 id>/config.json`。没保存过就是
+ *     schema 里的 default；保存后插件自动重载，`setup()` 重新跑。
+ *     它**不**并进 `ctx.config`：框架给的白名单键集合与用户填的值是两个来源
  *   - ctx.effect(fn | {dispose()})：登记副作用，卸载时逆序自动释放
  *   - ctx.subscribe(emitter, event, handler)：订阅并在卸载时自动退订
  *   - ctx.plugins()：此刻已登记的插件（含你自己，也含上一次加载失败的那些，它们的
@@ -31,12 +36,16 @@ export default {
   description: "演示 ctx.effect：加载时启动定时器，卸载时自动清理。",
 
   async setup(ctx) {
-    ctx.logger.info("[plugin:hello] 已就绪");
+    // 没保存过时这里拿到的是 `_conf_schema.json` 的默认值；保存后重载会换成新值。
+    const greeting =
+      typeof ctx.pluginConfig.greeting === "string" ? ctx.pluginConfig.greeting : "你好";
+    const verbose = ctx.pluginConfig.verbose === true;
+    ctx.logger.info(`[plugin:hello] ${greeting}`);
 
     // 使用 effect 登记副作用：插件被重载或卸载时，框架会自动清掉这个定时器，
     // 不需要在 teardown 里手动 clearInterval。
     const timer = setInterval(() => {
-      ctx.logger.debug("[plugin:hello] 心跳");
+      if (verbose) ctx.logger.debug("[plugin:hello] 心跳");
     }, 60_000);
     ctx.effect(() => clearInterval(timer), "heartbeat");
   },

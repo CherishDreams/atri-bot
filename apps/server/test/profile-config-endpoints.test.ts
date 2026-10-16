@@ -136,7 +136,7 @@ test("未知 id 回 404；failed 的档回 503 且不带配置文件路径", asy
   const h = await start(t);
   const missing = await h.get("/profiles/nope/config");
   assert.equal(missing.status, 404);
-  assert.match(String(missing.body.error), /没有这份配置档/);
+  assert.match(String(missing.body.error), /没有这份配置/);
 
   // 坏文件要**在启动前**就位：装配读过一次之后，运行期改坏只会让下一次重载失败。
   const brokenRoot = mkdtempSync(join(tmpdir(), "atri-profile-config-bad-"));

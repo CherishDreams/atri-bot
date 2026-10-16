@@ -14,7 +14,7 @@
  *
  * 本模块只做文件：不认识 `AppConfig`，不构造任何存储，也不决定「哪个请求用哪一份」。
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ApiError } from "#core/errors.ts";
 import {
@@ -238,6 +238,22 @@ export function profileDir(profilesDir: string, id: string): string {
 /** `<profiles>/<id>/config.json`。 */
 export function profileConfigPath(profilesDir: string, id: string): string {
   return join(profileDir(profilesDir, id), PROFILE_FILE_NAME);
+}
+
+/**
+ * 删掉一份配置档的**整个目录**：`config.json` 与它自己的 `plugins/<插件 id>/` 数据。
+ *
+ * 为什么不只删 `config.json`：目录里剩下的插件数据再也没有主人 —— 下次新建同名档时，
+ * 它会把上一个档的插件数据当成自己的。删除是操作者的明确动作，`DELETE /profiles/{id}`
+ * 的语义就是「这一份从这里消失」。
+ *
+ * 路径只由 `profileDir()` 拼，而它先过 `PROFILE_ID_PATTERN`（`.`、`..`、斜杠都进不来）——
+ * 这是本仓唯一一个 recursive 删除，绝不能让调用方把未校验的字符串递进来。
+ *
+ * 调用方必须先把它从服务里摘掉再调用：摘除失败（例如还被一次对话占着）时一个字节都不该动。
+ */
+export function removeProfileDir(profilesDir: string, id: string): void {
+  rmSync(profileDir(profilesDir, id), { recursive: true, force: true });
 }
 
 /**

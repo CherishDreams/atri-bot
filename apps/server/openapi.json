@@ -1051,6 +1051,121 @@
         ]
       }
     },
+    "/plugins/{id}/config": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/PluginId"
+        }
+      ],
+      "get": {
+        "operationId": "getPluginConfig",
+        "summary": "读一份插件的可配置项与生效值",
+        "tags": ["plugins"],
+        "responses": {
+          "200": {
+            "description": "schema 声明 + 当前生效值。schema 坏了时 `fields` 为空、原因在 `schemaError`；配置文件读不出来时值退回默认、原因在 `configError`。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["config"],
+                  "properties": {
+                    "config": {
+                      "$ref": "#/components/schemas/PluginSettingsView"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "savePluginConfig",
+        "summary": "保存插件配置（必要时自动重载）",
+        "tags": ["plugins"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["values"],
+                "properties": {
+                  "values": {
+                    "type": "array",
+                    "description": "只发改过的项；每一项的 key 必须是 schema 里声明过的，值必须符合它的 type / 范围 / 候选项。",
+                    "items": {
+                      "type": "object",
+                      "required": ["key", "value"],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": ["string", "number", "integer", "boolean"]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已保存。`plugin` 是保存（并尝试重载）之后的状态；重载失败时 `reloadError` 有值，而文件仍然保留 —— 保存成功与插件生效是两件事。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginConfigSaveResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
+      }
+    },
     "/adapters": {
       "get": {
         "operationId": "listAdapters",
@@ -1280,11 +1395,11 @@
       ],
       "delete": {
         "operationId": "deleteProfile",
-        "summary": "下线一份配置档（不删文件）",
+        "summary": "删除一份配置（连同它的目录）",
         "tags": ["profiles"],
         "responses": {
           "200": {
-            "description": "已从服务里摘掉。**文件与 `profiles/<id>/plugins/` 都原样留在磁盘上**：框架从不删它，清理是操作者的 `rm -rf`。",
+            "description": "已删除。`profiles/<id>/` 整个目录（`config.json` 与它自己的插件数据）都已从磁盘移除，不可恢复。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1310,63 +1425,6 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
-          }
-        }
-      }
-    },
-    "/profiles/{id}/rename": {
-      "parameters": [
-        {
-          "$ref": "#/components/parameters/ProfileId"
-        }
-      ],
-      "post": {
-        "operationId": "renameProfile",
-        "summary": "改配置档的显示名",
-        "tags": ["profiles"],
-        "requestBody": {
-          "description": "新的显示名。**只改 `name` 键，不改目录名** —— 目录一动，那份档的插件数据就跟丢了，而 id 是 `ctx.dataDir` 的唯一坐标。",
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["name"],
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "改名后的配置档。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": ["profile"],
-                  "properties": {
-                    "profile": {
-                      "$ref": "#/components/schemas/ProfileRecord"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -1512,52 +1570,6 @@
           }
         }
       }
-    },
-    "/profiles/{id}/reload": {
-      "parameters": [
-        {
-          "$ref": "#/components/parameters/ProfileId"
-        }
-      ],
-      "post": {
-        "operationId": "reloadProfile",
-        "summary": "重读配置文件并换上新的对象图",
-        "tags": ["profiles"],
-        "responses": {
-          "200": {
-            "description": "重载后的配置档。在途的那轮对话继续用**旧**对象图走完 —— 与 `ProviderRegistry.clear()` 同一条不变量（请求已持有自己的实例引用）。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": ["profile"],
-                  "properties": {
-                    "profile": {
-                      "$ref": "#/components/schemas/ProfileRecord"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "500": {
-            "description": "重载失败：新的对象图建不起来时**保留正在服务的那一份**，只把状态说成 failed。换上半截对象图比继续用旧配置危险得多。回的是固定文案，原因见 `GET /profiles`。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -1689,7 +1701,7 @@
         }
       },
       "Conflict": {
-        "description": "冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。",
+        "description": "冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。",
         "content": {
           "application/json": {
             "schema": {
@@ -2145,9 +2157,96 @@
             "type": "string",
             "description": "插件所在目录名（不是绝对路径），便于在控制台辨认"
           },
+          "configurable": {
+            "type": "boolean",
+            "description": "是否有可编辑的配置项（插件目录里有 `_conf_schema.json`）。`PluginView`（GET /plugins 以及重载 / 启用 / 保存配置的响应）会给出；`ctx.plugins()` 那份同伴视图不含它。"
+          },
           "error": {
             "type": ["string", "null"],
             "description": "上一次加载失败的可读原因；正常时为 null。只给操作者：既不进 ctx.plugins() 的同伴视图，也不进 list_plugins 的工具结果（那是发给第三方 provider 的）。"
+          }
+        }
+      },
+      "PluginSettingField": {
+        "type": "object",
+        "required": ["key", "type", "description", "default", "value"],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["string", "text", "int", "float", "bool", "select"]
+          },
+          "description": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "default": {
+            "type": ["string", "number", "integer", "boolean"]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`select` 的候选项；别的类型不出现。"
+          },
+          "min": {
+            "type": ["number", "integer"],
+            "description": "`int` / `float` 的下界；没写就不出现。"
+          },
+          "max": {
+            "type": ["number", "integer"],
+            "description": "`int` / `float` 的上界；没写就不出现。"
+          },
+          "value": {
+            "type": ["string", "number", "integer", "boolean"],
+            "description": "生效值：schema 默认值被 `config.json` 里的合法值覆盖之后的结果。"
+          }
+        }
+      },
+      "PluginSettingsView": {
+        "type": "object",
+        "required": ["id", "configurable", "fields", "schemaError", "configError"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "configurable": {
+            "type": "boolean"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PluginSettingField"
+            }
+          },
+          "schemaError": {
+            "type": ["string", "null"],
+            "description": "`_conf_schema.json` 存在但不可用时的原因；此时 `fields` 为空，插件本身仍然在跑。"
+          },
+          "configError": {
+            "type": ["string", "null"],
+            "description": "`config.json` 读不出来，或其中某些已存值无效（已按默认值显示）。"
+          }
+        }
+      },
+      "PluginConfigSaveResult": {
+        "type": "object",
+        "required": ["config", "plugin", "reloadError"],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/PluginSettingsView"
+          },
+          "plugin": {
+            "$ref": "#/components/schemas/PluginInfo"
+          },
+          "reloadError": {
+            "type": ["string", "null"],
+            "description": "插件重载失败的原因；null 表示已生效。失败时配置文件照样保留 —— 保存成功与插件生效是两件事。"
           }
         }
       },

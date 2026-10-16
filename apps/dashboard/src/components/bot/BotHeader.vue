@@ -25,7 +25,7 @@ import TopBarMenu from "@/components/shared/TopBarMenu.vue";
  * 宽高比 3.0 的整图在 60px 顶栏里宽约 180px，不会挤压右侧控件。
  *
  * ≤768px 多一颗汉堡：侧栏在那个断点收进抽屉（`BotLayout`），没有它就再也到不了
- * 「控制台 / 配置 / 配置档」。它放在 logo 之前，与 AstrBot 的顶栏同一位置。
+ * 「控制台 / 配置文件 / 配置 / 供应商 / 接入平台」。它放在 logo 之前，与 AstrBot 的顶栏同一位置。
  */
 const emit = defineEmits<{ (e: "toggle-nav"): void }>();
 const MenuIcon = icon("menu");

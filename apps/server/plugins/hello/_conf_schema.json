@@ -1,0 +1,14 @@
+{
+  "greeting": {
+    "type": "string",
+    "description": "问候语",
+    "hint": "插件加载时打印这一句。",
+    "default": "你好"
+  },
+  "verbose": {
+    "type": "bool",
+    "description": "详细日志",
+    "hint": "打开后每分钟的心跳也写一条 debug 日志。",
+    "default": false
+  }
+}

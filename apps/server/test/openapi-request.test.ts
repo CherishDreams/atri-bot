@@ -306,11 +306,9 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
     "listAdapters",
     "listProfiles",
     "createProfile",
-    "renameProfile",
-    "reloadProfile",
     "deleteProfile",
     // 「这一档默认用全局清单里的哪一个」写在档自己的文件里，但路径参数就是档 id，
-    // 与 rename / reload 同构，不需要再有一份 query 参数。
+    // 与 getProfileConfig 同构，不需要再有一份 query 参数。
     "setDefaultProvider",
     // 同理：读/写「这一档现在是什么」都是 path 带档 id，不再加一个 query 参数。
     "getProfileConfig",

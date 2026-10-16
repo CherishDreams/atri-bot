@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type { Logger } from "#core/logger.ts";
 import type { PluginInfo } from "@atri/shared";
 import { ApiError, errorMessage } from "#core/errors.ts";
+import type { PluginSettingsValues } from "./settings.ts";
 
 /**
  * 传给插件上下文的配置：插件可见的运行期配置（`PluginRuntimeConfig` 那份白名单视图）
@@ -22,6 +23,14 @@ export interface PluginContextDeps {
   id: string;
   logger: Logger;
   config: PluginContextConfig;
+  /**
+   * 操作者为这个插件填的值（`_conf_schema.json` 的默认值 + 它自己的 `config.json`）。
+   *
+   * **与 `config` 分开，不合并**：`config` 是框架主动交出去的那一份白名单视图，
+   * 键集合由 `test/plugin-config.test.ts` 钉着；把用户填的任意键并进去，那条保证就没了。
+   * 插件作者读自己的参数用 `ctx.pluginConfig.xxx`。
+   */
+  pluginConfig: PluginSettingsValues;
   /**
    * 同伴插件的只读视图，由 `PluginManager` 在创建上下文时注入。
    *
@@ -103,11 +112,22 @@ export class PluginContext {
   id: string;
   logger: Logger;
   config: PluginContextConfig;
+  /** 见 `PluginContextDeps.pluginConfig`。只读：插件读自己的参数，不该改这一份快照。 */
+  readonly pluginConfig: PluginSettingsValues;
 
-  constructor({ id, logger, config, plugins, dataRoot, ensurePrivateDir }: PluginContextDeps) {
+  constructor({
+    id,
+    logger,
+    config,
+    pluginConfig,
+    plugins,
+    dataRoot,
+    ensurePrivateDir,
+  }: PluginContextDeps) {
     this.id = id;
     this.logger = logger;
     this.config = config;
+    this.pluginConfig = pluginConfig;
     this.#peers = plugins;
     this.#dataRoot = dataRoot;
     this.#ensurePrivateDir = ensurePrivateDir;

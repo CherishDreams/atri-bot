@@ -111,7 +111,7 @@ migrateProvidersToGlobal(profilesDir, providersPath, bootstrap); // 一次性收
 const providerConfig = new ProviderConfigStore({ filePath: providersPath }, logger);
 const providers = new ProviderRegistry();
 // 一份注册表 + 一张失败表，全局只此一份；`rebuildProviders()` 是**唯一**装配路径，
-// 启动与「配置页改完保存」共用它，所以 `GET /providers` 的错误与注册表永远同源。
+// 启动与「供应商页改完保存」共用它，所以 `GET /providers` 的错误与注册表永远同源。
 function rebuildProviders(): ProviderRegistry {
   /* 读 providerConfig → createProviders() → 填 providers / providerErrors，并设默认 */
 }
@@ -226,12 +226,19 @@ chat 侧传的也只是清单里的实例 id）。此前本仓是按档各一套
   一批：接在引擎上就要 N 次订阅 + 删档时漏摘，所以总线在引擎之外。
 
 适配器**绑定**到配置档，而不是搬进配置档：`adapters.<id>.profile` 留在部署级文件里。
-理由是一个接入端占的资源本来就属于部署（监听端口、webhook 回调地址、平台 token），
+理由是一个接入平台占的资源本来就属于部署（监听端口、webhook 回调地址、平台 token），
 要选的只是「这个平台用哪一套跑法」；反过来的话删一份档就得去扫所有档看谁在引用它。
 绑定经组合根注入的访问器解析（`AdapterManager` 收一个 `resolveProfile`），所以
 `adapters/` 不需要、也不允许 import `api/`（`ProfileBundle` 声明在那里）。
 今天仓库里还没有任何适配器实现，所以这条接缝的**组合根接线**只有单元测试覆盖 ——
 第一个真适配器落地时要补的就是那条端到端，这条判断写在 `test/adapters.test.ts` 末尾。
+
+配置档的**删除**是连目录一起删的：`removeProfileDir` 会递归移除
+`<dataDir>/profiles/<id>/`（`config.json` 与插件数据），路径只由校验过 id 的
+`profileDir()` 拼出来。顺序固定为「先摘后删」：摘除可能失败（那一份还占着某轮对话时
+`lock.isInUse` 直接回 409，插件卸载也可能抛错），失败时磁盘必须一个字节都没动；
+反过来会得到「删除报了错，而文件已经没了」。这条顺序由 `test/profiles.test.ts`
+里那条「占用时 409，目录原封不动」钉着。
 
 ### 档级配置的批量写
 
@@ -480,7 +487,7 @@ errors.ts ProviderError 与上游错误归一
 
 **这份文件读坏了不许让每一档都失败**：装配那一次把「整个文件解析不了」catch 成
 「一个 provider 都没有」（回声兜底）+ 一条 error 日志，原因由 `GET /providers` 的顶层
-`error` 带给配置页。以前只坏一档，全局一份读坏若上抛就会让 N 份档全变 `failed`，
+`error` 带给供应商页。以前只坏一档，全局一份读坏若上抛就会让 N 份档全变 `failed`，
 而那一刻恰恰是操作者最需要服务活着好去改这个文件的时候。「空清单」与「读不出来」
 必须是两个字段，否则用户会去检查一个本来就空的配置。
 
@@ -754,13 +761,18 @@ builtins/ 一颗工具一个文件（`currentTime.ts`），只导出自己那颗
 - **`dataDir` 被排除的理由现在比其它键都硬**：会话与消息库 `sessions.sqlite` 就落在它下面
   （见[会话与消息的持久化](#会话与消息的持久化)），把 `dataDir` 交给任何一个插件等于把用户的
   **全部对话历史**递到磁盘上手写的 JS 手上。插件需要存东西时走 `ctx.dataDir`，
-  那是 `<dataDir>/plugins/<自己的 id>`，由框架拼、由框架校验（见下一节）。
+  那是 `<dataDir>/profiles/<配置档 id>/plugins/<自己的 id>`，由框架拼、由框架校验（见下一节）。
   所以「插件要一个数据目录」这件事**没有**变成白名单的新键 —— `dataRoot` 走的是
   `PluginManager` 的第三个构造参数，框架私有，不流到 `ctx.config` 也不流到 `shared.config`。
 
 `test/plugin-config.test.ts` 钉住这条边界：真起一个 app，fixture 插件把 `shared.config` 的键与
 `ctx.config` 的**整个对象**交回测试，`deepEqual` 连多出来的键一起报错；另有一句断言「口令与
 apiKey 确实存在于交给 app 的配置里」，防止有人清空测试配置后守卫悄悄变成空话。
+
+用户为插件填的值走另一条路：`ctx.pluginConfig`（schema 默认值 + 该插件 `config.json` 的
+合法项）。**不并进 `ctx.config`**，理由有两条：上面那条键集合断言会立刻失效；
+而插件作者也会分不清一个键是框架给的、还是操作者填的。两份来源分开之后，白名单仍然只有
+`pluginDirs` 一条，用户数据则完全由插件自己的 schema 定义。
 
 这不是沙箱。插件是**进程内**的任意 JS，真想读 `atri.config.json` 或 import 仓内模块，拦是拦不住的。
 白名单收住的是「**框架主动把秘密递到插件手上**」这条默认路径 —— 插件由许多人写、由用户自行安装，
@@ -787,7 +799,8 @@ apiKey 确实存在于交给 app 的配置里」，防止有人清空测试配�
 >   注释写作「模型提供商管理器」）与 `_db` 句柄，
 >   所以在那种形状里「把 config 过滤掉」并不等于收住能力。**我们这条边界之所以成立，
 >   是因为 `ctx` 给的全是「只看自己、不给了出口」的东西**：`logger`（写日志）、
->   `config`（白名单那一份）、`effect` / `subscribe`（把自己已经要做的清理交出来）、
+>   `config`（白名单那一份）、`pluginConfig`（操作者填给这个插件的值）、
+>   `effect` / `subscribe`（把自己已经要做的清理交出来）、
 >   `plugins()`（同伴的投影，逐键拼）、`dataDir`（**它自己**那一个数据目录的路径）。
 >   没有 provider、没有数据库句柄、没有 HTTP 出口，也没有 `dataDir` 本体。
 >   哪天要往 `ctx` 加这三样中的任何一样，白名单就不再是边界了，
@@ -795,13 +808,50 @@ apiKey 确实存在于交给 app 的配置里」，防止有人清空测试配�
 >
 > 我们抄的是它「派生一个低信任面 + 用测试把关」的形状（边界写在数据里，不写在注释里），
 > 而不是它插件层的宽松度。
-> 若将来要支持在控制台里编辑某个插件的配置项（AstrBot 有这一层：插件用 `StarConfigMetadata`
-> 声明自己的设置项，这一条来自它的文档站，我没在 4.28.2 的源码里逐处核对），
-> 新增的应当是**该插件专属的一段**，而不是把 `AppConfig` 重新交出去。
+> 这一版已经补上了这一层：插件用 `_conf_schema.json` 声明自己的项，框架把它投影成
+> `ctx.pluginConfig`（默认值 + 该插件自己的 `config.json` 里的合法值），**不是**把
+> `AppConfig` 重新交出去。见下一节。
+
+### 插件配置：schema 驱动、每档一份
+
+插件目录里的 `_conf_schema.json` 只决定**表单长什么样**，值落在
+`<dataDir>/profiles/<配置档 id>/plugins/<插件 id>/config.json`。两件事分开的理由与
+「代码 vs 数据」同源：schema 跟着插件代码走、升级时一起换；值是操作者的数据，
+卸载、禁用、重载都不删，只有删除整份配置时随目录消失。`config.json` 因此是插件数据目录里的
+**保留文件名**：插件自己往 `ctx.dataDir` 写别的文件随便，但不能写这个名字。
+
+四个决定：
+
+- **每档一份，不是全局一份。** 同一个插件在两份配置里可能有不同 token / 阈值；这与
+  `ctx.dataDir` 的每档隔离是同一条。全局一份会让「在 A 档改了 B 档的问候语」变成可能，
+  而没有任何界面能表达这件事。
+- **用户值走 `ctx.pluginConfig`，不并进 `ctx.config`。** 后者是框架主动交出的白名单视图，
+  键集合由测试钉着；把任意用户键并进去，白名单保证立刻失效，而且插件作者也分不清
+  一个键是「框架给的」还是「操作者填的」。`ctx.pluginConfig` 是「schema 默认值 + 合法已存值」，
+  非法已存值退回默认并在控制台点名。
+- **保存即重载。** `setup()` 里读的是 `ctx.pluginConfig` 的一份快照；只写文件不重载，
+  界面会显示已保存而插件行为没变。`saveConfig` 先全部校验、再原子写、然后对 active / failed
+  的记录 `reload()`。重载失败**不回滚文件** —— 刚填的值是有效的，失败的是插件初始化；
+  响应里的 `reloadError` 把两件事分开说。禁用中的插件只写不加载。
+- **坏文件用表单重建。** `config.json` 读不出来时插件在加载阶段记为 `failed`，GET 仍然
+  返回默认值 + `configError`，整张表单可读；POST 以 `{}` 为基底写入表单值。否掉的是
+  「409 拒绝保存」：WebUI 就是操作者修这个文件的工具，把它锁住只剩手改磁盘一条路。
+  代价是重建会丢掉坏文件里已经无法解析的字节，这是显式接受的一次取舍。
+
+`schemaError` 与 `configError` 刻意分开：前者是**插件作者**的 schema 写错了（插件照常跑，
+只是没有表单），后者是**操作者**的值有问题（退回默认，仍可保存修复）。schema 不合法时
+`fields` 为空，不给半张会存坏的表单。
+
+工作台的「插件」分类在这一版删掉了：插件页的保存是即时动作，工作台是草稿 + 一次保存，
+两者混在同一个 `?cat=` 里会让「点了保存到底写没写」变成需要猜的事。服务端
+`POST /profiles/{id}/config` 的 `plugins` 键**保留**：它仍是唯一的批量写入口，现有测试与
+spec 都覆盖它；只是控制台不再从那条路径写插件。
 
 ### 插件数据：与代码分离，卸载不删
 
-`ctx.dataDir` 给的是 `<config.dataDir>/plugins/<插件 id>`，首次访问时才创建（`0700`，幂等）。
+`ctx.dataDir` 给的是 `<dataDir>/profiles/<配置档 id>/plugins/<插件 id>`，首次访问时才创建
+（`0700`，幂等）。多配置档之后根目录是**这一档自己的**：安装仍是全局的，但同一个插件在
+两份配置里各有一份 token、缓存与 `config.json`。
 它解决的是「插件没有地方放东西」：唯一的替代本来是插件自己那个目录，而那是**用户从上游拷来的
 代码** —— 升级时整个被替换、想改名就改名，把数据写在那儿等于写在一条会被覆盖的路上。
 
@@ -844,15 +894,18 @@ apiKey 确实存在于交给 app 的配置里」，防止有人清空测试配�
 启动侧吞掉继续扫，`reload()` 与 `POST /plugins/:id/reload` 的调用方照旧拿到原因。
 没有选「给 `load()` 加一个安静模式参数」：一个函数两种形状，正是这条注释要预防的那种走散。
 
-**框架从不删它。** `unload` / `reload` / `setEnabled(false)` / `unloadAll` / `stop()` 都不碰这个
-目录 —— 整个 `apps/server/src` 里没有任何删除文件的调用，而这条从今天起是**契约而不是巧合**
-（`plugins.test.ts` 里「卸载与换目录都不丢数据」那条断言会拦住以后任何人加删除）。
-也不提供 `purgeData` 之类的参数：那会成为第一个由 API 触发的不可逆删除，而且与「插件目录同样
-归用户所有、框架从不删」这条一致性冲突。清理是操作者自己 `rm -rf data/plugins/<id>` 的事。
+**卸载 / 禁用 / 重载不删它。** `unload` / `reload` / `setEnabled(false)` / `unloadAll` /
+`stop()` 都不碰这个目录（`plugins.test.ts` 里「卸载与换目录都不丢数据」那条断言会拦住以后
+任何人加删除）。唯一会删它的是**删除整份配置**：`removeProfileDir` 连同
+`profiles/<id>/` 一起移除，那是操作者显式删除一份配置的动作，不是插件级别的 API。
+所以也不提供 `purgeData` 之类的参数：那会成为第一个由插件 API 触发的不可逆删除，而且与
+「插件目录归用户所有」这条一致性冲突。只清理一个插件的数据仍然是操作者自己
+`rm -rf data/profiles/<配置档 id>/plugins/<插件 id>` 的事。
 
-`GET /plugins` 与 `PluginInfo` 一个字段都没加。`PluginInfo` 同时被 `#view()`（给控制台）和
-`#peers()`（给插件）复用，往里加数据目录就等于再多一处「靠人记得不给」的投影 —— 而控制台
-要显示路径的话，它已经有 `dir`（目录名）可以辨认了。
+`PluginInfo` 没有加**数据目录**字段。它同时被 `#view()`（给控制台）和 `#peers()`（给插件）
+复用，往里加数据目录就等于再多一处「靠人记得不给」的投影 —— 而控制台要显示路径的话，
+它已经有 `dir`（目录名）可以辨认了。后来加的 `configurable` 是可选键，只说明插件目录里
+有没有 `_conf_schema.json`，不泄露路径；`#peers()` 也**不**投影它（键集合断言继续钉着）。
 
 ## 前端
 
@@ -866,13 +919,16 @@ src/
 ├── api/
 │ ├── client.ts 唯一的 HTTP/WS 出口（手写）
 │ └── generated/ 由 openapi.json 生成的类型化 SDK（入库，不手改）
-├── stores/ auth / sessions / plugins / providers / profiles / profileConfig（Pinia）
+├── stores/ auth / sessions / plugins / pluginSettings / providers / profiles / profileConfig（Pinia）
 ├── router/index.ts 路由、登录守卫，以及给作用域页面补 `?profile=` 的那一条
 ├── layouts/ bot/BotLayout（顶栏 + 侧栏） / chat/ChatLayout（侧栏 + 顶栏）
-├── views/ LoginView / ConsoleView / ConfigWorkbench / ProfilesView / chat 下的创建与会话页
+├── views/ LoginView / ConsoleView / ConfigWorkbench / PluginsView / ProvidersView / AdaptersView /
+│ chat 下的创建与会话页
 └── components/
 ├── shared/ icons / TopBarMenu / PlatformSwitch / ModelSelectMenu / ProfileGate
-├── config/ 配置工作台：分类表 / 分类菜单 / 卡片与行 / 六个分类面板 / 档切换与保存
+├── config/ 配置工作台：分类表 / 分类菜单 / 卡片与行 / 三个档级面板 / 档切换与保存
+│ （供应商与接入平台两个面板也住在这里，但由各自的独立页挂载）
+├── plugins/ PluginCard / PluginConfigDrawer / PluginConfigForm
 ├── bot/ BotHeader / BotNavigation
 ├── chat/ ChatHeader / Navigation
 └── provider/ ProviderCard
@@ -885,7 +941,7 @@ src/
 
 - `components/bot/BotHeader.vue` —— 左侧汉堡（≤767px 才出现）+ logo，右侧
   `PlatformSwitch` + `ThemeToggle` + `TopBarMenu`。侧栏在那个断点收进 `n-drawer`，
-  汉堡是窄屏下到达「控制台 / 配置 / 配置档」的唯一入口。
+  汉堡是窄屏下到达「控制台 / 配置文件 / 插件 / 供应商 / 接入平台」的唯一入口。
 - `components/chat/ChatHeader.vue` —— 左侧模型选择器，右侧同样是那三个控件。
 
 **bot 侧没有模型选择器**（以前有）。判据不是审美而是「它在这儿不做事」：bot 侧发消息走的
@@ -945,9 +1001,19 @@ src/
   顶栏要显示的「这一档默认用哪个模型」是档级属性，只在 `GET /profiles` 的返回里，
   列表为空时界面的症状是安静地显示「默认模型」，而档里明明配了另一个。
 - **配置工作台（`/config?profile=&cat=`）是唯一一个「一类一屏」的地方**：左上角是当前档的
-  切换器，左侧分类分「本配置档」与「全局」两组，右侧是该分类的条目。分类进 URL 的理由与
+  切换器，左侧是三个**档级**分类（默认模型 / 工具 / 运行参数），右侧是该分类的条目。
+  分类进 URL 的理由与
   `?profile=` 相同（刷新/后退/贴链接一致）；而**只改 `?cat=` 不触发离开守卫**（同一条
   route record），所以切分类不会弹未保存提示 —— 它本来就不丢草稿。
+- **插件（`/plugins?profile=`）是独立一页**：每张卡片有启停 / 重载 / 卸载，目录里有
+  `_conf_schema.json` 的还有「配置」抽屉。抽屉的保存是**即时动作**（保存后插件自动重载），
+  与工作台的「草稿 + 一次保存」不是同一种语义，所以没有并进 `?cat=`。抽屉脏时只拦关闭
+  （遮罩 / ESC / 关闭键），**不拦页面跳转** —— 切配置仍只在工作台做，这一页的页头只给一条
+  去那边的链接。控制台右侧的旧快捷面板保留，它与插件页打的是同一组端点、同一份列表状态。
+- **供应商（`/providers`）与接入平台（`/adapters`）是主导航里的整页**，不在上面那张分类表里：
+  两者都是部署级全局一份，改一次对所有配置生效。放进工作台时，左上角明明写着配置名而那一项
+  立刻影响所有配置 —— 分组标题挡不住这种误读，只有「它不在这一页」能挡住。这一条与 AstrBot
+  的形状一致（「模型提供商」「平台配置」也是主导航里各自一项）。
 - **档级那几类走草稿 + 一次保存**，这是「状态能从路由推出就不存本地」的**唯一例外**，
   判据写进 `stores/profileConfig.ts`：路由说的是「哪一份档、哪一类」，而没保存的编辑
   在哪儿都不存在（不在 URL、也不在服务端）。它不写 `localStorage`：草稿存在的意义就是被
@@ -955,9 +1021,18 @@ src/
 - **切档与离开是两道闸门**：`onBeforeRouteLeave` 管去别的页面，切档得自己拦 ——
   `?profile=` 变化仍是同一条 route record，vue-router 不跑离开守卫。两条走同一个弹窗
   （保存并离开 / 放弃并离开 / 留在本页）。
-- **`/profiles`（配置档本身）标了 `noProfile`**，`/tools` 与 `/provider` 只剩 redirect
-  （把 `?profile=` 一并带进 `/config` 的分类）。供应商不是 `noProfile` 页面了：它是工作台
-  里「全局」那一组，URL 上有档名没有关系 —— 那一组的内容不按档变。
+- **配置的增删不单独占一页**：它就在「配置文件」页左上角切换器的「管理配置」弹窗里
+  （`ManageProfilesModal` + `ProfileList`）。一份可用的都没有时，选择器
+  （`ProfilePicker`）里也放同一个入口 —— 否则「没有配置」就是一条死路。
+  **创建后不能改名**，所以 `ProfileList` 只有新建 / 切到这里 / 删除三个动作；
+  改名的端点与界面一起删掉了（id 是目录名，一个只改显示名的动作只会多一种不一致）。
+- **保存即生效，没有「重载」按钮**：`POST /profiles/{id}/config` 在响应里回读整份配置，
+  服务端当场应用（工具与步数是每轮现读、插件逐颗 `setEnabled`、默认模型同时写 bundle 与
+  engine）。刻意**不**重建整张对象图 —— 那会重估所有插件，代价远大于收益。
+- **`/providers`、`/adapters` 标了 `noProfile`**：两者是部署级全局一份 —— 给它们挂一个
+  与页面无关的档名，等于在 URL 上谎称「这一页是按档的」。
+  三个旧入口只剩 redirect：`/tools` 把 `?profile=` 一并带进 `/config` 的分类、`/provider`
+  指向 `/providers`、`/profiles` 指向 `/config`（管理在它的切换器弹窗里）。
 - **模型选择器写的是档文件**：它调 `POST /profiles/{id}/default-provider`，成功之后靠
   `GET /profiles` 的回读上色，所以点错了、写失败了都留在原来那一行并且有一句中文原因，
   而不是先变绿再等人发现。发消息**不**带 model。
@@ -965,10 +1040,10 @@ src/
 ### 供应商面板
 
 `components/config/ProvidersPanel.vue` 是一个「源列表 + 源详情」的两栏工作台（从旧的
-`views/ProviderConfig.vue` 整体搬来），挂在配置工作台的「供应商」分类下，状态全在
-`stores/providers.ts`（那一份 store 现在没有任何「当前档」的概念：清单是全局的）。
-它自己管理滚动与选中，所以工作台**不给它套页面内边距** —— 两层滚动条并排出现是这类
-嵌套工作台最常见的坏法。三个容易做错的地方：
+`views/ProviderConfig.vue` 整体搬来），由极薄的 `views/ProvidersView.vue` 挂在 `/providers`
+这一项主导航下，状态全在 `stores/providers.ts`（那一份 store 没有任何「当前档」的概念：
+清单是全局的）。它自己管理滚动与选中，所以页面壳**不给它套页面内边距** —— 两层滚动条
+并排出现是这类嵌套工作台最常见的坏法。三个容易做错的地方：
 
 - **store 的私有辅助必须是模块级函数**。Pinia 把 actions 挂到另一个对象上执行，
   action 里的 `this.#privateFn()` 会因为 `this` 上根本没有那个私有名字而抛 `TypeError`。

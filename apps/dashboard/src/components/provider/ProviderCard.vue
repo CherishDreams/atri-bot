@@ -1,7 +1,7 @@
 <template>
   <div
-    class="provider-card flex w-full cursor-pointer select-none items-center gap-3 rounded-lg border-1 border-line px-3 py-2 transition-colors hover:bg-tint"
-    :class="active ? 'border-line-strong bg-primary-soft' : ''"
+    class="provider-card flex w-full cursor-pointer select-none items-center gap-3 rounded-xl border-1 border-line bg-surface px-3 py-2.5 shadow-sm transition-all hover:shadow-md"
+    :class="active ? 'border-primary/50 bg-primary-soft' : ''"
   >
     <!--
       这里曾是一个空的 `.provider-icon` 占位 div——留一个谁也不填的盒子，

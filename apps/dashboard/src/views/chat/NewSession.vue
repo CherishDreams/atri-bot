@@ -105,10 +105,12 @@ onBeforeUnmount(() => {
   -->
   <div class="flex h-full items-center justify-center bg-canvas px-4">
     <div class="w-full max-w-[var(--atri-reading-w)]">
-      <h1 class="mb-8 text-center text-3xl font-bold text-ink">今天想聊点什么?</h1>
+      <h1 class="mb-7 text-center text-[28px] font-semibold tracking-tight text-ink">
+        今天想聊点什么?
+      </h1>
 
       <div
-        class="surface-card flex min-h-24 cursor-text flex-col justify-between transition-colors focus-within:border-primary"
+        class="surface-card flex min-h-24 cursor-text flex-col justify-between transition-shadow duration-200 focus-within:border-primary focus-within:shadow-md"
         @click="focusInput"
       >
         <textarea
@@ -137,7 +139,7 @@ onBeforeUnmount(() => {
             class="grid h-7 w-7 cursor-pointer place-items-center rounded-full transition-colors disabled:cursor-not-allowed"
             :class="
               canSubmit
-                ? 'bg-primary text-surface hover:bg-primary-hover'
+                ? 'bg-primary text-on-primary hover:bg-primary-hover'
                 : 'bg-tint text-ink-faint'
             "
             type="button"

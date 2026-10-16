@@ -18,7 +18,7 @@ import type { PluginView } from "#plugins/manager.ts";
 import type { Logger } from "#core/logger.ts";
 import { ApiError } from "#core/errors.ts";
 import { createApp } from "#app.ts";
-import { ensurePrivateDir } from "#config/file.ts";
+import { ensurePrivateDir, readConfigFileAt, writeConfigFileAt } from "#config/file.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**
@@ -102,6 +102,8 @@ function makeManager(t: TestContext, pluginDirs: string[] = []) {
   return new PluginManager({ pluginDirs }, silentLogger(), {
     dataRoot: useDataRoot(t),
     ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
   });
 }
 
@@ -277,6 +279,8 @@ test("shared.config 与 ctx.config 都是副本，插件改不到管理器的配
   const mgr = new PluginManager({ pluginDirs: ["/原样"] }, silentLogger(), {
     dataRoot: useDataRoot(t),
     ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
   });
   await mgr.load(sharedDir);
   await mgr.load(ctxDir);
@@ -407,7 +411,12 @@ test("ctx.dataDir 惰性创建，路径由 id 决定", async (t) => {
   `,
   );
 
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot, ensurePrivateDir });
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
+    dataRoot,
+    ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
+  });
   await mgr.load(writer);
 
   // 键是 `id`，不是磁盘目录名 —— 目录名可以被用户改，而数据不该跟着一起丢。
@@ -436,7 +445,12 @@ test("卸载与换目录都不丢数据：目录的键是 id，不是插件所�
     export default { id: "p7", setup(ctx) { writeFileSync(ctx.dataDir + "/note.json", "第一份"); } };
   `,
   );
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot, ensurePrivateDir });
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
+    dataRoot,
+    ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
+  });
   await mgr.load(first);
   assert.equal(readFileSync(note, "utf8"), "第一份");
 
@@ -485,6 +499,8 @@ test("id 不能当路径用时拒绝加载，且不创建任何东西", async (t
     const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
       dataRoot,
       ensurePrivateDir,
+      readConfigFileAt,
+      writeConfigFileAt,
     });
     // id 会**直接成为** `<dataDir>/plugins/<id>` 的路径组件，所以它在登记那一刻就被拒，
     // 而不是等插件自己去碰 `ctx.dataDir` 才发现：后者意味着一份 id 不合规的插件已经进了
@@ -721,7 +737,12 @@ test("两个目录声明同一个 id 时，后来那个被拒绝 —— 数据�
     export default { id: "shared", name: "劫持者", version: "1", setup() {} };
   `,
   );
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot, ensurePrivateDir });
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
+    dataRoot,
+    ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
+  });
   await mgr.load(victim);
 
   // `ctx.dataDir` 的路径就是 `<dataRoot>/<id>`，id 又是插件**自报**的：不拒绝第二次声明，
@@ -792,10 +813,14 @@ test("两份配置档各求值一次插件模块：模块级状态不跨实例�
   const mgrA = new PluginManager({ pluginDirs: [install] }, silentLogger(), {
     dataRoot: dataA,
     ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
   });
   const mgrB = new PluginManager({ pluginDirs: [install] }, silentLogger(), {
     dataRoot: dataB,
     ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
   });
   await mgrA.loadAll();
   await mgrB.loadAll();
@@ -842,6 +867,8 @@ test("配置档的启用清单：默认开，disabledIds 里的那些不跑 setu
   const off = new PluginManager({ pluginDirs: [install] }, silentLogger(), {
     dataRoot,
     ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
     disabledIds: ["onandoff"],
   });
   await off.loadAll();
@@ -888,7 +915,12 @@ test("ctx.dataDir 的目录是 0700，宽松的旧目录也会被收紧", async 
     export default { id: "pmode", setup(ctx) { writeFileSync(ctx.dataDir + "/token.txt", "t"); } };
   `,
   );
-  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), { dataRoot, ensurePrivateDir });
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
+    dataRoot,
+    ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
+  });
   await mgr.load(plugin);
 
   assert.equal(

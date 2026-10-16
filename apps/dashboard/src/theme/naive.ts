@@ -111,8 +111,9 @@ function buildCommon(name: ThemeName): Record<string, string> {
  *
  * - `Button` **没有** `borderRadius`，只有 `borderRadiusTiny/Small/Medium/Large`，
  *   四者默认都取 `common.borderRadius`。
- * - `Select` 的圆角不在自己身上，来自 `peers.InternalSelection.borderRadius`；
- *   `Modal` 用 `preset="card"` 时圆角来自 `peers.Card`。
+ * - `Select` 的圆角不在自己身上，而是内部复用的选择框；`peers.InternalSelection`
+ *   **不是** naive-ui 的组件主题名（`check-theme-keys` 会拦），所以它只能跟
+ *   `common.borderRadius` 走 —— 写一个假键只会被静默忽略。
  * - `InputNumber` 没有任何自有样式键，只能通过 `peers.Input`/`peers.Button` 间接改。
  */
 /**
@@ -139,8 +140,10 @@ function buildComponents(name: ThemeName, p: Palette): Omit<GlobalThemeOverrides
   return {
     Button: {
       fontWeightStrong: font.weight.semibold,
-      paddingSmall: "0 10px",
-      paddingMedium: "0 14px",
+      heightSmall: "30px",
+      heightMedium: "36px",
+      paddingSmall: "0 12px",
+      paddingMedium: "0 16px",
       borderRadiusSmall: radius.md,
       borderRadiusMedium: radius.md,
       borderRadiusLarge: radius.md,
@@ -152,11 +155,14 @@ function buildComponents(name: ThemeName, p: Palette): Omit<GlobalThemeOverrides
     Card: {
       borderRadius: radius.lg,
       paddingSmall: "16px",
+      paddingMedium: "20px",
       titleFontSizeSmall: font.size.base,
+      titleFontSizeMedium: font.size.lg,
       borderColor: p.line,
     },
     Input: {
       borderRadius: radius.md,
+      heightMedium: "36px",
       paddingSmall: "0 10px",
       paddingMedium: "0 12px",
       // 焦点必须同时有描边和一圈浅色环，只变描边在深色主题下几乎看不出来。
@@ -207,7 +213,7 @@ function buildComponents(name: ThemeName, p: Palette): Omit<GlobalThemeOverrides
     },
     Menu: {
       borderRadius: radius.md,
-      itemHeight: "36px",
+      itemHeight: "40px",
       fontSize: font.size.base,
     },
     Tag: {

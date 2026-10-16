@@ -132,15 +132,23 @@ config/   ── 与 core/ 双向（按文件看没有环）
   `PluginInfo`，不含同伴的 `dir` 与 `error`（后者可能带着 `resolve()` 之后的绝对路径）；
   要扩大它就是「在 `#peers()` 里显式加一行 + 同步 `test/plugins.test.ts` 那句不该有 dir/error/dataDir」，
   而不是把 `#view()` 那份给控制台的形状直接递给插件。
-  `ctx.dataDir` 是这条规矩的一个样本：它给的是 `<dataDir>/plugins/<自己的 id>`，
+  `ctx.dataDir` 是这条规矩的一个样本：它给的是
+  `<dataDir>/profiles/<配置档 id>/plugins/<自己的 id>`，
   由框架拼、由框架校验、由框架私有参数（`PluginStorage`，**不进白名单**）注入 ——
   插件要一个地方存东西，不等于它该看见 `dataDir` 本体（那下面躺着 `sessions.sqlite`）。
-  多配置档之后它是 `<dataDir>/profiles/<配置档 id>/plugins/<插件 id>`，
   而 `ctx.config.pluginDirs` 仍是**部署级那一份**（插件全局安装，每档只决定开不开）：
   这条键的**值没有**跟着配置档变，所以 `test/plugin-config.test.ts` 的键集合断言之外，
   `test/plugins.test.ts` 还钉了一句「两个管理器的 `pluginDirs` 逐元素相等」。
   要往 profile 里加「每档私有安装目录」这类键之前，先读 architecture.md 的插件一节：
   它被否过一次，理由是安装是文件系统动作，多配置档同步不了它。
+- **用户为插件填的值走 `ctx.pluginConfig`，不并进 `ctx.config`。** 插件目录里的
+  `_conf_schema.json` 声明可配置项（`string` / `text` / `int` / `float` / `bool` /
+  `select`），值写在 `<dataDir>/profiles/<配置档 id>/plugins/<插件 id>/config.json`
+  —— 每档一份，目录 `0700`、文件 `0600`。`config.json` 是插件数据目录里的**保留文件名**：
+  框架会读-改-写它，插件自己存东西要换一个名字。保存后 active / failed 的插件自动重载，
+  禁用中的只落盘；schema 坏了不影响插件运行，只让表单不可用（`schemaError`）。
+  这条与「交给插件的配置必须投影」是两件事：`pluginConfig` 是用户数据，不是
+  `AppConfig` 的视图，所以它不该出现在 `test/plugin-config.test.ts` 的键集合里。
 - 窄的类型标注**不等于**窄的现实。上面那条「构造参数只声明自己读写的键」只解决强度问题；
   对象真的传出去时，现实由运行时那个对象决定（这里曾经就是这么漏的：类型写的是
   `{ pluginDirs?: string[] }`，运行时交到插件手上的是整个 `AppConfig`）。
@@ -325,7 +333,8 @@ Vue 3 + vue-router + Pinia + UnoCSS(presetWind4) + naive-ui，`<script setup lan
   少了它，产物里一个工具类都不生成，样式层**静默失效**——症状是 CSS 从 ~12 kB 掉到 ~3 kB，没有任何报错。
 - 主题色在 `apps/dashboard/uno.config.ts` 的 `theme.colors`，取值全部是 `var(--atri-*)`：
   底色 `canvas` / `surface` / `raised` / `tint`，分隔 `line` / `line-strong`，
-  文字 `ink` / `ink-muted` / `ink-faint`，强调 `primary`(+`-hover`/`-pressed`/`-soft`) / `ring`，
+  文字 `ink` / `ink-muted` / `ink-faint`，压在 primary 实心填充上的文字用 `on-primary`
+  （不能用 `surface`：它在深色主题下会翻成深色），强调 `primary`(+`-hover`/`-pressed`/`-soft`) / `ring`，
   语义色 `info` / `success` / `warning` / `danger`(+`-hover`)。**名字以那份文件为准**：
   这里列出的每一个键都要能在 `theme.colors` 里找到，反之亦然 —— 照一个不存在的 token 名写
   （历史上这里列的是 `bg`/`panel`/`fg`/`muted`/`accent`）不会报错，只会**静默不生成那条 CSS**，

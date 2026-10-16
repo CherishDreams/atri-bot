@@ -35,8 +35,8 @@ const label = computed(() => ROLE_LABELS[props.role] ?? props.role);
 </script>
 
 <template>
-  <div class="mb-3 flex flex-col" :class="isUser ? 'items-end' : 'items-start'">
-    <span class="mb-1 text-xs text-ink-faint">{{ label }}</span>
+  <div class="mb-4 flex flex-col" :class="isUser ? 'items-end' : 'items-start'">
+    <span class="mb-1 px-1 text-[11px] font-medium text-ink-faint">{{ label }}</span>
 
     <!--
       四条分支必须留在同一条 v-if / v-else-if / v-else 链上：
@@ -49,7 +49,7 @@ const label = computed(() => ROLE_LABELS[props.role] ?? props.role);
     -->
     <div
       v-if="pending"
-      class="max-w-[85%] rounded-lg border-1 border-line bg-surface px-3 py-2 text-sm text-ink-faint"
+      class="max-w-[85%] rounded-2xl rounded-bl-md border-1 border-line bg-surface px-3.5 py-2.5 text-sm text-ink-faint shadow-sm"
       aria-live="polite"
     >
       正在输入…
@@ -60,12 +60,12 @@ const label = computed(() => ROLE_LABELS[props.role] ?? props.role);
     -->
     <pre
       v-else-if="isTool"
-      class="m-0 max-h-40 max-w-[85%] overflow-auto rounded-lg border-1 border-line bg-raised px-3 py-2 font-mono text-xs whitespace-pre-wrap text-ink-muted"
+      class="m-0 max-h-40 max-w-[85%] overflow-auto rounded-xl border-1 border-line bg-raised px-3 py-2 font-mono text-xs whitespace-pre-wrap text-ink-muted"
       >{{ content }}</pre>
     <!-- 用户侧保持纯文本 + pre-wrap：把输入里的 * 与 _ 当强调符号解析会排错版。 -->
     <div
       v-else-if="isUser"
-      class="max-w-[85%] rounded-lg bg-primary-soft px-3 py-2 text-sm break-words whitespace-pre-wrap text-ink"
+      class="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm break-words whitespace-pre-wrap text-on-primary shadow-sm"
     >
       {{ content }}
     </div>
@@ -78,16 +78,16 @@ const label = computed(() => ROLE_LABELS[props.role] ?? props.role);
       <markdown-view
         v-if="content"
         :content="content"
-        class="rounded-lg border-1 border-line bg-surface px-3 py-2 text-sm text-ink"
+        class="rounded-2xl rounded-bl-md border-1 border-line bg-surface px-3.5 py-2.5 text-sm text-ink shadow-sm"
       />
       <div
         v-for="call in toolCalls ?? []"
         :key="call.id"
-        class="rounded-lg border-1 border-line px-2.5 py-1.5"
+        class="rounded-xl border-1 border-line bg-surface px-3 py-2 shadow-sm"
       >
         <span class="text-xs font-medium text-ink">调用工具 {{ call.name }}</span>
         <pre
-          class="m-0 mt-0.5 overflow-auto font-mono text-xs break-all whitespace-pre-wrap text-ink-muted"
+          class="m-0 mt-1 overflow-auto font-mono text-xs break-all whitespace-pre-wrap text-ink-muted"
           >{{ call.arguments || "{}" }}</pre>
       </div>
     </div>

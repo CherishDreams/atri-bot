@@ -6,7 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginManager, pluginRuntimeConfig } from "#plugins/manager.ts";
 import { createApp } from "#app.ts";
-import { ensurePrivateDir, providersFilePath } from "#config/file.ts";
+import {
+  ensurePrivateDir,
+  providersFilePath,
+  readConfigFileAt,
+  writeConfigFileAt,
+} from "#config/file.ts";
 import type { AppConfig } from "#config/index.ts";
 import type { Logger } from "#core/logger.ts";
 import { makeTestConfig } from "./helpers/config.ts";
@@ -151,6 +156,8 @@ test("插件声明的同名键只改写它自己那份副本", async (t) => {
   const mgr = new PluginManager(pluginRuntimeConfig(config), silentLogger(), {
     dataRoot: join(config.dataDir, "plugins"),
     ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
   });
   await mgr.loadAll();
   assert.deepEqual(

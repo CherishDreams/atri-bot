@@ -32,6 +32,8 @@ import {
   ensurePrivateFile,
   providersFilePath,
   readConfigFile,
+  readConfigFileAt,
+  writeConfigFileAt,
 } from "./config/file.ts";
 import type { ProvidersFileConfig, ProviderSourceEntryConfig } from "./config/file.ts";
 import {
@@ -44,6 +46,7 @@ import {
   profilesRoot,
   providerShapeKeysIn,
   readProfileConfig,
+  removeProfileDir,
   runShapeKeysIn,
   seedProfile,
   setProfilePluginEnabled,
@@ -345,8 +348,8 @@ export async function createApp(config: AppConfig) {
 
   /**
    * 读一份配置档并**只构造**它的对象图，不登记、不加载插件。
-   * 单独成一步是 `POST /profiles/{id}/reload` 的前提：它要先建好**新的**一份，
-   * 换掉 Map 里那一条，之后才卸载旧的 —— 在途的那轮对话继续用旧对象图走完。
+   * `openProfile` 先用它建好、成功之后才登记，失败时只留一条 `failed` 记录 ——
+   * 这样一个半截的对象图不会先出现在 Maps 里。
    * 读文件或校验不过时抛，调用方决定记成 `failed` 还是回给客户端。
    */
   async function buildBundle(id: string): Promise<ProfileBundle> {
@@ -389,6 +392,10 @@ export async function createApp(config: AppConfig) {
       // 「建插件数据目录并收到 0700」也走注入：`plugins/` 只依赖注入给它的 ctx，
       // 不去 import `config/` 里那个会动文件系统的实现。与上面 `persistEnabled` 同一形状。
       ensurePrivateDir,
+      // 插件自己的 `config.json` 的读与写。同样注入：这一层只负责「配置属于谁」，
+      // 原子写与 0600 的细节留在 `config/file.ts` 一处。
+      readConfigFileAt,
+      writeConfigFileAt,
     });
     for (const tool of createBuiltinTools({
       // **在装配处投影**，而不是把 `plugins.list()` 直接递过去：那份是 `PluginView`，
@@ -505,28 +512,12 @@ export async function createApp(config: AppConfig) {
     async create(id, name) {
       assertProfileId(id);
       const path = profileConfigPath(profilesDir, id);
-      if (existsSync(path)) throw new Error(`配置档「${id}」已经存在`);
-      // 先落盘再建对象图：崩在中间的话文件在那儿、档是 failed，操作者看得见并可重载；
+      if (existsSync(path)) throw new Error(`配置「${id}」已经存在`);
+      // 先落盘再建对象图：崩在中间的话文件在那儿、档是 failed，操作者看得见；
       // 反过来的话一个没人知道的内存对象会先存在过。
       writeProfileConfig(path, name === undefined ? {} : { name });
       const bundle = await openProfile(id);
-      if (!bundle) throw new Error(`配置档「${id}」已创建，但加载失败：${states.get(id)?.error}`);
-      return recordOf(id);
-    },
-    async rename(id, name) {
-      assertProfileId(id);
-      const path = profileConfigPath(profilesDir, id);
-      const profile = readProfileConfig(path);
-      profile.name = name;
-      writeProfileConfig(path, profile);
-      const bundle = bundles.get(id);
-      if (bundle) {
-        bundle.name = name;
-        states.set(id, readyState(bundle));
-      } else {
-        const state = states.get(id);
-        if (state) states.set(id, { ...state, name });
-      }
+      if (!bundle) throw new Error(`配置「${id}」已创建，但加载失败：${states.get(id)?.error}`);
       return recordOf(id);
     },
     /**
@@ -534,14 +525,14 @@ export async function createApp(config: AppConfig) {
      *
      * 先验「这个实例在全局清单里存在」再落盘：让它指着一个不存在的 id，症状不是报错而是
      * 每条消息静默落到注册表的回退上 —— 界面显示你选了 A，回的却是全局默认那个。
-     * 与 `rename` 一样**先落盘再动内存**，那样一次写失败留下的是自洽的状态。
+     * **先落盘再动内存**，那样一次写失败留下的是自洽的状态。
      */
     async setDefaultProvider(id, providerId) {
       assertProfileId(id);
-      if (!states.has(id)) throw new ApiError(`没有这份配置档: ${id}`, 404);
+      if (!states.has(id)) throw new ApiError(`没有这份配置: ${id}`, 404);
       if (providerId !== null && providerConfig.getProvider(providerId) === null) {
         throw new ApiError(
-          `全局供应商清单里没有 provider「${providerId}」，不能把它设成这份配置档的默认`,
+          `全局供应商清单里没有 provider「${providerId}」，不能把它设成这份配置的默认`,
           400,
         );
       }
@@ -574,8 +565,8 @@ export async function createApp(config: AppConfig) {
      *   插件并自己落盘，绕过它写文件会得到「文件说开了、运行态没跑」。它可能中途失败
      *   （`setup()` 抛错），那时前面几颗已经生效 —— 那种时刻如实回 `failed[]`。
      *
-     * 被否掉的两种做法，写下来免得被重新发明：**① 写完调 `reload(id)`** —— 那会重建
-     * 整张对象图、给每颗插件重新求值（带 cache-busting 的 import）并把正在跑的插件
+     * 被否掉的两种做法，写下来免得被重新发明：**① 写完重建整张对象图**（`buildBundle`）
+     * —— 那会给每颗插件重新求值（带 cache-busting 的 import）并把正在跑的插件
      * `unloadAll()`，代价远大于逐颗 `setEnabled`；**② 因为这份档占着某个会话就拒绝保存**
      * —— 与 `remove()` 不同，这里什么都不拆：`tools` 与 `maxToolSteps` 是**每轮现读**
      *（`AgentEngine.#declaredTools` / `maxSteps()`），在跑的那一轮继续用它自己那份视图，
@@ -591,12 +582,12 @@ export async function createApp(config: AppConfig) {
           );
         }
       }
-      if (!states.has(id)) throw new ApiError(`没有这份配置档: ${id}`, 404);
+      if (!states.has(id)) throw new ApiError(`没有这份配置: ${id}`, 404);
       const bundle = bundles.get(id);
       if (!bundle) {
         // failed 的档没有对象图，也就没有「这套开关属于哪张注册表」可说；
         // 原因由 `GET /profiles` 的 `error` 给操作者（那句里带绝对路径）。
-        throw new ApiError(`配置档「${id}」当前不可用，原因见 GET /profiles`, 503);
+        throw new ApiError(`配置「${id}」当前不可用，原因见 GET /profiles`, 503);
       }
 
       // 校验一次做完，并把**收窄后的值**留成局部量：下面那段读-改-写里再对
@@ -611,7 +602,7 @@ export async function createApp(config: AppConfig) {
           // 与 `setDefaultProvider` 同一句判据：让它指着一个不存在的实例，症状不是报错而是
           // 每条消息静默落到注册表的回退上 —— 界面显示你选了 A，回的却是全局默认那个。
           throw new ApiError(
-            `全局供应商清单里没有 provider「${value}」，不能把它设成这份配置档的默认`,
+            `全局供应商清单里没有 provider「${value}」，不能把它设成这份配置的默认`,
             400,
           );
         }
@@ -663,7 +654,7 @@ export async function createApp(config: AppConfig) {
       if (nextDefault !== undefined) {
         bundle.defaultProviderId = nextDefault;
         // 引擎上那份才是发消息时真正读的那一个：只改 bundle 会得到「界面已经改了，
-        // 下一条消息还是老模型」，而要等一次重载才生效这件事没有任何地方会说。
+        // 下一条消息还是老模型」。
         bundle.engine.defaultProviderId = nextDefault;
         const state = states.get(id);
         if (state) states.set(id, { ...state, defaultProviderId: nextDefault });
@@ -681,37 +672,6 @@ export async function createApp(config: AppConfig) {
       }
       return { failed };
     },
-    async reload(id) {
-      assertProfileId(id);
-      const previous = bundles.get(id);
-      let next: ProfileBundle;
-      try {
-        next = await buildBundle(id);
-      } catch (err) {
-        // 新的建不起来：**保留正在服务的那一份**，只把状态说成失败。
-        // 换上一个半截的对象图比继续用旧配置危险得多（旧的那份至少是在工作的）。
-        states.set(id, {
-          name: previous?.name ?? id,
-          status: "failed",
-          error: errorMessage(err),
-          defaultProviderId: previous?.defaultProviderId ?? null,
-        });
-        throw new Error(`配置档「${id}」重载失败，仍在使用重载前的对象图：${errorMessage(err)}`, {
-          cause: err,
-        });
-      }
-      if (previous) {
-        bundles.set(id, next);
-        states.set(id, readyState(next));
-        await previous.plugins.unloadAll();
-      } else {
-        await closeProfile(id);
-        bundles.set(id, next);
-        states.set(id, readyState(next));
-      }
-      await next.plugins.loadAll();
-      return recordOf(id);
-    },
     async remove(id) {
       assertProfileId(id);
       // 占用检查与摘除之间不能有 await：否则一次新对话可以恰好插进这两步之间，
@@ -719,6 +679,10 @@ export async function createApp(config: AppConfig) {
       // 所以这一段在单线程里不可打断 —— 与会话锁本身的正确性依赖同一条性质。
       if (lock.isInUse(id)) return false;
       await closeProfile(id);
+      // 先摘后删：`closeProfile` 里的 `unloadAll()` 会 await，失败时它会抛出，
+      // 那时磁盘必须一个字节都没动。走到这里说明服务已经不认识这份档了，
+      // 它自己的目录（config.json + plugins 数据）才跟着消失。
+      removeProfileDir(profilesDir, id);
       return true;
     },
   };

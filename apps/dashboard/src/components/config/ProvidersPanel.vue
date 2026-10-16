@@ -1,173 +1,177 @@
 <template>
-  <!-- 供应商这一类的面板：从 `views/ProviderConfig.vue` 整体搬过来的**主体**（含两栏布局
-       与两个弹窗），现在被配置工作台当「全局」分组的一项挂载。整页壳留在原文件里，
-       因为那条路由只是 redirect，不再自己渲染。 -->
-  <div class="atri-provider-config relative h-full w-full">
+  <!-- 供应商面板：从 `views/ProviderConfig.vue` 整体搬过来的**主体**（含两栏布局
+       与两个弹窗），现在由 `views/ProvidersView.vue` 挂在 `/providers` 这一项主导航下。 -->
+  <div class="atri-provider-config flex h-full w-full flex-col bg-surface md:flex-row">
     <!-- 这一页是**全局**的：供应商源与模型实例都属于部署那一份（`providers.json`），
          所以没有配置档闸门，也不需要 `?profile=`。某一档默认用清单里的哪一个，
          在 chat 顶栏那个模型选择器上改（它写的是档文件）。 -->
-    <n-layout has-sider position="absolute">
-      <n-layout-sider bordered :width="layout.navW">
-        <div class="flex items-center justify-between px-4 py-3">
-          <h2 class="text-lg font-bold text-ink">供应商源</h2>
-          <n-button text type="primary" @click="openCreate">添加供应商</n-button>
-        </div>
+    <aside
+      class="flex w-full shrink-0 flex-col border-b-1 border-line md:w-[var(--atri-nav-w)] md:border-b-0 md:border-r-1"
+    >
+      <div class="flex items-center justify-between px-4 py-3">
+        <h2 class="text-[15px] font-semibold tracking-tight text-ink">供应商源</h2>
+        <n-button text type="primary" @click="openCreate">添加供应商</n-button>
+      </div>
 
-        <div class="flex flex-col gap-2 px-4 pb-4">
+      <!--
+        窄屏是**横向一行卡片**、竖排是列表：这一页最先要看的在窄屏是表单，
+        竖着堆来源会把半屏吃掉（实测 375 下内容列只剩 143px，输入框窄到一个字一行）。
+      -->
+      <div
+        class="atri-source-list flex gap-2 overflow-x-auto px-4 pb-4 md:flex-col md:overflow-visible"
+      >
+        <!--
+            一行里有两个动作（选中 / 删除），所以外层是容器而不是按钮 —— 把删除按钮套进
+            一个 `role=button` 的容器里会变成「嵌套可交互元素」，读屏会只念外层。
+            选中那一半自己就是一个可聚焦的按钮。
+          -->
+        <div
+          v-for="source in providers.sources"
+          :key="source.id"
+          class="source-row relative w-[13rem] shrink-0 md:w-auto"
+        >
+          <button
+            type="button"
+            class="block w-full cursor-pointer rounded text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            :aria-current="source.id === providers.selectedSourceId ? 'true' : undefined"
+            @click="requestSelect(source.id)"
+          >
+            <provider-card :provider="source" :active="source.id === providers.selectedSourceId" />
+          </button>
           <!--
-              一行里有两个动作（选中 / 删除），所以外层是容器而不是按钮 —— 把删除按钮套进
-              一个 `role=button` 的容器里会变成「嵌套可交互元素」，读屏会只念外层。
-              选中那一半自己就是一个可聚焦的按钮。
-            -->
-          <div v-for="source in providers.sources" :key="source.id" class="source-row relative">
-            <button
-              type="button"
-              class="block w-full cursor-pointer rounded text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-              :aria-current="source.id === providers.selectedSourceId ? 'true' : undefined"
-              @click="requestSelect(source.id)"
-            >
-              <provider-card
-                :provider="source"
-                :active="source.id === providers.selectedSourceId"
-              />
-            </button>
-            <!--
                 以前是 `hidden … group-hover:block`：实测在屏幕上是 `display:none`、尺寸 0×0，
                 于是**触屏与键盘都删不掉一个供应商源**（hover 是鼠标专属输入）。
                 常驻可见只多一个淡灰色的字，而它换来的是这条路径人人可走。
               -->
-            <button
-              type="button"
-              class="absolute right-2 top-2 cursor-pointer rounded px-1 text-xs text-ink-faint hover:bg-tint hover:text-danger focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-              :aria-label="`删除 ${source.id}`"
-              @click.stop="askRemoveSource(source.id)"
-            >
-              删除
-            </button>
-          </div>
-
-          <n-empty
-            v-if="providers.sources.length === 0"
-            description="还没有配置供应商源"
-            size="small"
-          />
+          <button
+            type="button"
+            class="absolute right-2 top-2 cursor-pointer rounded px-1 text-xs text-ink-faint hover:bg-tint hover:text-danger focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+            :aria-label="`删除 ${source.id}`"
+            @click.stop="askRemoveSource(source.id)"
+          >
+            删除
+          </button>
         </div>
-      </n-layout-sider>
 
-      <n-layout-content class="h-full overflow-auto">
-        <n-alert v-if="providers.fileError" type="error" class="m-6" title="供应商配置文件读不出来">
-          <p>
-            下面这份清单是空的**不是因为还没有配置**，而是那个文件解析失败。修好它之前
-            任何保存都会被拒绝，否则会把里面已有的东西覆盖掉。
-          </p>
-          <p class="mt-1 break-all text-xs">{{ providers.fileError }}</p>
+        <n-empty
+          v-if="providers.sources.length === 0"
+          description="还没有配置供应商源"
+          size="small"
+        />
+      </div>
+    </aside>
+
+    <div class="min-h-0 flex-1 overflow-auto">
+      <n-alert v-if="providers.fileError" type="error" class="m-6" title="供应商配置文件读不出来">
+        <p>
+          下面这份清单是空的**不是因为还没有配置**，而是那个文件解析失败。修好它之前
+          任何保存都会被拒绝，否则会把里面已有的东西覆盖掉。
+        </p>
+        <p class="mt-1 break-all text-xs">{{ providers.fileError }}</p>
+      </n-alert>
+
+      <div v-if="!providers.selectedSource" class="p-8">
+        <n-empty description="左侧还没有可编辑的供应商源，点「添加供应商」开始" />
+      </div>
+
+      <div v-else class="mx-auto max-w-form p-6">
+        <div class="mb-4 flex items-end justify-between gap-4">
+          <div class="min-w-0">
+            <h3 class="truncate text-2xl font-bold text-ink">
+              {{ providers.selectedSource.id }}
+            </h3>
+            <p class="truncate text-sm text-ink-muted">
+              {{ providers.selectedSource.baseUrl || "默认地址" }}
+            </p>
+          </div>
+          <n-button
+            type="primary"
+            :disabled="!dirty"
+            :loading="providers.saving"
+            @click="saveDraft()"
+          >
+            保存配置
+          </n-button>
+        </div>
+
+        <!-- 服务端错误就地展示：写操作失败的原因（id 冲突、还有引用者…）
+               只有服务端知道，弹个 alert 之后就没法回看了。 -->
+        <n-alert
+          v-if="providers.error"
+          class="mb-4"
+          type="error"
+          closable
+          @close="providers.clearError()"
+        >
+          {{ providers.error }}
         </n-alert>
 
-        <div v-if="!providers.selectedSource" class="p-8">
-          <n-empty description="左侧还没有可编辑的供应商源，点「添加供应商」开始" />
-        </div>
+        <n-card class="mb-4" size="small" title="设置">
+          <n-form label-placement="top">
+            <n-form-item label="ID" :feedback="'供应商源唯一 ID（不是模型 ID），创建后不可修改'">
+              <n-input :value="draft.id" disabled />
+            </n-form-item>
 
-        <div v-else class="mx-auto max-w-form p-6">
-          <div class="mb-4 flex items-end justify-between gap-4">
-            <div class="min-w-0">
-              <h3 class="truncate text-2xl font-bold text-ink">
-                {{ providers.selectedSource.id }}
-              </h3>
-              <p class="truncate text-sm text-ink-muted">
-                {{ providers.selectedSource.baseUrl || "默认地址" }}
-              </p>
-            </div>
-            <n-button
-              type="primary"
-              :disabled="!dirty"
-              :loading="providers.saving"
-              @click="saveDraft()"
-            >
-              保存配置
-            </n-button>
-          </div>
+            <n-form-item label="名称">
+              <n-input v-model:value="draft.name" placeholder="显示用名称" />
+            </n-form-item>
 
-          <!-- 服务端错误就地展示：写操作失败的原因（id 冲突、还有引用者…）
-               只有服务端知道，弹个 alert 之后就没法回看了。 -->
-          <n-alert
-            v-if="providers.error"
-            class="mb-4"
-            type="error"
-            closable
-            @close="providers.clearError()"
-          >
-            {{ providers.error }}
-          </n-alert>
+            <n-form-item label="实现类型">
+              <n-select v-model:value="draft.type" :options="typeOptions" />
+            </n-form-item>
 
-          <n-card class="mb-4" size="small" title="设置">
-            <n-form label-placement="top">
-              <n-form-item label="ID" :feedback="'供应商源唯一 ID（不是模型 ID），创建后不可修改'">
-                <n-input :value="draft.id" disabled />
-              </n-form-item>
+            <n-form-item label="Base URL">
+              <n-input
+                v-model:value="draft.baseUrl"
+                placeholder="留空用默认地址，如 https://api.deepseek.com/v1"
+              />
+            </n-form-item>
 
-              <n-form-item label="名称">
-                <n-input v-model:value="draft.name" placeholder="显示用名称" />
-              </n-form-item>
-
-              <n-form-item label="实现类型">
-                <n-select v-model:value="draft.type" :options="typeOptions" />
-              </n-form-item>
-
-              <n-form-item label="Base URL">
-                <n-input
-                  v-model:value="draft.baseUrl"
-                  placeholder="留空用默认地址，如 https://api.deepseek.com/v1"
-                />
-              </n-form-item>
-
-              <!-- 明文显示是有意为之（与 AstrBot 一致）：这是管理员自己的配置页，
+            <!-- 明文显示是有意为之（与 AstrBot 一致）：这是管理员自己的供应商页，
                    掩码只会让人没法核对到底填进去的是什么。 -->
-              <n-form-item label="API Key" :feedback="'明文显示；留空则不发鉴权头'">
-                <n-input v-model:value="draft.apiKey" placeholder="sk-..." />
-              </n-form-item>
+            <n-form-item label="API Key" :feedback="'明文显示；留空则不发鉴权头'">
+              <n-input v-model:value="draft.apiKey" placeholder="sk-..." />
+            </n-form-item>
 
-              <n-form-item label="超时时间（毫秒）">
-                <n-input-number
-                  v-model:value="draft.timeoutMs"
-                  :min="MIN_TIMEOUT_MS"
-                  :max="MAX_TIMEOUT_MS"
-                  :step="1000"
-                  class="w-full"
-                />
-              </n-form-item>
-            </n-form>
-          </n-card>
+            <n-form-item label="超时时间（毫秒）">
+              <n-input-number
+                v-model:value="draft.timeoutMs"
+                :min="MIN_TIMEOUT_MS"
+                :max="MAX_TIMEOUT_MS"
+                :step="1000"
+                class="w-full"
+              />
+            </n-form-item>
+          </n-form>
+        </n-card>
 
-          <n-card class="mb-4" size="small">
-            <template #header>
-              <div class="flex items-center justify-between">
-                <span>可用模型</span>
-                <div class="flex gap-2">
-                  <n-button size="small" @click="openCustomModel">自定义模型</n-button>
-                  <n-button
-                    size="small"
-                    type="primary"
-                    :loading="providers.loadingModels"
-                    @click="onFetchModels()"
-                  >
-                    {{ dirty ? "保存并获取模型列表" : "获取模型列表" }}
-                  </n-button>
-                </div>
+        <n-card class="mb-4" size="small">
+          <template #header>
+            <div class="flex items-center justify-between">
+              <span>可用模型</span>
+              <div class="flex gap-2">
+                <n-button size="small" @click="openCustomModel">自定义模型</n-button>
+                <n-button
+                  size="small"
+                  type="primary"
+                  :loading="providers.loadingModels"
+                  @click="onFetchModels()"
+                >
+                  {{ dirty ? "保存并获取模型列表" : "获取模型列表" }}
+                </n-button>
               </div>
-            </template>
+            </div>
+          </template>
 
-            <n-spin :show="providers.loadingModels">
-              <div
-                v-if="providers.availableModels.length === 0"
-                class="py-2 text-sm text-ink-muted"
-              >
-                点「获取模型列表」从上游拉取；该网关没有 /models 接口时用「自定义模型」手填。
+          <n-spin :show="providers.loadingModels">
+            <div v-if="providers.availableModels.length === 0" class="py-2 text-sm text-ink-muted">
+              点「获取模型列表」从上游拉取；该网关没有 /models 接口时用「自定义模型」手填。
+            </div>
+            <div v-else class="flex flex-col">
+              <div class="mb-2 text-sm text-ink-muted">
+                共 {{ providers.availableModels.length }} 个，点击即可添加
               </div>
-              <div v-else class="flex flex-col">
-                <div class="mb-2 text-sm text-ink-muted">
-                  共 {{ providers.availableModels.length }} 个，点击即可添加
-                </div>
-                <!--
+              <!--
                   封顶高度 + 内部滚动：OpenAI 兼容网关的 /models 动辄几百条，
                   不封顶的话这张卡片会把整页撑到看不见下面的「已配置的模型」。
 
@@ -177,67 +181,66 @@
                   于是 143 个按钮被等比压进 288px，只剩 py-1 的上下 padding——
                   实测每项正好 8px、文字全被截掉。
                 -->
-                <div class="flex max-h-[18rem] flex-col overflow-y-auto">
-                  <button
-                    v-for="model in providers.availableModels"
-                    :key="model"
-                    type="button"
-                    class="row-base shrink-0 truncate px-2 py-1 text-left text-sm"
-                    @click="providers.addModel(model)"
-                  >
-                    {{ model }}
-                  </button>
-                </div>
-              </div>
-            </n-spin>
-          </n-card>
-
-          <n-card size="small" :title="`已配置的模型（${modelsOfSource.length}）`">
-            <div v-if="modelsOfSource.length === 0" class="py-2 text-sm text-ink-muted">
-              暂无已配置的模型，点击上方的「获取模型列表」添加
-            </div>
-            <div v-else class="flex flex-col gap-2">
-              <div
-                v-for="entry in modelsOfSource"
-                :key="entry.id"
-                class="flex items-center gap-3 rounded-lg border-1 border-line px-3 py-2"
-              >
-                <n-switch
-                  :value="entry.enabled !== false"
-                  size="small"
-                  @update:value="(on: boolean) => providers.setModelEnabled(entry.id, on)"
-                />
-                <div class="min-w-0 flex-1">
-                  <div class="truncate font-medium">
-                    {{ entry.model ?? entry.id }}
-                    <n-tag v-if="entry.default" class="ml-2" size="tiny" type="success"
-                      >全局默认</n-tag
-                    >
-                    <n-tag v-if="entry.loaded === false" class="ml-2" size="tiny" type="error">
-                      加载失败
-                    </n-tag>
-                  </div>
-                  <div class="truncate text-xs text-ink-muted">{{ entry.id }}</div>
-                  <!-- 加载失败的原因必须露出来：只显示一个红标签，用户不知道去改哪里。 -->
-                  <div v-if="entry.error" class="mt-1 text-xs text-danger">
-                    {{ entry.error }}
-                  </div>
-                </div>
-                <n-button
-                  v-if="!entry.default"
-                  text
-                  size="small"
-                  @click="providers.setDefaultModel(entry.id)"
+              <div class="flex max-h-[18rem] flex-col overflow-y-auto">
+                <button
+                  v-for="model in providers.availableModels"
+                  :key="model"
+                  type="button"
+                  class="row-base shrink-0 truncate px-2 py-1 text-left text-sm"
+                  @click="providers.addModel(model)"
                 >
-                  设为全局默认
-                </n-button>
-                <n-button text size="small" @click="providers.removeModel(entry.id)">删除</n-button>
+                  {{ model }}
+                </button>
               </div>
             </div>
-          </n-card>
-        </div>
-      </n-layout-content>
-    </n-layout>
+          </n-spin>
+        </n-card>
+
+        <n-card size="small" :title="`已配置的模型（${modelsOfSource.length}）`">
+          <div v-if="modelsOfSource.length === 0" class="py-2 text-sm text-ink-muted">
+            暂无已配置的模型，点击上方的「获取模型列表」添加
+          </div>
+          <div v-else class="flex flex-col gap-2">
+            <div
+              v-for="entry in modelsOfSource"
+              :key="entry.id"
+              class="flex items-center gap-3 rounded-lg border-1 border-line px-3 py-2"
+            >
+              <n-switch
+                :value="entry.enabled !== false"
+                size="small"
+                @update:value="(on: boolean) => providers.setModelEnabled(entry.id, on)"
+              />
+              <div class="min-w-0 flex-1">
+                <div class="truncate font-medium">
+                  {{ entry.model ?? entry.id }}
+                  <n-tag v-if="entry.default" class="ml-2" size="tiny" type="success"
+                    >全局默认</n-tag
+                  >
+                  <n-tag v-if="entry.loaded === false" class="ml-2" size="tiny" type="error">
+                    加载失败
+                  </n-tag>
+                </div>
+                <div class="truncate text-xs text-ink-muted">{{ entry.id }}</div>
+                <!-- 加载失败的原因必须露出来：只显示一个红标签，用户不知道去改哪里。 -->
+                <div v-if="entry.error" class="mt-1 text-xs text-danger">
+                  {{ entry.error }}
+                </div>
+              </div>
+              <n-button
+                v-if="!entry.default"
+                text
+                size="small"
+                @click="providers.setDefaultModel(entry.id)"
+              >
+                设为全局默认
+              </n-button>
+              <n-button text size="small" @click="providers.removeModel(entry.id)">删除</n-button>
+            </div>
+          </div>
+        </n-card>
+      </div>
+    </div>
 
     <!-- 新增源。id 由前端预生成一个不冲突的建议值，改不改都行，但要过服务端校验。
          宽度只由 `w-[32rem]` 决定：原先同时写着 `class="max-w-lg"`（=32rem=512px）
@@ -308,7 +311,6 @@ import {
   PROVIDER_TYPES,
   useProvidersStore,
 } from "@/stores/providers";
-import { layout } from "@/theme/tokens";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
 const providers = useProvidersStore();

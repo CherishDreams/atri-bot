@@ -45,6 +45,13 @@ export interface Palette {
   ink: string;
   inkMuted: string;
   inkFaint: string;
+  /**
+   * 压在 primary 实心填充上的文字/图标色。
+   *
+   * 不能复用 `surface`：那一档在深色主题下会翻成接近黑的面色，而 primary 的
+   * 两套主题只差一点明度 —— 深色下会变成深底深字。主色填充上的字按语义永远是浅色。
+   */
+  onPrimary: string;
 
   /* 品牌与状态 */
   primary: ColorRamp;
@@ -62,33 +69,36 @@ export interface Palette {
   scrollbarHover: string;
 }
 
-/* 主色只在这一处定义；hover/pressed/suppl 由它向两侧明暗推，保持同一个色相。 */
-const PRIMARY = "#4f8cff";
+/* 主色只在这一处定义；hover/pressed/suppl 由它向两侧明暗推，保持同一个色相。
+ * 取靛蓝而不是「默认蓝」（`#4f8cff` 那一版）：后者在浅色底上偏亮、饱和度低，
+ * 主按钮与选中态都显得发灰；靛蓝和顶栏 logo 的蓝→紫渐变也更接得上。 */
+const PRIMARY = "#4f6bf5";
 
 const light: Palette = {
-  canvas: "#f5f6f8",
+  canvas: "#f4f6fa",
   surface: "#ffffff",
-  raised: "#f2f4f7",
-  tint: "#eceff3",
+  raised: "#f3f5f9",
+  tint: "#edf0f6",
 
-  line: "#e2e5ea",
-  lineStrong: "#cdd2da",
+  line: "#e5e9f0",
+  lineStrong: "#d4dae6",
 
-  ink: "#1c2027",
-  inkMuted: "#59616e",
-  inkFaint: "#8b93a1",
+  ink: "#151922",
+  inkMuted: "#58606e",
+  inkFaint: "#8b93a2",
+  onPrimary: "#ffffff",
 
-  primary: { base: PRIMARY, hover: "#7aa8ff", pressed: "#3b78e0", suppl: "#6ba1ff" },
-  info: { base: PRIMARY, hover: "#7aa8ff", pressed: "#3b78e0", suppl: "#6ba1ff" },
-  success: { base: "#2fa36b", hover: "#4fb883", pressed: "#22855a", suppl: "#43b07c" },
-  warning: { base: "#e8a33d", hover: "#f0b866", pressed: "#c8862a", suppl: "#eeb25e" },
-  danger: { base: "#d03050", hover: "#de576d", pressed: "#ab1f3f", suppl: "#e0607a" },
+  primary: { base: PRIMARY, hover: "#7189ff", pressed: "#3a52d9", suppl: "#6280ff" },
+  info: { base: PRIMARY, hover: "#7189ff", pressed: "#3a52d9", suppl: "#6280ff" },
+  success: { base: "#22a06b", hover: "#3bb87f", pressed: "#188559", suppl: "#2fb277" },
+  warning: { base: "#d98b1f", hover: "#e9a343", pressed: "#b7740f", suppl: "#e09a33" },
+  danger: { base: "#d92d4b", hover: "#e85a72", pressed: "#b01f39", suppl: "#e04761" },
 
-  ring: `${PRIMARY}66`,
-  primarySoft: `${PRIMARY}1a`,
+  ring: `${PRIMARY}5c`,
+  primarySoft: `${PRIMARY}14`,
 
-  scrollbar: "#00000029",
-  scrollbarHover: "#00000040",
+  scrollbar: "#0f172a24",
+  scrollbarHover: "#0f172a3d",
 };
 
 /**
@@ -97,41 +107,42 @@ const light: Palette = {
  * 外观不变——它们本来就是按这套深色设计的。
  */
 const dark: Palette = {
-  canvas: "#0f1115",
-  surface: "#171a21",
-  raised: "#222836",
-  tint: "#1d222c",
+  canvas: "#0c0e13",
+  surface: "#151920",
+  raised: "#1d2330",
+  tint: "#1a1f2a",
 
-  line: "#2b3040",
-  lineStrong: "#3a4152",
+  line: "#29303d",
+  lineStrong: "#3a4354",
 
-  ink: "#e6e8ec",
-  inkMuted: "#8b93a1",
-  inkFaint: "#6c7482",
+  ink: "#e8ebf2",
+  inkMuted: "#98a1b3",
+  inkFaint: "#6e7788",
+  onPrimary: "#ffffff",
 
-  primary: { base: PRIMARY, hover: "#7aa8ff", pressed: "#3b78e0", suppl: "#3f77d8" },
-  info: { base: PRIMARY, hover: "#7aa8ff", pressed: "#3b78e0", suppl: "#3f77d8" },
-  success: { base: "#5ed6a4", hover: "#7ee0b8", pressed: "#43b886", suppl: "#4bbd8c" },
-  warning: { base: "#f0b95f", hover: "#f5c97f", pressed: "#d29a41", suppl: "#dca54c" },
-  danger: { base: "#ff5f56", hover: "#ff8078", pressed: "#e0463f", suppl: "#f2685f" },
+  primary: { base: PRIMARY, hover: "#7b90ff", pressed: "#4056d4", suppl: "#4a63dd" },
+  info: { base: PRIMARY, hover: "#7b90ff", pressed: "#4056d4", suppl: "#4a63dd" },
+  success: { base: "#4bd39b", hover: "#6ee0b1", pressed: "#34b47f", suppl: "#3dbe88" },
+  warning: { base: "#eab255", hover: "#f2c578", pressed: "#c99637", suppl: "#d8a344" },
+  danger: { base: "#f2556b", hover: "#f77a8c", pressed: "#d33a52", suppl: "#e34a60" },
 
   ring: `${PRIMARY}80`,
-  primarySoft: `${PRIMARY}26`,
+  primarySoft: `${PRIMARY}2e`,
 
-  scrollbar: "#ffffff33",
-  scrollbarHover: "#ffffff4d",
+  scrollbar: "#ffffff2e",
+  scrollbarHover: "#ffffff47",
 };
 
 export const palettes = { light, dark } as const;
 
 export type ThemeName = keyof typeof palettes;
 
-/** 圆角基准。naive-ui 默认是 3px，这里整档抬到 8px。 */
+/** 圆角基准。naive-ui 默认是 3px，这里整档抬到 8px 基准；大面（卡片/弹层）走 12–16px。 */
 export const radius = {
   sm: "6px",
   md: "8px",
   lg: "12px",
-  xl: "14px",
+  xl: "16px",
   full: "9999px",
 } as const;
 
@@ -153,19 +164,22 @@ export const font = {
 } as const;
 
 /**
- * 三层 elevation。数字沿用 naive-ui 自带阴影的结构，只是按主题调深浅——
- * 深色底上同样的黑色透明度会几乎看不见，所以深色这一组更重。
+ * 三层 elevation。
+ *
+ * 换成两层、低透明度的「环境光 + 接触阴影」：原来的三层带 12px/48px 的大扩散，
+ * 在白卡片上一圈灰雾，反而把界面压脏。深色底上同样的黑色透明度会看不见，
+ * 所以深色那一组把透明度抬到 .34–.55 并收窄扩散。
  */
 export const shadow = {
   light: {
-    sm: "0 1px 2px -2px rgba(0, 0, 0, 0.08), 0 3px 6px 0 rgba(0, 0, 0, 0.06), 0 5px 12px 4px rgba(0, 0, 0, 0.04)",
-    md: "0 5px 5px -3px rgba(0, 0, 0, 0.16), 0 8px 10px 1px rgba(0, 0, 0, 0.12), 0 3px 14px 2px rgba(0, 0, 0, 0.08)",
-    lg: "0 6px 16px -9px rgba(0, 0, 0, 0.12), 0 9px 28px 0 rgba(0, 0, 0, 0.08), 0 12px 48px 16px rgba(0, 0, 0, 0.05)",
+    sm: "0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06)",
+    md: "0 4px 10px -2px rgba(15, 23, 42, 0.08), 0 12px 28px -8px rgba(15, 23, 42, 0.1)",
+    lg: "0 12px 32px -8px rgba(15, 23, 42, 0.16), 0 24px 64px -24px rgba(15, 23, 42, 0.22)",
   },
   dark: {
-    sm: "0 1px 2px -2px rgba(0, 0, 0, 0.4), 0 3px 6px 0 rgba(0, 0, 0, 0.32), 0 5px 12px 4px rgba(0, 0, 0, 0.28)",
-    md: "0 5px 5px -3px rgba(0, 0, 0, 0.5), 0 8px 10px 1px rgba(0, 0, 0, 0.42), 0 3px 14px 2px rgba(0, 0, 0, 0.34)",
-    lg: "0 6px 16px -9px rgba(0, 0, 0, 0.56), 0 9px 28px 0 rgba(0, 0, 0, 0.46), 0 12px 48px 16px rgba(0, 0, 0, 0.36)",
+    sm: "0 1px 2px rgba(0, 0, 0, 0.34), 0 1px 3px rgba(0, 0, 0, 0.28)",
+    md: "0 4px 12px -2px rgba(0, 0, 0, 0.46), 0 16px 32px -12px rgba(0, 0, 0, 0.4)",
+    lg: "0 16px 40px -10px rgba(0, 0, 0, 0.55), 0 32px 72px -24px rgba(0, 0, 0, 0.5)",
   },
 } as const;
 

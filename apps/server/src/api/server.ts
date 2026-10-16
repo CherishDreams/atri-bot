@@ -185,7 +185,7 @@ export function createHttpServer(deps: HttpDeps) {
   function scopedProfile(req: IncomingMessage, res: ServerResponse): ProfileBundle | null {
     const id = searchOf(req).get("profile");
     if (id === null || id === "") {
-      sendError(res, 400, "缺少 profile 参数（要操作哪一份配置档）");
+      sendError(res, 400, "缺少 profile 参数（要操作哪一份配置）");
       return null;
     }
     return profileById(res, id);
@@ -204,13 +204,13 @@ export function createHttpServer(deps: HttpDeps) {
   function profileById(res: ServerResponse, id: string): ProfileBundle | null {
     const status = profiles.status(id);
     if (status === null) {
-      sendError(res, 404, `没有这份配置档: ${id}`);
+      sendError(res, 404, `没有这份配置: ${id}`);
       return null;
     }
     const bundle = profiles.get(id);
     if (bundle === null) {
       // 503 那句刻意不带原因原文：`readConfigFileAt` 的消息里躺着配置文件的绝对路径。
-      sendError(res, 503, `配置档「${id}」当前不可用，原因见 GET /profiles`);
+      sendError(res, 503, `配置「${id}」当前不可用，原因见 GET /profiles`);
       return null;
     }
     return bundle;
@@ -661,6 +661,32 @@ export function createHttpServer(deps: HttpDeps) {
     }
   });
 
+  router.get(`${API_PREFIX}/plugins/:id/config`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    try {
+      sendJson(res, 200, { config: bundle.plugins.getConfig(params.id) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
+   * 写一份插件配置。值由 `PluginManager.saveConfig` 校验并落盘；插件的重载失败
+   * **不是**保存失败 —— 文件已经写进去了，`reloadError` 单独说，界面把两件事分开显示。
+   */
+  router.post(`${API_PREFIX}/plugins/:id/config`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    const body = await readJson(req);
+    try {
+      const result = await bundle.plugins.saveConfig(params.id, body.values);
+      sendJson(res, 200, result);
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
   router.get(`${API_PREFIX}/adapters`, async (_req, res) => {
     sendJson(res, 200, { adapters: adapters.list() });
   });
@@ -714,18 +740,6 @@ export function createHttpServer(deps: HttpDeps) {
         typeof body.name === "string" ? body.name : undefined,
       );
       sendJson(res, 201, { profile: record });
-    } catch (err) {
-      fail(res, err);
-    }
-  });
-
-  router.post(`${API_PREFIX}/profiles/:id/rename`, async (req, res, params) => {
-    const body = await readJson(req);
-    if (typeof body.name !== "string" || body.name.length === 0) {
-      return sendError(res, 400, "必须提供 `name`（非空字符串）");
-    }
-    try {
-      sendJson(res, 200, { profile: await profiles.rename(params.id, body.name) });
     } catch (err) {
       fail(res, err);
     }
@@ -792,26 +806,20 @@ export function createHttpServer(deps: HttpDeps) {
     }
   });
 
-  router.post(`${API_PREFIX}/profiles/:id/reload`, async (_req, res, params) => {
-    try {
-      sendJson(res, 200, { profile: await profiles.reload(params.id) });
-    } catch (err) {
-      fail(res, err);
-    }
-  });
-
   /**
-   * 摘掉一份配置档。**不删文件、不删它的插件数据目录**（框架从不删它，
-   * 清理是操作者的 `rm -rf`），所以这里说的是「下线」而不是「删除」。
+   * 删除一份配置档：先从服务里摘掉，再删掉它的整个目录（`config.json` 与插件数据）。
+   *
+   * 顺序不可反：摘除可能失败（还被一次对话占着、插件卸载抛错），那时磁盘必须原封不动；
+   * 反过来会得到「文件没了，而运行中的对象图还在」—— 比删不掉更糟。
    */
   router.delete(`${API_PREFIX}/profiles/:id`, async (_req, res, params) => {
     try {
       if (profiles.status(params.id) === null) {
-        return sendError(res, 404, `没有这份配置档: ${params.id}`);
+        return sendError(res, 404, `没有这份配置: ${params.id}`);
       }
       const removed = await profiles.remove(params.id);
       if (!removed) {
-        return sendError(res, 409, "这个配置档正被某个会话使用，等那轮对话结束后再下线");
+        return sendError(res, 409, "这个配置正被某个会话使用，等那轮对话结束后再删除");
       }
       sendJson(res, 200, { id: params.id, removed: true });
     } catch (err) {

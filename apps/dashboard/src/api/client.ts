@@ -10,13 +10,14 @@ import {
   deleteSession as deleteSessionOp,
   fetchProviderModels as fetchProviderModelsOp,
   getProfileConfig as getProfileConfigOp,
+  getPluginConfig as getPluginConfigOp,
+  savePluginConfig as savePluginConfigOp,
   getSession as getSessionOp,
   createProfile as createProfileOp,
   deleteProfile as deleteProfileOp,
   listPlugins as listPluginsOp,
   listAdapters as listAdaptersOp,
   listProfiles as listProfilesOp,
-  reloadProfile as reloadProfileOp,
   saveProfileConfig as saveProfileConfigOp,
   listProviderSources as listProviderSourcesOp,
   listProviders as listProvidersOp,
@@ -25,7 +26,6 @@ import {
   login as loginOp,
   logout as logoutOp,
   me as meOp,
-  renameProfile as renameProfileOp,
   setDefaultProvider as setDefaultProviderOp,
   reloadPlugin as reloadPluginOp,
   setPluginEnabled as setPluginEnabledOp,
@@ -247,6 +247,23 @@ export async function setPluginEnabled(profile: string, id: string, enabled: boo
   return body(await setPluginEnabledOp({ path: { id }, body: { enabled }, query: { profile } }));
 }
 
+/** 读一份插件的 `_conf_schema.json` 与当前生效值；schema 坏了也能打开，原因在 `schemaError`。 */
+export async function getPluginConfig(profile: string, id: string) {
+  return body(await getPluginConfigOp({ path: { id }, query: { profile } }));
+}
+
+/**
+ * 保存插件配置。**只发改过的项**（与配置工作台同一条 diff 语义）；服务端保存后会重载插件，
+ * 重载失败不影响保存本身 —— 原因在 `reloadError` 里，两件事界面要分开说。
+ */
+export async function savePluginConfig(
+  profile: string,
+  id: string,
+  values: { key: string; value: string | number | boolean }[],
+) {
+  return body(await savePluginConfigOp({ path: { id }, body: { values }, query: { profile } }));
+}
+
 // --- 工具（function calling）-------------------------------------------------
 
 export async function listTools(profile: string) {
@@ -409,7 +426,7 @@ export type {
 } from "./generated/index.js";
 
 /**
- * 接入端列表。**只读**：`adapters` 段今天只能改 `atri.config.json`，没有写端点。
+ * 接入平台列表。**只读**：`adapters` 段今天只能改 `atri.config.json`，没有写端点。
  * `enabled` 与 `bound` 是两件事（没关掉 / 绑的档现在可用），两个都为真才真的在收流量。
  */
 export async function listAdapters() {
@@ -433,11 +450,6 @@ export async function createProfile(id: string, name?: string) {
   return body(await createProfileOp({ body: { id, ...(name === undefined ? {} : { name }) } }));
 }
 
-/** 只改显示名。**不改目录名** —— 目录一动，那份档的插件数据就跟丢了。 */
-export async function renameProfile(id: string, name: string) {
-  return body(await renameProfileOp({ path: { id }, body: { name } }));
-}
-
 /**
  * 改这份配置档默认用的 provider 实例（全局那份清单里的 id）。
  *
@@ -446,10 +458,6 @@ export async function renameProfile(id: string, name: string) {
  */
 export async function setDefaultProvider(id: string, providerId: string | null) {
   return body(await setDefaultProviderOp({ path: { id }, body: { providerId } }));
-}
-
-export async function reloadProfile(id: string) {
-  return body(await reloadProfileOp({ path: { id } }));
 }
 
 /**
@@ -475,10 +483,10 @@ export async function saveProfileConfig(id: string, patch: ProfileConfigPatch) {
 }
 
 /**
- * 下线一份配置档。409 表示它还占着某个会话（那一轮对话还没结束）。
+ * 删除一份配置。409 表示它还占着某个会话（那一轮对话还没结束）。
  *
- * 服务端**不删文件、也不删它的插件数据目录**，所以这里的「删除」是从服务里摘掉；
- * 界面上的措辞要说清，否则操作者会以为磁盘上的东西没了。
+ * 服务端连同 `profiles/<id>/` 整个目录（`config.json` 与插件数据）一起删掉，
+ * 不可恢复；被占用时那一步根本不会发生。
  */
 export async function deleteProfile(id: string) {
   return body(await deleteProfileOp({ path: { id } }));

@@ -9,24 +9,24 @@ import ConfigToolbar from "@/components/config/ConfigToolbar.vue";
 import ManageProfilesModal from "@/components/config/ManageProfilesModal.vue";
 import SaveButton from "@/components/config/SaveButton.vue";
 import UnsavedModal from "@/components/config/UnsavedModal.vue";
-import AdaptersPanel from "@/components/config/AdaptersPanel.vue";
 import DefaultModelPanel from "@/components/config/DefaultModelPanel.vue";
-import PluginTogglePanel from "@/components/config/PluginTogglePanel.vue";
-import ProvidersPanel from "@/components/config/ProvidersPanel.vue";
 import RuntimePanel from "@/components/config/RuntimePanel.vue";
 import ToolListPanel from "@/components/config/ToolListPanel.vue";
 import { categoryOf, matches } from "@/components/config/categories";
 
 /**
- * 配置工作台（AstrBot 的「配置文件」页）。
+ * 配置文件页（`/config`，AstrBot 的「配置文件」）。
  *
- * 形状：顶部工具条（左上角是当前配置档 + 切换；右侧搜索）→ 左侧分类菜单（分「本配置档」
- * 与「全局」两组）→ 右侧这一类的配置项卡片 → 右下角浮动保存键。
+ * 形状：顶部工具条（左上角是当前配置 + 切换；右侧搜索）→ 左侧分类菜单 →
+ * 右侧这一类的配置项卡片 → 右下角浮动保存键。
+ *
+ * **这里只有本档的三类**（默认模型 / 工具 / 运行参数）。供应商与接入平台是
+ * 部署级全局一份，各自是主导航里的整页 —— 见 `categories.ts` 里那段为什么不能合进来。
  *
  * ## 保存语义
  *
  * 页内编辑只改草稿（`stores/profileConfig.ts`），点「保存」才一次写回。**这是与仓库其余
- * 部分相反的**：供应商、插件重载、档重命名那些都是一改就发请求。差别不是随意的：
+ * 部分相反的**：供应商、插件页那些都是一改就发请求。差别不是随意的：
  * 那几样是「一次动作」，而这里是一组互相有关联的开关，用户需要能反悔着改完再一起确认。
  * 代价是必须把「还没保存」这件事做实 —— 脏点、保存键、离开拦截三处都要在，
  * 否则「改了但没生效」会没有任何症状。
@@ -52,20 +52,28 @@ const pendingTarget = ref<string | null>(null);
 
 const active = computed(() => categoryOf(route.query.cat));
 
+/**
+ * 上一版把供应商 / 接入平台当成工作台的「全局」分类；那时留下的链接（`?cat=providers`）
+ * 现在各自是独立页。转过去而不是让 `categoryOf` 兜底到「默认模型」—— 后者会静默把人
+ * 送到错的分类上。
+ */
+const LEGACY_CATEGORY_ROUTE: Record<string, string> = {
+  providers: "providers",
+  adapters: "adapters",
+};
+const legacyTarget = LEGACY_CATEGORY_ROUTE[String(route.query.cat ?? "")];
+if (legacyTarget !== undefined) void router.replace({ name: legacyTarget });
+
 const PANELS = {
   model: DefaultModelPanel,
   tools: ToolListPanel,
-  plugins: PluginTogglePanel,
   runtime: RuntimePanel,
-  providers: ProvidersPanel,
-  adapters: AdaptersPanel,
 } as const;
 const panel = computed(() => PANELS[active.value.key as keyof typeof PANELS]);
 
 /**
- * 左菜单里哪些分类还有命中项。搜索**只作用于「本配置档」那组**（全局那两页是完整
- * 工作台 / 只读表，不做行级过滤），所以它们永远算命中 —— 否则搜索时菜单会把它们灰掉，
- * 而点进去明明有内容。
+ * 左菜单里哪些分类还有命中项。搜索对三类都生效，且与各面板自己的过滤用同一个
+ * `matches()` —— 两处各写一遍的话，迟早出现「菜单灰着而点进去有结果」。
  */
 const matched = computed<Record<string, boolean>>(() => {
   const k = keyword.value;
@@ -73,10 +81,7 @@ const matched = computed<Record<string, boolean>>(() => {
   return {
     model: matches(k, "默认模型", "对话模型", loaded?.defaultProviderId ?? ""),
     tools: (loaded?.tools ?? []).some((t) => matches(k, t.name, t.id, t.description)),
-    plugins: (loaded?.plugins ?? []).some((p) => matches(k, p.name, p.id, p.description)),
     runtime: matches(k, "运行参数", "maxToolSteps", "单轮工具步数"),
-    providers: true,
-    adapters: true,
   };
 });
 
@@ -105,7 +110,6 @@ async function save(): Promise<boolean> {
   if (ok) {
     // 顶栏与档列表上的 `defaultProviderId` 也要跟着变，否则同一件事在界面上有两个答案。
     await profiles.refresh();
-    // 插件启停可能真的加载/卸载了一颗，运行态栏也跟着刷新。
   }
   return ok;
 }
@@ -181,17 +185,13 @@ onBeforeRouteLeave((to) => {
         于是「右侧自己滚动」失效、整页跟着滚，浮动保存键也跟着跑。本仓在别处踩过同类。
       -->
       <main class="relative min-h-0 min-w-0 flex-1">
-        <!-- 供应商是完整的两栏工作台（自己管理滚动与选中），不给它套页面内边距，
-             否则两层滚动条并排出现。 -->
-        <div v-if="active.key === 'providers'" class="h-full">
-          <providers-panel />
-        </div>
-
-        <div v-else class="h-full overflow-y-auto">
-          <div class="mx-auto max-w-[56rem] p-4 pb-20 sm:p-6 sm:pb-20">
-            <header class="mb-4">
-              <h2 class="m-0 text-xl font-bold text-ink">{{ active.label }}</h2>
-              <p class="mt-1 mb-0 text-13px leading-relaxed text-ink-muted">{{ active.hint }}</p>
+        <div class="h-full overflow-y-auto">
+          <div class="mx-auto max-w-[58rem] px-5 pt-6 pb-24 sm:px-8 sm:pt-8">
+            <header class="mb-5">
+              <h2 class="m-0 text-[22px] font-semibold tracking-tight text-ink">
+                {{ active.label }}
+              </h2>
+              <p class="mt-1.5 mb-0 text-13px leading-relaxed text-ink-muted">{{ active.hint }}</p>
             </header>
 
             <n-alert
@@ -204,46 +204,22 @@ onBeforeRouteLeave((to) => {
             >
               {{ draft.error }}
             </n-alert>
-            <!-- 上一次保存里没生效的项：同一批的其他改动已经落盘了，所以这里是
-                 「警告」而不是「错误」—— 但它必须露出来，否则用户以为全好了。 -->
-            <n-alert
-              v-if="draft.failed.length > 0"
-              type="warning"
-              class="mb-4"
-              :show-icon="false"
-              closable
-              @close="draft.failed = []"
-            >
-              这些插件没能生效（同一批里其他改动已经保存）：
-              <span v-for="f in draft.failed" :key="f.id" class="mr-2">
-                {{ f.id }}（{{ f.error }}）
-              </span>
-            </n-alert>
 
             <n-spin :show="draft.loading">
               <n-empty
                 v-if="!draft.loading && !draft.loaded"
-                description="这一份配置档当前不可用，原因见「配置档」页"
+                description="这一份配置当前不可用，原因见「管理配置」里的那一行"
               />
-              <component
-                :is="panel"
-                v-else
-                v-bind="active.scope === 'profile' ? { keyword } : {}"
-              />
+              <component :is="panel" v-else :keyword="keyword" />
             </n-spin>
           </div>
         </div>
       </main>
     </div>
 
-    <!-- 全局分类的写是即时的（供应商自己那些按钮），所以浮动保存键只在档级分类上出现：
-         否则用户会以为供应商那边的改动也要按它。 -->
-    <save-button
-      v-if="active.scope === 'profile'"
-      :dirty="draft.dirty"
-      :saving="draft.saving"
-      @save="save"
-    />
+    <!-- 三类都是「先改草稿、再统一保存」，所以保存键常驻。供应商那边是另一个页面、
+         即时生效，不会让人在两套写入语义之间猜。 -->
+    <save-button :dirty="draft.dirty" :saving="draft.saving" @save="save" />
 
     <unsaved-modal
       v-model:show="unsavedOpen"

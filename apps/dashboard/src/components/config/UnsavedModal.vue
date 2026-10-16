@@ -28,7 +28,7 @@ const emit = defineEmits<{
     @update:show="(value: boolean) => emit('update:show', value)"
   >
     <p class="m-0 text-sm leading-relaxed text-ink-muted">
-      这一份配置档里有改动还没写进文件。离开之后这些改动会丢；想让它们生效，先保存。
+      这一份配置里有改动还没写进文件。离开之后这些改动会丢；想让它们生效，先保存。
     </p>
     <n-alert v-if="error" type="error" class="mt-3" :show-icon="false">
       {{ error }}

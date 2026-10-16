@@ -38,7 +38,7 @@ watch(open, (v) => {
 
 const currentName = computed(() => {
   const row = profiles.profiles.find((p) => p.id === props.current);
-  return row?.name ?? props.current ?? "选择配置档";
+  return row?.name ?? props.current ?? "选择配置";
 });
 
 const filtered = computed<ProfileRecord[]>(() => {
@@ -72,7 +72,7 @@ function manage(): void {
         v-model:value="keyword"
         size="small"
         clearable
-        placeholder="搜索配置档"
+        placeholder="搜索配置"
       />
       <div class="mt-1 max-h-[16rem] overflow-y-auto">
         <button
@@ -94,9 +94,7 @@ function manage(): void {
             <component :is="CheckIcon" />
           </span>
         </button>
-        <p v-if="filtered.length === 0" class="px-2 py-3 text-sm text-ink-muted">
-          没有匹配的配置档
-        </p>
+        <p v-if="filtered.length === 0" class="px-2 py-3 text-sm text-ink-muted">没有匹配的配置</p>
       </div>
       <n-divider class="my-2!" />
       <button
@@ -105,15 +103,15 @@ function manage(): void {
         @click="manage"
       >
         <component :is="icon('settings')" />
-        管理配置档…
+        管理配置…
       </button>
     </div>
 
     <template #trigger>
       <button
         type="button"
-        class="atri-profile-switcher flex min-w-0 max-w-[16rem] cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left hover:bg-tint"
-        :title="dirty ? '有未保存的改动' : `当前配置档：${currentName}`"
+        class="atri-profile-switcher flex min-w-0 max-w-[16rem] cursor-pointer items-center gap-1.5 rounded-lg border-1 border-line bg-raised px-2 py-1.5 text-left transition-colors hover:bg-tint"
+        :title="dirty ? '有未保存的改动' : `当前配置：${currentName}`"
       >
         <!-- 脏点：切换器是「我改的是谁」的锚点，未保存时它也得能看出来。 -->
         <span v-if="dirty" class="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"></span>

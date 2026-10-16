@@ -34,6 +34,7 @@ function colorLines(p: Palette): string[] {
     "ink",
     "inkMuted",
     "inkFaint",
+    "onPrimary",
     "ring",
     "primarySoft",
     "scrollbar",

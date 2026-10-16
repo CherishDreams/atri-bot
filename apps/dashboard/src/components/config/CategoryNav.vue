@@ -1,22 +1,20 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import { icon } from "@/components/shared/icons";
 import type { Category } from "./categories";
-import { GLOBAL_CATEGORIES, PROFILE_CATEGORIES } from "./categories";
+import { CATEGORIES } from "./categories";
 
 /**
- * 左侧分类菜单：**分两组**（这一档 / 全局）。
+ * 左侧分类菜单：**一份平铺列表**，只装本配置档的三类。
  *
- * 分组不是排版偏好，而是本仓的一条真界：供应商里是密钥与端点（部署级，改一次每档生效），
- * 工具/插件/步数/档默认属于那一跑法。混成一个平铺列表，症状是有人以为「在这一档改了
- * 供应商，另一档不受影响」—— 而它立刻就生效到了所有档上。
+ * 供应商与接入平台不在这里，也不是「另一组」—— 它们是部署级全局一份，各自是主导航里的
+ * 整页。曾经把两者塞进本菜单的「全局」分组，症状是左上角写着当前档名，而那一项改的
+ * 东西立刻影响所有档；分组标签挡不住这种误读，只有「它不在这一页」能挡住。
  *
  * 窄屏变成一条**可换行**的横向 chip 行：bot 布局的侧栏在 ≤768px 已经收进抽屉，
  * 再竖着排一列分类会把内容区挤没（375 视口下连一个开关都放不下）。
  *
- * 这里曾经是 `overflow-x-auto` 的单行：六项合计约 558px，375 视口下「供应商」「接入端」
- * 两个 chip 落在屏幕外，而手机上没有可见的滚动条提示 —— 等于点不到。改成换行后
- * 两组各占一行（组标签在窄屏本就隐藏），代价是多出约 20px 高。
+ * 这里曾经是 `overflow-x-auto` 的单行：六项合计约 558px，375 视口下末尾两个 chip
+ * 落在屏幕外，而手机上没有任何滚动条提示 —— 等于点不到。改成换行后按顺序折成两行。
  */
 defineProps<{
   active: string;
@@ -24,11 +22,6 @@ defineProps<{
   matched: Record<string, boolean>;
 }>();
 const emit = defineEmits<{ (e: "select", key: string): void }>();
-
-const groups = computed(() => [
-  { key: "profile", label: "本配置档", items: PROFILE_CATEGORIES },
-  { key: "global", label: "全局", items: GLOBAL_CATEGORIES },
-]);
 
 /**
  * 一条分类的类名。
@@ -38,8 +31,10 @@ const groups = computed(() => [
  * 一小块参差的药丸（「菜单长度不一」）。横向 chip 行（<sm）**不能**加它：
  * 那里父级是 `flex` + `shrink-0`，`w-full` 会让每个 chip 各占满整行。
  *
- * 窄屏的 `px-2` 也是量出来的：`px-3` 时四个档级 chip 合计 360px，而 375 视口的内宽
- * 只有 359px —— 差 1px 就换行，会单独掉下来一个「运行参数」。
+ * 窄屏的 `px-2` 是上一版量出来的：四个档级 chip 在 `px-3` 下合计 360px，而 375 视口
+ * 的内宽只有 359px —— 差 1px 就换行，会单独掉下来一个「运行参数」。插件分类搬到
+ * `/plugins` 之后只剩三个 chip，余量更宽了，但内边距不跟着放大：留着它是为了下次
+ * 再加分类时不必先撞一次换行。
  *
  * `cursor-pointer`：`<button>` 在浏览器里默认是箭头（实测 `cursor: default`），
  * 本仓其余可点行（`row-base`）都显式写了它，这里漏了。
@@ -47,10 +42,10 @@ const groups = computed(() => [
 function buttonClass(category: Category, active: string, matched: boolean): string[] {
   const isActive = category.key === active;
   return [
-    "atri-category-item flex shrink-0 cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors sm:w-full sm:px-3",
+    "atri-category-item flex shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors sm:w-full sm:rounded-l-none sm:border-l-2 sm:px-3",
     isActive
-      ? "bg-primary-soft font-medium text-primary"
-      : "text-ink-muted hover:bg-tint hover:text-ink",
+      ? "bg-primary-soft font-medium text-primary sm:border-primary"
+      : "text-ink-muted hover:bg-tint hover:text-ink sm:border-transparent",
     matched ? "" : "opacity-50",
   ].filter(Boolean) as string[];
 }
@@ -58,29 +53,20 @@ function buttonClass(category: Category, active: string, matched: boolean): stri
 
 <template>
   <nav
-    class="atri-category-nav flex shrink-0 flex-wrap gap-1 border-b-1 border-line bg-surface p-2 sm:block sm:w-[13rem] sm:border-b-0 sm:border-r-1 sm:p-3"
+    class="atri-category-nav flex shrink-0 flex-wrap gap-1 border-b-1 border-line bg-surface p-2 sm:block sm:w-[13rem] sm:border-b-0 sm:border-r-1 sm:px-3 sm:py-4"
     aria-label="配置分类"
   >
-    <div
-      v-for="group in groups"
-      :key="group.key"
-      class="flex w-full flex-wrap gap-1 sm:mb-4 sm:block"
+    <button
+      v-for="category in CATEGORIES"
+      :key="category.key"
+      type="button"
+      :class="buttonClass(category, active, matched[category.key] !== false)"
+      :aria-current="category.key === active ? 'page' : undefined"
+      :title="category.hint"
+      @click="emit('select', category.key)"
     >
-      <div class="hidden px-3 pb-1 text-xs font-medium text-ink-faint sm:block">
-        {{ group.label }}
-      </div>
-      <button
-        v-for="category in group.items"
-        :key="category.key"
-        type="button"
-        :class="buttonClass(category, active, matched[category.key] !== false)"
-        :aria-current="category.key === active ? 'page' : undefined"
-        :title="category.hint"
-        @click="emit('select', category.key)"
-      >
-        <component :is="icon(category.icon)" />
-        <span class="whitespace-nowrap">{{ category.label }}</span>
-      </button>
-    </div>
+      <component :is="icon(category.icon)" />
+      <span class="whitespace-nowrap">{{ category.label }}</span>
+    </button>
   </nav>
 </template>

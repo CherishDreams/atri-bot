@@ -84,10 +84,8 @@ const ORDER = [
   "me",
   "listProfiles",
   "createProfile",
-  "renameProfile",
   "getProfileConfig",
   "saveProfileConfig",
-  "reloadProfile",
   "listProviderSources",
   "createProviderSource",
   "updateProviderSource",
@@ -104,6 +102,8 @@ const ORDER = [
   "listPlugins",
   "reloadPlugin",
   "setPluginEnabled",
+  "getPluginConfig",
+  "savePluginConfig",
   "listAdapters",
   "listTools",
   "setToolEnabled",
@@ -271,7 +271,7 @@ function startUpstream(): Promise<{ baseUrl: string; close(): void }> {
   });
 }
 
-/** 一个最小合法插件：让 `GET /plugins` 与三个写端点有真实对象可操作。 */
+/** 一个最小合法插件：让 `GET /plugins`、三个写端点与配置端点有真实对象可操作。 */
 function writePluginFixture(pluginsRoot: string, id: string): void {
   const dir = join(pluginsRoot, id);
   mkdirSync(dir, { recursive: true });
@@ -284,6 +284,15 @@ function writePluginFixture(pluginsRoot: string, id: string): void {
       `  description: "只为检查插件响应的字段形状而存在",\n` +
       `  setup() {},\n` +
       `};\n`,
+    "utf8",
+  );
+  // 有 schema，`GET /plugins` 的 `configurable` 与两个配置端点才有真实对象可验。
+  writeFileSync(
+    join(dir, "_conf_schema.json"),
+    JSON.stringify({
+      greeting: { type: "string", description: "问候语", default: "你好" },
+      retries: { type: "int", description: "重试次数", default: 2, min: 0, max: 10 },
+    }),
     "utf8",
   );
 }
@@ -590,10 +599,7 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       ids.profileId = "guard-profile";
       return r;
     }
-    case "renameProfile":
-      return call("POST", `/profiles/${ids.profileId}/rename`, { name: "改名后的档" });
     case "getProfileConfig":
-      // 放在 rename 之后：这一条要顺带证明读回的是**此刻**的档（名字已经改过）。
       return call("GET", `/profiles/${ids.profileId}/config`);
     case "saveProfileConfig": {
       // 两样都要：`maxToolSteps` 走「省略即不动」那条 diff 语义（发整档就等于把它测漏了），
@@ -604,8 +610,6 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
         plugins: { "fixture-broken": { enabled: true } },
       });
     }
-    case "reloadProfile":
-      return call("POST", `/profiles/${ids.profileId}/reload`);
     case "deleteProfile": {
       // 自带受害者（与 `deleteSession` 同一处置）：删掉别人还要读的那份档，
       // 会让后面每条作用域化用例都拿到 404，而红因写在那条用例上。
@@ -705,6 +709,13 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       // 禁用态也交给校验器（走 `also`）：它是全规格里唯一一份 status === "disabled" 的响应。
       return { ...on, also: [off] };
     }
+    case "getPluginConfig":
+      return at("/plugins/fixture/config");
+    case "savePluginConfig":
+      // 保存会触发一次重载（与用户的保存语义一致），因此放在 enable 之后、unload 之前。
+      return call("POST", "/plugins/fixture/config", {
+        values: [{ key: "greeting", value: "形状守卫" }],
+      });
     case "unloadPlugin":
       return at("/plugins/fixture/unload");
     case "listAdapters":

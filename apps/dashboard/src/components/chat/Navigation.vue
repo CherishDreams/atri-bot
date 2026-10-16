@@ -5,9 +5,9 @@
     侧栏照样吃掉 232px，把顶栏控件挤出屏幕）。窄屏的处理已经移到 `ChatLayout` 的媒体查询里
     （收起整条侧栏），那个 prop 与它的类名就只剩误导作用，删掉而不是补一条传参。
   -->
-  <div class="atri-navigation">
+  <div class="atri-navigation p-2">
     <!-- `:value` 绑的是从路由算出来的当前项。没有它，n-menu 会自己记住「最后被点的那一项」——
-         实测点「供应商配置」URL 一步没动、高亮却亮起来了：那是一张说谎的当前项指示。 -->
+         实测点「供应商」URL 一步没动、高亮却亮起来了：那是一张说谎的当前项指示。 -->
     <n-menu :options="menuOptions" :value="activeKey" />
   </div>
 </template>
@@ -22,15 +22,14 @@ import { useProfile } from "@/composables/useProfile";
  * 中键/右键「在新标签页打开」与状态栏预览都正常），`key` 直接取路由名，
  * 高亮由 `activeKey` 从同一路由名算出。
  *
- * 以前第一项是一条 `label: "模型配置"` 的**纯文本**项：既没有链接也没有 `@update:value`，
- * 于是点它什么都不发生（实测 URL 仍是 `/chat/new`），而 n-menu 依旧把它标成选中——
- * 「点了没反应」加「高亮说你在另一页」是两种病，一句里同时得着。
- * 目的地本来就存在（bot 侧的 `providerConfig`），所以这里接上去而不是删掉这一项。
- * 文案跟着改成「供应商配置」：一个写着「模型配置」的链接把人送到「供应商配置」页，
- * 是另一种形式的说谎，而两个词在本仓指同一件事（见 `ProfileGate` 那条链的终点）。
+ * 第一项指向 `/providers`（供应商）。它曾经指向路由名 `providerConfig` —— 那个名字在
+ * 配置工作台重构时就不存在了，于是点它只会在控制台留下一条「No match for ...」而不跳转；
+ * 供应商现在是独立页，链接直接接回真实存在的路由名。
  *
- * 这一份档要跟着链接走：闸门在 `ChatLayout` 上，链接不带 `?profile=` 的话，
- * 从会话页点任何一项都会先把人退回「先选一份配置档」，刚选的档白选一次。
+ * 「创建会话」要跟着这一份配置走：闸门在 `ChatLayout` 上，链接不带 `?profile=` 的话，
+ * 从会话页点它会被守卫重新补一份（不一定是刚在用的那份）。供应商是部署级、不随配置变，
+ * 所以它不带 `?profile=`。
+ *
  * 因此 `menuOptions` 是 computed 而不是常量 —— 常量等于「setup 那一刻抓的 query」，
  * 而 profile 恰恰会在选完档的那一刻从 null 变成有值。
  */
@@ -39,13 +38,8 @@ const { profile } = useProfile();
 
 const menuOptions = computed<MenuOption[]>(() => [
   {
-    key: "providerConfig",
-    label: () =>
-      h(
-        RouterLink,
-        { to: { name: "providerConfig", query: { profile: profile.value } } },
-        { default: () => "供应商配置" },
-      ),
+    key: "providers",
+    label: () => h(RouterLink, { to: { name: "providers" } }, { default: () => "供应商" }),
   },
   {
     key: "chat-new",

@@ -156,6 +156,13 @@ export interface PluginInfo {
   status?: PluginStatus;
   /** 插件所在目录名，便于在控制台辨认。 */
   dir?: string;
+  /**
+   * 这个插件有没有可编辑的配置项（目录里有 `_conf_schema.json`）。
+   *
+   * `PluginView`（`GET /plugins` 以及重载 / 启用 / 保存配置的响应）会给出；
+   * `ctx.plugins()` 的同伴视图是另一份投影，不含这个键（与不含 `dir` / `error` 同一条规矩）。
+   */
+  configurable?: boolean;
 }
 
 /**

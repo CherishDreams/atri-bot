@@ -10,8 +10,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
+import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -21,6 +24,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Session } from "@atri/shared";
 import { createApp } from "#app.ts";
 import { configFilePath, ensurePrivateDir, providersFilePath } from "#config/file.ts";
 import {
@@ -341,7 +345,7 @@ test("端到端：首次启动把 bootstrap 的供应商收进全局 providers.j
 });
 
 /**
- * failed 的配置档必须**真的**能被下线。
+ * failed 的配置档必须**真的**能被删除。
  *
  * `closeProfile` 以前在 `bundles` 里没有条目时直接早退，而 `failed` 的档根本没有 bundle
  * （`openProfile` 的 catch 只往 `states` 写一条登记），于是那条登记永远留在目录里：
@@ -362,7 +366,9 @@ test("failed 的配置档能删掉：DELETE 之后它不再出现在列表里", 
   // 预置一份读不出来的档：先建目录再写坏 JSON（与「一份配置档坏了不拖垮别的」同一条理由 ——
   // 用 `writeProfileConfig` 就等于让被测函数替我把目录和权限都办好）。
   const profiles = profilesRoot(dataDir);
-  mkdirSync(profileDir(profiles, "broken"), { recursive: true });
+  const brokenDir = profileDir(profiles, "broken");
+  mkdirSync(join(brokenDir, "plugins", "demo"), { recursive: true });
+  writeFileSync(join(brokenDir, "plugins", "demo", "state.json"), "{}", "utf8");
   writeFileSync(profileConfigPath(profiles, "broken"), "{ 这不是 JSON", "utf8");
 
   const app = await createApp(makeTestConfig({ root, dataDir }));
@@ -407,6 +413,123 @@ test("failed 的配置档能删掉：DELETE 之后它不再出现在列表里", 
     [DEFAULT_PROFILE_ID],
     "DELETE 回 200 之后 failed 的配置档必须不再被登记",
   );
+  // 登记没了不等于盘上没了：整个目录（config.json 与插件数据）都要消失。
+  // 只摘登记不清盘的话，同名的新档会继承上一个档的插件数据。
+  assert.equal(existsSync(brokenDir), false, "DELETE 之后 profiles/<id>/ 整个目录必须被删掉");
+});
+
+/** 进入即挂住的上游：让一轮对话一直占着会话锁。 */
+async function startHoldingUpstream() {
+  let mark!: () => void;
+  const entered = new Promise<void>((resolve) => (mark = resolve));
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => (release = resolve));
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    req.resume();
+    req.on("end", async () => {
+      mark();
+      await hold;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "好" }, finish_reason: "stop" }],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const bound = server.address();
+  if (bound === null || typeof bound === "string") throw new Error("桩上游未绑定 TCP 端口");
+  return {
+    baseUrl: `http://127.0.0.1:${bound.port}/v1`,
+    entered,
+    release: () => release(),
+    stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+/**
+ * 正被一轮对话占着时，删除必须 409，且磁盘**一个字节都不动**。
+ *
+ * 删除现在是 recursive 的，所以「先摘后删」里那条失败路径比过去重要得多：
+ * 若把 `removeProfileDir` 提到占用检查之前，症状是请求回 409 而文件已经没了 ——
+ * 用户看到「删不掉」，重启之后那份配置却不见了。
+ */
+test("配置正被会话占用时：DELETE 回 409，目录原封不动", async (t) => {
+  const root = tmpRoot(t, "atri-profiles-busy-");
+  const dataDir = join(root, "data");
+  const upstream = await startHoldingUpstream();
+  const app = await createApp(
+    makeTestConfig({
+      root,
+      dataDir,
+      providers: { stub: { type: "openai", baseUrl: upstream.baseUrl, models: ["m"] } },
+    }),
+  );
+  await app.start();
+  t.after(async () => {
+    await app.stop();
+    await upstream.stop();
+  });
+  const origin = `http://127.0.0.1:${app.address().port}`;
+
+  const login = await fetch(`${origin}${API_PREFIX}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "pw" }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
+  const created = await fetch(`${origin}${API_PREFIX}/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ title: "占用" }),
+  });
+  assert.equal(created.status, 201);
+  const { session } = (await created.json()) as { session: Session };
+
+  const profiles = profilesRoot(dataDir);
+  const dir = profileDir(profiles, DEFAULT_PROFILE_ID);
+  assert.equal(
+    existsSync(profileConfigPath(profiles, DEFAULT_PROFILE_ID)),
+    true,
+    "前提：配置文件在盘上",
+  );
+
+  const inFlight = fetch(
+    `${origin}${API_PREFIX}/sessions/${session.id}/messages?profile=${DEFAULT_PROFILE_ID}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ content: "占住锁", model: "m" }),
+    },
+  );
+  await upstream.entered;
+
+  const conflict = await fetch(`${origin}${API_PREFIX}/profiles/${DEFAULT_PROFILE_ID}`, {
+    method: "DELETE",
+    headers: { cookie },
+  });
+  assert.equal(conflict.status, 409);
+  assert.equal(
+    existsSync(profileConfigPath(profiles, DEFAULT_PROFILE_ID)),
+    true,
+    "409 之后配置文件必须还在",
+  );
+
+  upstream.release();
+  const answered = await inFlight;
+  assert.equal(answered.status, 200);
+  await answered.body?.cancel();
+
+  // 锁释放后再删：这次真的删掉。
+  const removed = await fetch(`${origin}${API_PREFIX}/profiles/${DEFAULT_PROFILE_ID}`, {
+    method: "DELETE",
+    headers: { cookie },
+  });
+  assert.equal(removed.status, 200);
+  assert.equal(existsSync(dir), false, "锁释放后 DELETE 必须把整个目录删掉");
 });
 
 /**

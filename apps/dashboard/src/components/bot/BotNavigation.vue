@@ -1,5 +1,5 @@
 <template>
-  <div class="atri-bot-navigation">
+  <div class="atri-bot-navigation p-2">
     <n-menu :options="menuOptions" :value="activeKey" @update:value="onSelect" />
   </div>
 </template>
@@ -35,27 +35,34 @@ const router = useRouter();
 const { profile } = useProfile();
 
 /**
- * 不带的那一个：`profiles` 在路由表上标了 `noProfile`（它管的是「有哪些档」），
- * 给它挂一个与页面无关的档名，等于在 URL 上谎称「这一页是按档的」。
- *
- * 供应商页曾经也是 `noProfile` 的独立路由；现在它是配置工作台的「全局」分类，
- * 跟着工作台的链接走，不再单列。
+ * 不带 `?profile=` 的那几个：`providers` / `adapters` 在路由表上都标了 `noProfile` ——
+ * 它们是部署级全局一份。给它们挂一个与页面无关的档名，等于在 URL 上谎称「这一页是按档的」。
  */
-const PROFILE_ROUTES = new Set(["console", "config"]);
+const PROFILE_ROUTES = new Set(["console", "config", "plugins"]);
 
 function to(name: string) {
+  // `profile.value` 在 `noProfile` 页面（配置 / 供应商 / 接入平台）上是 null。
+  // 把 null 塞进 query 会被 vue-router 序列化成裸的 `?profile`（实测），虽然守卫
+  // 随后会补成默认档，但那条 URL 本身是坏的；没有档名时干脆不带。
   return {
     name,
-    ...(PROFILE_ROUTES.has(name) ? { query: { profile: profile.value } } : {}),
+    ...(PROFILE_ROUTES.has(name) && profile.value !== null
+      ? { query: { profile: profile.value } }
+      : {}),
   };
 }
 
 const items: { key: string; label: string; icon: IconName }[] = [
   { key: "console", label: "控制台", icon: "console" },
-  // 工具、插件、供应商、运行参数都在这一页里，侧栏因此从四项收成三项 ——
-  // 「切完档再去各个页面配」的形态到此为止（用户的原话）。
-  { key: "config", label: "配置", icon: "settings" },
-  { key: "profiles", label: "配置档", icon: "layers" },
+  // 档级的默认模型 / 工具 / 运行参数在这页里；配置本身的增删在这一页左上角
+  // 切换器的弹窗里，不单列一项。插件有自己的页面（见下一项）。
+  { key: "config", label: "配置文件", icon: "settings" },
+  // 插件页：每份档各有一套启用清单与配置值，所以链接要带 `?profile=`。
+  { key: "plugins", label: "插件", icon: "plugin" },
+  // 供应商与接入平台是**部署级**的整页，各自占一项 —— AstrBot 的「模型提供商」
+  // 「平台配置」就在主导航里这个位置。它们不属于某一份配置，所以不带 `?profile=`。
+  { key: "providers", label: "供应商", icon: "provider" },
+  { key: "adapters", label: "接入平台", icon: "chat" },
 ];
 
 const menuOptions = computed<MenuOption[]>(() =>

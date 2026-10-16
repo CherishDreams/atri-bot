@@ -227,7 +227,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
-      <div ref="scrollBox" class="scroll-y flex-1 px-4 py-3" @scroll="onScroll">
+      <div ref="scrollBox" class="scroll-y flex-1 px-4 py-5 sm:px-6" @scroll="onScroll">
         <div class="mx-auto w-full max-w-[var(--atri-reading-w)]">
           <!--
             气泡本体在 shared/MessageList 里，与 bot 控制台共用同一套渲染：
@@ -254,23 +254,26 @@ onBeforeUnmount(() => {
         {{ live === "retrying" ? "实时连接已断开，正在重连…" : "实时连接已关闭" }}
       </div>
 
-      <form class="flex gap-2 border-t-1 border-line p-3" @submit.prevent="onSend">
-        <n-input
-          v-model:value="draft"
-          type="textarea"
-          placeholder="输入消息…（Enter 发送，Shift + Enter 换行）"
-          :autosize="{ minRows: 1, maxRows: 6 }"
-          :disabled="sessions.sending"
-          @keydown.enter.exact.prevent="onSend"
-        />
-        <n-button
-          type="primary"
-          attr-type="submit"
-          :disabled="!canSend"
-          :loading="sessions.sending"
-        >
-          发送
-        </n-button>
+      <form class="border-t-1 border-line bg-surface px-4 py-3 sm:px-6" @submit.prevent="onSend">
+        <div class="mx-auto flex w-full max-w-[var(--atri-reading-w)] gap-2">
+          <n-input
+            v-model:value="draft"
+            class="min-w-0 flex-1"
+            type="textarea"
+            placeholder="输入消息…（Enter 发送，Shift + Enter 换行）"
+            :autosize="{ minRows: 1, maxRows: 6 }"
+            :disabled="sessions.sending"
+            @keydown.enter.exact.prevent="onSend"
+          />
+          <n-button
+            type="primary"
+            attr-type="submit"
+            :disabled="!canSend"
+            :loading="sessions.sending"
+          >
+            发送
+          </n-button>
+        </div>
       </form>
     </template>
   </div>

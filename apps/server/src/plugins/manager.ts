@@ -5,8 +5,19 @@ import { pathToFileURL } from "node:url";
 import type { PluginInfo, PluginStatus } from "@atri/shared";
 import type { Logger } from "#core/logger.ts";
 import type { AppConfig } from "#config/index.ts";
+import type { FileConfig } from "#config/file.ts";
 import { ApiError, errorMessage } from "#core/errors.ts";
 import { assertPluginDirName, PluginContext, type PluginContextConfig } from "./context.ts";
+import {
+  PLUGIN_CONFIG_FILE,
+  PLUGIN_SCHEMA_FILE,
+  applyPatch,
+  effectiveValues,
+  readSchema,
+  validatePatch,
+  type PluginSettingsSchema,
+  type PluginSettingsView,
+} from "./settings.ts";
 
 /**
  * 插件契约（`index.js` 默认导出）：
@@ -88,6 +99,14 @@ export interface PluginStorage {
    * 插件的 token 与缓存落在一个 0755 的目录里，且没有任何报错。
    */
   ensurePrivateDir: (dir: string) => void;
+  /**
+   * 读一份 JSON 配置（不存在 → `{}`；坏 JSON 抛）。**由组合根注入**，
+   * 与 `ensurePrivateDir` 同一条理由：`plugins/` 只依赖注入给它的东西，
+   * 不 import `config/` 的实现（那条边没有检查在守，注入让边界在签名上看得见）。
+   */
+  readConfigFileAt: (filePath: string) => FileConfig;
+  /** 原子写一份 JSON（同目录 `.tmp` → 0600 → rename），同样由组合根注入。 */
+  writeConfigFileAt: (filePath: string, config: FileConfig) => string;
 }
 
 /**
@@ -129,6 +148,8 @@ interface PluginRecord {
   status: PluginStatus;
   /** 上一次加载失败的可读原因；正常为 `null`。只给操作者，见 `#peers()` 与 `list_plugins`。 */
   error: string | null;
+  /** 插件目录里 `_conf_schema.json` 的读取结果（import 之前就读，失败记录也带着）。 */
+  settings: PluginSettingsSchema;
   meta: PluginMeta;
 }
 
@@ -266,6 +287,9 @@ export class PluginManager {
    */
   async load(pluginDir: string): Promise<PluginView> {
     const dir = resolve(pluginDir);
+    // schema 与 import 无关：插件代码坏了也照样能读出它声明了哪些配置项，
+    // 于是控制台至少能说清「这个插件本来该有哪些参数」。
+    const settings = readSchema(dir);
     // 只在我们真的拿到过一个定义之后才填它：失败记录要靠它维持对外的 id 与名字，
     // 而「导出没有 id」那种失败本来就没有 id 可维持，退回目录名才是对的。
     let declared: PluginDefinition | null = null;
@@ -318,15 +342,35 @@ export class PluginManager {
       //（起监听、登录、开定时器），跑过之后再关就得走完整的 teardown 路径，
       // 而「这份配置档没开这个插件」的第一次启动根本不该有副作用发生。
       if (this.#disabled.has(id)) {
-        const off = this.#disabledRecord(dir, plugin);
+        const off = this.#disabledRecord(dir, plugin, settings);
         this.#records.set(dir, off);
         return this.#view(off);
       }
+
+      /*
+       * 读用户配置。放在**禁用判断之后**：一份关掉的插件不该因为配置文件坏了而变成
+       * failed —— 它本来就没在跑，坏文件只影响「打开配置抽屉时显示什么」。
+       * 读在销毁旧实例之前（上面那步已经拆完了，这里只是顺序上的就近）：文件坏掉时
+       * 抛错，这一颗记为 failed，操作者可以在插件页里用表单重建（`saveConfig` 对坏文件
+       * 以 `{}` 为基底重写）。
+       */
+      let saved: FileConfig = {};
+      try {
+        saved = this.#storage.readConfigFileAt(this.#configPath(id));
+      } catch (err) {
+        throw new ApiError(`插件「${id}」的配置文件读不出来：${errorMessage(err)}`, 400, {
+          cause: err,
+        });
+      }
+      const effective = effectiveValues(settings.fields, saved);
 
       const ctx = new PluginContext({
         id,
         logger: this.logger,
         config: { ...this.#configForPlugin(), ...plugin.config },
+        // 用户值为 **schema 默认值 + config.json 里的合法值**；与上面 `config` 分开，
+        // 理由见 `PluginContextDeps.pluginConfig`。
+        pluginConfig: effective.values,
         // 传的是闭包而不是 `this.#peers()` 的结果：`load()` 是在 `loadAll()` 的循环里逐个
         // await 的，此刻后面的插件还没进 `#records`，快照会让先加载的那个永远看不见后加载的。
         plugins: () => this.#peers(),
@@ -350,6 +394,7 @@ export class PluginManager {
         ctx,
         status: "active",
         error: null,
+        settings,
         meta: {
           id,
           name: plugin.name ?? id,
@@ -364,7 +409,7 @@ export class PluginManager {
       // 而这里注定存在，握着引用比再查一次更清楚。
       return this.#view(record);
     } catch (err) {
-      this.#records.set(dir, this.#failedRecord(dir, errorMessage(err), declared));
+      this.#records.set(dir, this.#failedRecord(dir, errorMessage(err), declared, settings));
       throw err;
     }
   }
@@ -373,7 +418,12 @@ export class PluginManager {
    * 造一条失败记录。`declared` 是已经拿到的插件定义（拿到 id 之前就失败时为 `null`）：
    * 有它就把对外的 id 维持成插件自己声明的那个，`reload()` 才按控制台显示的那个 id 找得回来。
    */
-  #failedRecord(dir: string, reason: string, declared: PluginDefinition | null): PluginRecord {
+  #failedRecord(
+    dir: string,
+    reason: string,
+    declared: PluginDefinition | null,
+    settings: PluginSettingsSchema,
+  ): PluginRecord {
     const name = basename(dir);
     const id = declared?.id || name;
     return {
@@ -383,6 +433,7 @@ export class PluginManager {
       ctx: null,
       status: "failed",
       error: reason,
+      settings,
       meta: {
         id,
         name: declared?.name ?? id,
@@ -400,7 +451,11 @@ export class PluginManager {
    * `setup()`，所以没有任何东西可释放。留着定义对象的话，操作者随后点「卸载」就会把
    * `teardown()` 调给一个从没启动过的插件。
    */
-  #disabledRecord(dir: string, plugin: PluginDefinition): PluginRecord {
+  #disabledRecord(
+    dir: string,
+    plugin: PluginDefinition,
+    settings: PluginSettingsSchema,
+  ): PluginRecord {
     return {
       dir,
       id: plugin.id,
@@ -408,6 +463,7 @@ export class PluginManager {
       ctx: null,
       status: "disabled",
       error: null,
+      settings,
       meta: {
         id: plugin.id,
         name: plugin.name ?? plugin.id,
@@ -557,7 +613,127 @@ export class PluginManager {
       status: rec.status,
       enabled: rec.status === "active",
       error: rec.error,
+      // 同 id 冲突里的输家也声明了 id，但按 id 查会落到赢家身上 —— 给它一个「配置」
+      // 按钮只会改到别人。所以只有「按 id 真的找得到这一条」的记录才算可配置。
+      configurable:
+        rec.id !== null && rec.settings.present && this.#find(rec.meta.id)?.dir === rec.dir,
     };
+  }
+
+  /** 一份插件配置的当前视图：schema + 生效值 + 两类错误。 */
+  getConfig(id: string): PluginSettingsView {
+    const rec = this.#find(id);
+    if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
+    const pluginId = this.#configurableId(rec);
+
+    // schema 坏了：仍然给一个可打开的抽屉（带 schemaError），但不给半张表单。
+    if (rec.settings.error !== null) {
+      return {
+        id: pluginId,
+        configurable: true,
+        fields: [],
+        schemaError: rec.settings.error,
+        configError: null,
+      };
+    }
+
+    let saved: FileConfig = {};
+    let configError: string | null = null;
+    try {
+      saved = this.#storage.readConfigFileAt(this.#configPath(pluginId));
+    } catch (err) {
+      // 坏文件不抛给 GET：抽屉要能打开，操作者才看得见错误并重建它。
+      configError = `配置文件读不出来：${errorMessage(err)}`;
+    }
+    const effective = effectiveValues(rec.settings.fields, saved);
+    return {
+      id: pluginId,
+      configurable: true,
+      fields: rec.settings.fields.map((field) => ({
+        ...field,
+        value: effective.values[field.key] ?? field.default,
+      })),
+      schemaError: null,
+      configError: configError ?? effective.configError,
+    };
+  }
+
+  /**
+   * 保存一批配置值：**先全部校验、再写、最后重载**。
+   *
+   * 重载是必须的：插件在 `setup()` 里读 `ctx.pluginConfig`，只改文件不会让它手里的值变；
+   * 而重载失败不能回收文件 —— 操作者刚填的东西是有效的，失败的是插件自己的初始化。
+   * 返回 `reloadError` 让界面把两件事分开说。
+   */
+  async saveConfig(
+    id: string,
+    raw: unknown,
+  ): Promise<{ config: PluginSettingsView; plugin: PluginView; reloadError: string | null }> {
+    const rec = this.#find(id);
+    if (!rec) throw new ApiError(`未知插件: ${id}`, 404);
+    const pluginId = this.#configurableId(rec);
+    if (rec.settings.error !== null) {
+      throw new ApiError(
+        `插件「${pluginId}」的 ${PLUGIN_SCHEMA_FILE} 有误：${rec.settings.error}`,
+        400,
+      );
+    }
+
+    const entries = validatePatch(rec.settings.fields, raw);
+    if (entries.length === 0) {
+      return { config: this.getConfig(pluginId), plugin: this.#view(rec), reloadError: null };
+    }
+
+    const dir = join(this.#storage.dataRoot, pluginId);
+    const path = join(dir, PLUGIN_CONFIG_FILE);
+    this.#storage.ensurePrivateDir(dir);
+    let base: FileConfig = {};
+    try {
+      base = this.#storage.readConfigFileAt(path);
+    } catch {
+      // 坏文件：以表单值重建。GET 已经把 `configError` 摆在抽屉顶部，这是显式修复。
+      base = {};
+    }
+    // `applyPatch` 只覆盖声明过的键，文件里用户手写的其它键原样保留。
+    this.#storage.writeConfigFileAt(path, applyPatch(base, entries));
+
+    let reloadError: string | null = null;
+    if (rec.status === "active" || rec.status === "failed") {
+      try {
+        await this.reload(pluginId);
+      } catch (err) {
+        reloadError = errorMessage(err);
+      }
+    }
+
+    const fresh = this.#find(pluginId) ?? rec;
+    return {
+      config: this.getConfig(pluginId),
+      plugin: this.#view(fresh),
+      reloadError,
+    };
+  }
+
+  /**
+   * 配置端点共用的两条前提：能按 id 找回来的记录 + 真的有 schema。
+   *
+   * 返回 id 而不是 `void`：调用方随后要拿它拼路径，`rec.id` 在函数外又变回
+   * `string | null`，再写一次判空就会多一个「理论上不可能」的分支。
+   */
+  #configurableId(rec: PluginRecord): string {
+    if (rec.id === null) {
+      throw new ApiError(`插件「${rec.meta.id}」没有成功声明 id，无法定位它的配置`, 400);
+    }
+    if (!rec.settings.present) {
+      throw new ApiError(`插件「${rec.id}」没有声明配置项（缺少 ${PLUGIN_SCHEMA_FILE}）`, 400);
+    }
+    return rec.id;
+  }
+
+  /** `<dataRoot>/<pluginId>/config.json`。id 在加载时已过 `assertPluginDirName`，这里再挡一次路径。 */
+  #configPath(id: string): string {
+    assertPluginDirName(id);
+    return join(this.#storage.dataRoot, id, PLUGIN_CONFIG_FILE);
   }
 
   /**

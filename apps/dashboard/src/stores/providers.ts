@@ -99,7 +99,7 @@ export const useProvidersStore = defineStore("providers", {
   state: () => ({
     sources: [] as ProviderSource[],
     providers: [] as ProviderInfo[],
-    /** 配置页左栏当前选中的源。 */
+    /** 供应商页左栏当前选中的源。 */
     selectedSourceId: null as string | null,
     /** 拉取到的可用模型（未过滤，由页面按搜索词筛）。 */
     availableModels: [] as string[],

@@ -31,6 +31,7 @@ export default defineConfig({
       ink: "var(--atri-ink)",
       "ink-muted": "var(--atri-ink-muted)",
       "ink-faint": "var(--atri-ink-faint)",
+      "on-primary": "var(--atri-on-primary)",
 
       primary: "var(--atri-primary)",
       "primary-hover": "var(--atri-primary-hover)",
@@ -90,22 +91,22 @@ export default defineConfig({
   },
   shortcuts: {
     /*
-     * 次级按钮。宽度靠 `px-2 py-1` 撑，不写死 height——
+     * 次级按钮。宽度靠 `px` 撑，不写死 height——
      * 图标按钮和文字按钮共用它，写死后者会被顶偏。
      */
     "btn-ghost":
-      "cursor-pointer rounded-md border border-line bg-raised px-2 py-1 text-xs text-ink transition-colors hover:bg-tint focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+      "cursor-pointer rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-ink transition-colors hover:bg-tint focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
     /** 卡片外壳：LoginView、NewSession、PluginPanel 三处原本各写一份。 */
-    "surface-card": "rounded-lg border border-line bg-surface shadow-sm",
+    "surface-card": "rounded-xl border border-line bg-surface shadow-sm",
 
     /** 可点行的底色变化；和 `row-active` 配对使用。 */
     "row-base":
-      "cursor-pointer rounded-md transition-colors hover:bg-tint focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+      "cursor-pointer rounded-lg transition-colors hover:bg-tint focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
     "row-active": "bg-primary-soft text-ink",
 
     /** 表单字段（LoginView 用的是原生 input，不走 naive-ui）。 */
     "field-input":
-      "w-full rounded-md border border-line-strong bg-raised px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-primary focus:ring-2 focus:ring-ring",
+      "w-full rounded-lg border border-line-strong bg-surface px-3 py-2.5 text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-primary focus:ring-2 focus:ring-ring",
 
     /** 需要内部滚动的区域：必须配 `min-h-0`，否则在 flex 里撑不满也不滚。 */
     "scroll-y": "overflow-y-auto min-h-0",

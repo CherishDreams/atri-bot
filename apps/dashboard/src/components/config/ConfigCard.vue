@@ -15,15 +15,17 @@ defineProps<{
 
 <template>
   <section
-    class="mb-4 rounded-lg border-1 border-line bg-surface px-4 py-3 last:mb-0"
+    class="mb-5 rounded-xl border-1 border-line bg-surface p-5 shadow-sm last:mb-0"
     aria-labelledby="card-title"
   >
-    <header class="mb-3">
-      <h3 id="card-title" class="m-0 text-base font-bold text-ink">{{ title }}</h3>
+    <header class="mb-4">
+      <h3 id="card-title" class="m-0 text-[15px] font-semibold tracking-tight text-ink">
+        {{ title }}
+      </h3>
       <p v-if="hint" class="mt-1 mb-0 text-13px leading-relaxed text-ink-muted">{{ hint }}</p>
     </header>
     <slot />
-    <footer v-if="$slots.footer" class="mt-3 border-t-1 border-line pt-3 text-xs text-ink-faint">
+    <footer v-if="$slots.footer" class="mt-4 border-t-1 border-line pt-3.5 text-xs text-ink-faint">
       <slot name="footer" />
     </footer>
   </section>

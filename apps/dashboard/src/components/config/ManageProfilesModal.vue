@@ -2,7 +2,7 @@
 import ProfileList from "./ProfileList.vue";
 
 /**
- * 「管理配置档」弹窗 —— AstrBot 档下拉底部那条「管理配置」的对应物。
+ * 「管理配置」弹窗 —— AstrBot 档下拉底部那条「管理配置」的对应物。
  *
  * 里面就是 `ProfileList`，与 `/profiles` 页**同一份实现**（新建 / 切到这里 / 重命名 /
  * 重载 / 下线）。共用的理由不是省代码：这五个动作的二次确认与失败配色只该有一处真源，
@@ -16,7 +16,7 @@ const emit = defineEmits<{ (e: "update:show", value: boolean): void }>();
   <n-modal
     :show="show"
     preset="card"
-    title="管理配置档"
+    title="管理配置"
     class="w-[46rem] max-w-[94vw]"
     @update:show="(value: boolean) => emit('update:show', value)"
   >

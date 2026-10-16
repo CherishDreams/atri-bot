@@ -27,10 +27,8 @@ import * as api from "../api/client.js";
 interface Draft {
   defaultProviderId: string | null;
   maxToolSteps: number;
-  /** 工具 id -> 是否启用。 */
+  /** 工具 id -> 是否启用。插件不在这里：它有自己的页面与保存语义。 */
   tools: Record<string, boolean>;
-  /** 插件 id -> 是否启用。 */
-  plugins: Record<string, boolean>;
 }
 
 function draftOf(config: ProfileConfig): Draft {
@@ -38,7 +36,6 @@ function draftOf(config: ProfileConfig): Draft {
     defaultProviderId: config.defaultProviderId,
     maxToolSteps: config.maxToolSteps,
     tools: Object.fromEntries(config.tools.map((t) => [t.id, t.enabled])),
-    plugins: Object.fromEntries(config.plugins.map((p) => [p.id, p.enabled])),
   };
 }
 
@@ -58,7 +55,6 @@ function copyDraft(draft: Draft): Draft {
     defaultProviderId: draft.defaultProviderId,
     maxToolSteps: draft.maxToolSteps,
     tools: { ...draft.tools },
-    plugins: { ...draft.plugins },
   };
 }
 
@@ -82,8 +78,6 @@ function patchOf(original: Draft, draft: Draft): ProfileConfigPatch {
   if (original.maxToolSteps !== draft.maxToolSteps) patch.maxToolSteps = draft.maxToolSteps;
   const tools = diffToggles(original.tools, draft.tools);
   if (tools) patch.tools = tools;
-  const plugins = diffToggles(original.plugins, draft.plugins);
-  if (plugins) patch.plugins = plugins;
   return patch;
 }
 
@@ -98,13 +92,6 @@ export const useProfileConfigStore = defineStore("profileConfig", {
     loading: false,
     saving: false,
     error: null as string | null,
-    /**
-     * 上一次保存里**没能生效**的插件项。
-     *
-     * 它不是错误码而是部分生效的清单：同一批里其他改动已经落盘了，所以界面必须既显示
-     * 「这些成功了」又点名「这一颗没成」，而不是回一个绿勾让人以为全好了。
-     */
-    failed: [] as { id: string; error: string }[],
   }),
 
   getters: {
@@ -124,10 +111,6 @@ export const useProfileConfigStore = defineStore("profileConfig", {
       (state) =>
       (id: string): boolean =>
         state.draft?.tools[id] ?? false,
-    pluginEnabled:
-      (state) =>
-      (id: string): boolean =>
-        state.draft?.plugins[id] ?? false,
 
     /**
      * 单项脏标记。整页只有一个「保存」键时，用户必须能看出**是哪几项**没落盘 ——
@@ -139,12 +122,6 @@ export const useProfileConfigStore = defineStore("profileConfig", {
         state.draft !== null &&
         state.original !== null &&
         state.draft.tools[id] !== state.original.tools[id],
-    pluginDirty:
-      (state) =>
-      (id: string): boolean =>
-        state.draft !== null &&
-        state.original !== null &&
-        state.draft.plugins[id] !== state.original.plugins[id],
   },
 
   actions: {
@@ -157,7 +134,6 @@ export const useProfileConfigStore = defineStore("profileConfig", {
         this.loaded = config;
         this.draft = draftOf(config);
         this.original = draftOf(config);
-        this.failed = [];
         return true;
       } catch (err) {
         this.error = (err as Error).message;
@@ -179,10 +155,6 @@ export const useProfileConfigStore = defineStore("profileConfig", {
       if (this.draft) this.draft.tools = { ...this.draft.tools, [id]: enabled };
     },
 
-    setPlugin(id: string, enabled: boolean): void {
-      if (this.draft) this.draft.plugins = { ...this.draft.plugins, [id]: enabled };
-    },
-
     /** 丢掉草稿：只在「确认放弃未保存改动」之后调用，所以它必须显式存在。 */
     discard(): void {
       if (this.original) this.draft = copyDraft(this.original);
@@ -202,12 +174,11 @@ export const useProfileConfigStore = defineStore("profileConfig", {
       this.saving = true;
       this.error = null;
       try {
-        const { config, failed } = await api.saveProfileConfig(profileId, patch);
+        const { config } = await api.saveProfileConfig(profileId, patch);
         this.loaded = config;
         this.draft = draftOf(config);
         this.original = draftOf(config);
         this.profileId = config.id;
-        this.failed = failed ?? [];
         return true;
       } catch (err) {
         this.error = (err as Error).message;
@@ -219,7 +190,6 @@ export const useProfileConfigStore = defineStore("profileConfig", {
 
     clearError(): void {
       this.error = null;
-      this.failed = [];
     },
   },
 });

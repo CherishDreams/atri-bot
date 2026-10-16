@@ -8,7 +8,7 @@ const props = defineProps<{ profile: string }>();
 
 <template>
   <section class="overflow-y-auto border-l-1 border-line bg-surface p-3">
-    <h2 class="m-0 mb-3 text-sm text-ink">插件</h2>
+    <h2 class="m-0 mb-3 px-1 text-13px font-semibold tracking-tight text-ink">插件</h2>
 
     <p v-if="plugins.error" class="m-0 mb-3 text-xs text-danger">操作失败: {{ plugins.error }}</p>
 
@@ -16,13 +16,25 @@ const props = defineProps<{ profile: string }>();
       <li
         v-for="p in plugins.plugins"
         :key="p.id"
-        class="flex flex-col gap-2 rounded-lg border-1 border-line p-2.5"
-        :class="p.status === 'active' ? '' : 'opacity-55'"
+        class="flex flex-col gap-2.5 rounded-xl border-1 border-line bg-surface p-3 shadow-sm"
+        :class="p.status === 'active' ? '' : 'opacity-60'"
       >
         <div>
-          <b class="text-ink">{{ p.name }}</b>
-          <span class="ml-1 text-xs text-ink-faint">v{{ p.version }}</span>
-          <div class="mt-0.5 text-xs text-ink-muted">{{ p.description ?? "" }}</div>
+          <div class="flex items-center gap-1.5">
+            <span
+              class="h-1.5 w-1.5 shrink-0 rounded-full"
+              :class="
+                p.status === 'active'
+                  ? 'bg-success'
+                  : p.status === 'failed'
+                    ? 'bg-danger'
+                    : 'bg-ink-faint'
+              "
+            ></span>
+            <b class="text-sm text-ink">{{ p.name }}</b>
+            <span class="text-xs text-ink-faint">v{{ p.version }}</span>
+          </div>
+          <div class="mt-1 text-xs leading-relaxed text-ink-muted">{{ p.description ?? "" }}</div>
           <!--
             三档而不是「active / 其它」两档：`failed` 是上一次加载抛错了，它既没在运行、
             也不是操作者关掉的。把 failed 显示成「已禁用」是在说「你把它关了」，

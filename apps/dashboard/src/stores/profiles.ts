@@ -68,29 +68,20 @@ export const useProfilesStore = defineStore("profiles", {
       }
     },
 
-    async rename(id: string, name: string): Promise<boolean> {
-      return this.run(() => api.renameProfile(id, name));
-    },
-
     /**
      * 改这一档默认用的 provider 实例（`null` = 取消档级默认，回到全局那一个）。
      *
-     * 与 `rename` 同一类写：动的都是这份档文件里的一个键，而清单本身在别处
-     *（`providers.json`，全局一份）。成功后一律重读列表 —— `defaultProviderId`
-     * 是服务端算出来的，本地猜不得，也**不能**先染上绿色再等回读：那一瞬间的绿
-     * 就是「界面说成功了而磁盘上不是」。
+     * 动的只是这份档文件里的一个键，而清单本身在别处（`providers.json`，全局一份）。
+     * 成功后一律重读列表 —— `defaultProviderId` 是服务端算出来的，本地猜不得，
+     * 也**不能**先染上绿色再等回读：那一瞬间的绿就是「界面说成功了而磁盘上不是」。
      */
     async setDefaultProvider(id: string, providerId: string | null): Promise<boolean> {
       return this.run(() => api.setDefaultProvider(id, providerId));
     },
 
-    async reload(id: string): Promise<boolean> {
-      return this.run(() => api.reloadProfile(id));
-    },
-
     /**
-     * 下线一份配置档。服务端**不删它的文件，也不删它的插件数据目录**，
-     * 所以措辞是「下线」而不是「删除」——界面写成删除会让人以为磁盘上的东西没了。
+     * 删除一份配置。服务端会连同 `profiles/<id>/` 整个目录（`config.json` 与插件数据）
+     * 一起删掉，不可恢复；还占着某个会话时服务端回 409，文件一个字节都不动。
      */
     async remove(id: string): Promise<boolean> {
       return this.run(() => api.deleteProfile(id));

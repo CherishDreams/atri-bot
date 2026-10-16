@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import logoUrl from "@/assets/images/logo.png";
 import { useAuthStore } from "../stores/auth.js";
 
 const auth = useAuthStore();
@@ -34,40 +35,65 @@ async function onSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div class="grid min-h-full place-items-center bg-canvas px-4 text-ink">
-    <form class="surface-card w-full max-w-[360px] p-6" @submit.prevent="onSubmit">
-      <h1 class="m-0 mb-1 text-lg text-ink">atri-bot</h1>
-      <p class="m-0 mb-5 text-xs text-ink-muted">请登录以访问控制台</p>
-
-      <label class="mb-1.5 block text-xs text-ink-muted" for="username">用户名</label>
-      <input
-        id="username"
-        v-model="username"
-        class="field-input mb-4"
-        type="text"
-        autocomplete="username"
-        required
-      />
-
-      <label class="mb-1.5 block text-xs text-ink-muted" for="password">密码</label>
-      <input
-        id="password"
-        v-model="password"
-        class="field-input mb-4"
-        type="password"
-        autocomplete="current-password"
-        required
-      />
-
-      <p v-if="error" class="m-0 mb-3 text-xs text-danger">{{ error }}</p>
-
-      <button
-        class="w-full cursor-pointer rounded-md bg-primary px-3 py-2 text-sm font-medium text-surface transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-60"
-        type="submit"
-        :disabled="submitting || auth.loading"
+  <!--
+    背景用一层极淡的主色径向光晕把视线收到卡片上，而不是铺满整屏的白。
+    光晕只出现在浅色主题下也成立：primary 变量深浅两套都有值，不写死 hex。
+  -->
+  <div class="login-stage grid min-h-full place-items-center bg-canvas px-4 py-10 text-ink">
+    <div class="w-full max-w-[400px]">
+      <form
+        class="rounded-2xl border-1 border-line bg-surface p-7 shadow-lg sm:p-8"
+        @submit.prevent="onSubmit"
       >
-        {{ submitting || auth.loading ? "登录中…" : "登录" }}
-      </button>
-    </form>
+        <img :src="logoUrl" alt="atri-bot" class="mb-6 h-8 w-auto" />
+        <h1 class="m-0 text-xl font-semibold tracking-tight text-ink">登录控制台</h1>
+        <p class="mt-1 mb-7 text-13px text-ink-muted">使用管理员账号继续。</p>
+
+        <label class="mb-1.5 block text-xs font-medium text-ink-muted" for="username">
+          用户名
+        </label>
+        <input
+          id="username"
+          v-model="username"
+          class="field-input mb-4"
+          type="text"
+          autocomplete="username"
+          required
+        />
+
+        <label class="mb-1.5 block text-xs font-medium text-ink-muted" for="password"> 密码 </label>
+        <input
+          id="password"
+          v-model="password"
+          class="field-input mb-4"
+          type="password"
+          autocomplete="current-password"
+          required
+        />
+
+        <p v-if="error" class="m-0 mb-3 text-xs text-danger">{{ error }}</p>
+
+        <button
+          class="mt-2 h-10 w-full cursor-pointer rounded-lg bg-primary px-4 text-sm font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:bg-primary-pressed disabled:cursor-wait disabled:opacity-60"
+          type="submit"
+          :disabled="submitting || auth.loading"
+        >
+          {{ submitting || auth.loading ? "登录中…" : "登录" }}
+        </button>
+      </form>
+      <p class="mt-4 text-center text-xs text-ink-faint">
+        凭据只保存在服务端，浏览器只持有 HttpOnly Cookie。
+      </p>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.login-stage {
+  background-image: radial-gradient(
+    60rem 32rem at 50% -12rem,
+    var(--atri-primary-soft),
+    transparent 70%
+  );
+}
+</style>

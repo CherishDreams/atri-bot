@@ -256,9 +256,60 @@ export type PluginInfo = {
      */
     dir?: string;
     /**
+     * 是否有可编辑的配置项（插件目录里有 `_conf_schema.json`）。`PluginView`（GET /plugins 以及重载 / 启用 / 保存配置的响应）会给出；`ctx.plugins()` 那份同伴视图不含它。
+     */
+    configurable?: boolean;
+    /**
      * 上一次加载失败的可读原因；正常时为 null。只给操作者：既不进 ctx.plugins() 的同伴视图，也不进 list_plugins 的工具结果（那是发给第三方 provider 的）。
      */
     error?: string | null;
+};
+
+export type PluginSettingField = {
+    key: string;
+    type: 'string' | 'text' | 'int' | 'float' | 'bool' | 'select';
+    description: string;
+    hint?: string;
+    default: string | number | number | boolean;
+    /**
+     * `select` 的候选项；别的类型不出现。
+     */
+    options?: Array<string>;
+    /**
+     * `int` / `float` 的下界；没写就不出现。
+     */
+    min?: number | number;
+    /**
+     * `int` / `float` 的上界；没写就不出现。
+     */
+    max?: number | number;
+    /**
+     * 生效值：schema 默认值被 `config.json` 里的合法值覆盖之后的结果。
+     */
+    value: string | number | number | boolean;
+};
+
+export type PluginSettingsView = {
+    id: string;
+    configurable: boolean;
+    fields: Array<PluginSettingField>;
+    /**
+     * `_conf_schema.json` 存在但不可用时的原因；此时 `fields` 为空，插件本身仍然在跑。
+     */
+    schemaError: string | null;
+    /**
+     * `config.json` 读不出来，或其中某些已存值无效（已按默认值显示）。
+     */
+    configError: string | null;
+};
+
+export type PluginConfigSaveResult = {
+    config: PluginSettingsView;
+    plugin: PluginInfo;
+    /**
+     * 插件重载失败的原因；null 表示已生效。失败时配置文件照样保留 —— 保存成功与插件生效是两件事。
+     */
+    reloadError: string | null;
 };
 
 export type ToolCall = {
@@ -663,7 +714,7 @@ export type DeleteSessionErrors = {
      */
     404: ApiError;
     /**
-     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
 };
@@ -766,7 +817,7 @@ export type SendMessageErrors = {
      */
     404: ApiError;
     /**
-     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
     /**
@@ -824,7 +875,7 @@ export type StreamMessageErrors = {
      */
     404: ApiError;
     /**
-     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
     /**
@@ -1381,6 +1432,116 @@ export type SetPluginEnabledResponses = {
 
 export type SetPluginEnabledResponse = SetPluginEnabledResponses[keyof SetPluginEnabledResponses];
 
+export type GetPluginConfigData = {
+    body?: never;
+    path: {
+        /**
+         * 插件 id
+         */
+        id: string;
+    };
+    query: {
+        /**
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         */
+        profile: string;
+    };
+    url: '/plugins/{id}/config';
+};
+
+export type GetPluginConfigErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type GetPluginConfigError = GetPluginConfigErrors[keyof GetPluginConfigErrors];
+
+export type GetPluginConfigResponses = {
+    /**
+     * schema 声明 + 当前生效值。schema 坏了时 `fields` 为空、原因在 `schemaError`；配置文件读不出来时值退回默认、原因在 `configError`。
+     */
+    200: {
+        config: PluginSettingsView;
+    };
+};
+
+export type GetPluginConfigResponse = GetPluginConfigResponses[keyof GetPluginConfigResponses];
+
+export type SavePluginConfigData = {
+    body: {
+        /**
+         * 只发改过的项；每一项的 key 必须是 schema 里声明过的，值必须符合它的 type / 范围 / 候选项。
+         */
+        values: Array<{
+            key: string;
+            value: string | number | number | boolean;
+        }>;
+    };
+    path: {
+        /**
+         * 插件 id
+         */
+        id: string;
+    };
+    query: {
+        /**
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         */
+        profile: string;
+    };
+    url: '/plugins/{id}/config';
+};
+
+export type SavePluginConfigErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 请求体超过 1 MB 上限
+     */
+    413: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type SavePluginConfigError = SavePluginConfigErrors[keyof SavePluginConfigErrors];
+
+export type SavePluginConfigResponses = {
+    /**
+     * 已保存。`plugin` 是保存（并尝试重载）之后的状态；重载失败时 `reloadError` 有值，而文件仍然保留 —— 保存成功与插件生效是两件事。
+     */
+    200: PluginConfigSaveResult;
+};
+
+export type SavePluginConfigResponse = SavePluginConfigResponses[keyof SavePluginConfigResponses];
+
 export type ListAdaptersData = {
     body?: never;
     path?: never;
@@ -1559,7 +1720,7 @@ export type CreateProfileErrors = {
      */
     401: ApiError;
     /**
-     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
 };
@@ -1599,7 +1760,7 @@ export type DeleteProfileErrors = {
      */
     404: ApiError;
     /**
-     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要下线的配置档还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
      */
     409: ApiError;
 };
@@ -1608,7 +1769,7 @@ export type DeleteProfileError = DeleteProfileErrors[keyof DeleteProfileErrors];
 
 export type DeleteProfileResponses = {
     /**
-     * 已从服务里摘掉。**文件与 `profiles/<id>/plugins/` 都原样留在磁盘上**：框架从不删它，清理是操作者的 `rm -rf`。
+     * 已删除。`profiles/<id>/` 整个目录（`config.json` 与它自己的插件数据）都已从磁盘移除，不可恢复。
      */
     200: {
         id: string;
@@ -1617,51 +1778,6 @@ export type DeleteProfileResponses = {
 };
 
 export type DeleteProfileResponse = DeleteProfileResponses[keyof DeleteProfileResponses];
-
-export type RenameProfileData = {
-    /**
-     * 新的显示名。**只改 `name` 键，不改目录名** —— 目录一动，那份档的插件数据就跟丢了，而 id 是 `ctx.dataDir` 的唯一坐标。
-     */
-    body: {
-        name: string;
-    };
-    path: {
-        /**
-         * 配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/profiles/{id}/rename';
-};
-
-export type RenameProfileErrors = {
-    /**
-     * 请求无效
-     */
-    400: ApiError;
-    /**
-     * 未登录或会话已失效
-     */
-    401: ApiError;
-    /**
-     * 资源不存在
-     */
-    404: ApiError;
-};
-
-export type RenameProfileError = RenameProfileErrors[keyof RenameProfileErrors];
-
-export type RenameProfileResponses = {
-    /**
-     * 改名后的配置档。
-     */
-    200: {
-        profile: ProfileRecord;
-    };
-};
-
-export type RenameProfileResponse = RenameProfileResponses[keyof RenameProfileResponses];
 
 export type GetProfileConfigData = {
     body?: never;
@@ -1795,43 +1911,3 @@ export type SetDefaultProviderResponses = {
 };
 
 export type SetDefaultProviderResponse = SetDefaultProviderResponses[keyof SetDefaultProviderResponses];
-
-export type ReloadProfileData = {
-    body?: never;
-    path: {
-        /**
-         * 配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/profiles/{id}/reload';
-};
-
-export type ReloadProfileErrors = {
-    /**
-     * 未登录或会话已失效
-     */
-    401: ApiError;
-    /**
-     * 资源不存在
-     */
-    404: ApiError;
-    /**
-     * 重载失败：新的对象图建不起来时**保留正在服务的那一份**，只把状态说成 failed。换上半截对象图比继续用旧配置危险得多。回的是固定文案，原因见 `GET /profiles`。
-     */
-    500: ApiError;
-};
-
-export type ReloadProfileError = ReloadProfileErrors[keyof ReloadProfileErrors];
-
-export type ReloadProfileResponses = {
-    /**
-     * 重载后的配置档。在途的那轮对话继续用**旧**对象图走完 —— 与 `ProviderRegistry.clear()` 同一条不变量（请求已持有自己的实例引用）。
-     */
-    200: {
-        profile: ProfileRecord;
-    };
-};
-
-export type ReloadProfileResponse = ReloadProfileResponses[keyof ReloadProfileResponses];

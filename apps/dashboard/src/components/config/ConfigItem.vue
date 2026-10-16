@@ -22,7 +22,7 @@ defineProps<{
 
 <template>
   <div
-    class="flex flex-col gap-2 border-t-1 border-line py-2.5 first:border-t-0 sm:flex-row sm:items-center sm:gap-3"
+    class="-mx-2 flex flex-col gap-2 rounded-lg border-t-1 border-line px-2 py-3.5 transition-colors first:border-t-0 hover:bg-tint/40 sm:flex-row sm:items-center sm:gap-3"
   >
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-2">

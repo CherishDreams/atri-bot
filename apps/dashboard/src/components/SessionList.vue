@@ -21,10 +21,16 @@ function onSelect(id: string): void {
 </script>
 
 <template>
-  <aside class="flex flex-col gap-2 overflow-hidden border-r-1 border-line bg-surface p-3">
-    <div class="flex items-center justify-between">
-      <strong class="text-ink">atri-bot</strong>
-      <button class="btn-ghost" type="button" title="新建会话" aria-label="新建会话" @click="onNew">
+  <aside class="flex flex-col gap-2.5 overflow-hidden border-r-1 border-line bg-surface p-3">
+    <div class="flex items-center justify-between px-1">
+      <strong class="text-13px font-semibold tracking-tight text-ink">会话</strong>
+      <button
+        class="btn-ghost grid h-7 w-7 place-items-center px-0 text-sm leading-none"
+        type="button"
+        title="新建会话"
+        aria-label="新建会话"
+        @click="onNew"
+      >
         +
       </button>
     </div>
@@ -36,7 +42,7 @@ function onSelect(id: string): void {
     -->
     <button
       v-if="sessions.hasMoreSessions"
-      class="cursor-pointer rounded-md border-1 border-line bg-raised px-2 py-1 text-xs text-ink-muted transition-colors hover:text-ink disabled:cursor-wait disabled:opacity-60"
+      class="cursor-pointer rounded-lg border-1 border-line bg-raised px-2 py-1.5 text-xs text-ink-muted transition-colors hover:text-ink disabled:cursor-wait disabled:opacity-60"
       type="button"
       :disabled="sessions.loadingMoreSessions"
       @click="sessions.loadMoreSessions()"
@@ -56,8 +62,8 @@ function onSelect(id: string): void {
         :key="s.id"
         role="button"
         tabindex="0"
-        class="row-base cursor-pointer px-2 py-1.5 text-ink-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-        :class="s.id === sessions.active?.id ? 'row-active' : ''"
+        class="row-base cursor-pointer px-2.5 py-2 text-13px text-ink-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        :class="s.id === sessions.active?.id ? 'row-active font-medium' : ''"
         :aria-current="s.id === sessions.active?.id ? 'true' : undefined"
         :aria-label="`打开会话 ${s.title}`"
         @click="onSelect(s.id)"

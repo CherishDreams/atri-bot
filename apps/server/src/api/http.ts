@@ -113,8 +113,6 @@ export interface ProfileDirectory {
    * 顺序是「先落盘、再建对象图」，见 `app.ts` 的实现注释。
    */
   create(id: string, name?: string): Promise<ProfileRecord>;
-  /** 只改给人看的名字（写回文件的 `name`），**不改目录名** —— 目录一动，插件数据就跟丢。 */
-  rename(id: string, name: string): Promise<ProfileRecord>;
   /**
    * 改这一档默认用的 provider 实例；传 `null` 是「取消档级默认，回到全局那一个」。
    *
@@ -139,17 +137,15 @@ export interface ProfileDirectory {
   ): Promise<{
     failed: { id: string; error: string }[];
   }>;
-  /** 重读文件并换上新的对象图，然后卸载旧的。失败时保留正在服务的那一份并抛。 */
-  reload(id: string): Promise<ProfileRecord>;
   /**
-   * 摘掉并卸载一份配置档。
+   * 删除一份配置档：先从服务里摘掉并卸载，再删掉它的整个目录。
    *
    * 返回 `false` 表示**这个请求什么都没做**：它此刻还占着某个会话
    *（`lock.isInUse`），要等那轮对话结束。占用检查与摘除之间不能有 `await`，
    * 所以这条判据放在目录内部而不是让 handler 先查再删。
    *
-   * **永不删文件、永不删 `profiles/<id>/plugins/`**：框架从不删它，清理是操作者的
-   * `rm -rf`（`test/plugins.test.ts` 有断言拦着这条）。
+   * 文件删除发生在摘除成功**之后** —— 被占用或卸载失败时磁盘必须原封不动。
+   * 删的是 `profiles/<id>/` 整个目录（`config.json` 与插件数据）。
    */
   remove(id: string): Promise<boolean>;
 }

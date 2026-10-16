@@ -33,7 +33,7 @@ const menuItems = computed<MenuItem[]>(() => [
   { key: "console", label: "返回控制台", icon: icon("console") },
   {
     key: "config",
-    label: "配置",
+    label: "配置文件",
     icon: icon("settings"),
   },
   { key: "new-session", label: "新建会话", icon: icon("plus") },
@@ -58,18 +58,26 @@ function menuProps(): HTMLAttributes {
  * 已经连同原因一起记在 naive.ts 的 Dropdown 段里。
  */
 
+/**
+ * 作用域链接。`profile.value` 在 `noProfile` 页面（配置 / 供应商 / 接入平台）上是 null，
+ * 塞进 query 会变成裸的 `?profile`（实测）；没有档名时就不带，交给守卫去补。
+ */
+function scoped(name: string): { name: string; query?: { profile: string } } {
+  return profile.value === null ? { name } : { name, query: { profile: profile.value } };
+}
+
 async function onSelect(key: string): Promise<void> {
   // 三个作用域页面都带着当前档 `?profile=`：这个菜单从 bot 与 chat 两侧都能打开，
   // 不带的话，从 chat 里点「配置」会先被守卫补一次档 —— 而它补的不一定是刚在用的那份。
   switch (key) {
     case "console":
-      await router.push({ name: "console", query: { profile: profile.value } });
+      await router.push(scoped("console"));
       break;
     case "config":
-      await router.push({ name: "config", query: { profile: profile.value } });
+      await router.push(scoped("config"));
       break;
     case "new-session":
-      await router.push({ name: "chat-new", query: { profile: profile.value } });
+      await router.push(scoped("chat-new"));
       break;
     case "logout":
       await auth.logout();

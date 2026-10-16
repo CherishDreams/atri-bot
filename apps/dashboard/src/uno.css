@@ -14,7 +14,16 @@ body,
 
 body {
   margin: 0;
+  /* 1.55 比浏览器默认的 1.5 略松：正文里中文与英文混排时行距更稳。 */
   font:
-    14px/1.5 system-ui,
+    14px/1.55 system-ui,
     sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--atri-primary-soft);
+  color: var(--atri-ink);
 }
