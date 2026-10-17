@@ -96,7 +96,7 @@ export default defineConfig({
      */
     "btn-ghost":
       "cursor-pointer rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-ink transition-colors hover:bg-tint focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
-    /** 卡片外壳：LoginView、NewSession、PluginPanel 三处原本各写一份。 */
+    /** 卡片外壳：LoginView、NewSession 两处原本各写一份。 */
     "surface-card": "rounded-xl border border-line bg-surface shadow-sm",
 
     /** 可点行的底色变化；和 `row-active` 配对使用。 */

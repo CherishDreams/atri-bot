@@ -1,41 +1,75 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { RouterLink } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import type { PluginInfo } from "@/api/generated/index.js";
 import { useProfile } from "@/composables/useProfile";
 import { usePluginsStore } from "@/stores/plugins";
+import { usePluginSettingsStore } from "@/stores/pluginSettings";
 import { useProfilesStore } from "@/stores/profiles";
+import ProfileSwitcher from "@/components/config/ProfileSwitcher.vue";
 import PluginCard from "@/components/plugins/PluginCard.vue";
 import PluginConfigDrawer from "@/components/plugins/PluginConfigDrawer.vue";
 
 /**
  * 插件页：已安装的插件、它们在这份配置里的启用状态，以及 schema 驱动的配置。
  *
- * 页壳与「接入平台」同形：整页自己滚动，内容列限宽。**切配置仍只在配置文件页做** ——
- * 这里只给一条去那边的链接，不在这里再养一份切档与未保存拦截。
+ * 页壳与「接入平台」同形：整页自己滚动，内容列限宽。
+ *
+ * **配置切换就在这一页**：插件启停与插件配置都按配置档隔离，切完还要去别的页面
+ * 才能换一份配置，等于让用户走一条没有必要的往返。切换器复用配置工作台那一个，
+ * 所以「当前是哪一份、哪些不可用」只有一处实现。
+ *
+ * 与工作台不同，这里没有页面级草稿，唯一会丢的是抽屉里未保存的那几个值：
+ * 抽屉脏时不允许切配置，先保存或关掉抽屉再切。这是本页唯一的拦截，且只说这一件事。
  */
+const route = useRoute();
+const router = useRouter();
 const { profile } = useProfile();
 const plugins = usePluginsStore();
+const settings = usePluginSettingsStore();
 const profiles = useProfilesStore();
 
 const drawerOpen = ref(false);
 const editing = ref<PluginInfo | null>(null);
+const switchError = ref<string | null>(null);
 
-const currentName = computed(
-  () =>
-    profiles.profiles.find((p) => p.id === profile.value)?.name ?? profile.value ?? "未选择配置",
-);
-
-const configTarget = computed(() =>
-  profile.value === null
-    ? { name: "config" }
-    : { name: "config", query: { profile: profile.value } },
-);
+const drawerDirty = computed(() => drawerOpen.value && settings.dirty);
 
 function openConfig(plugin: PluginInfo): void {
   editing.value = plugin;
   drawerOpen.value = true;
 }
+
+function clearSwitchError(): void {
+  switchError.value = null;
+}
+
+function switchProfile(id: string): void {
+  if (id === profile.value) return;
+  if (drawerDirty.value) {
+    switchError.value = "插件配置还有未保存的改动，请先保存或关闭配置抽屉，再切换配置。";
+    return;
+  }
+  switchError.value = null;
+  void router.replace({ query: { ...route.query, profile: id } });
+}
+
+/** 配置本身的增删仍在工作台：这里只负责把用户送到管理入口。 */
+function manageProfiles(): void {
+  if (drawerDirty.value) {
+    switchError.value = "插件配置还有未保存的改动，请先保存或关闭配置抽屉，再管理配置。";
+    return;
+  }
+  switchError.value = null;
+  void router.push({
+    name: "config",
+    query: profile.value === null ? {} : { profile: profile.value },
+  });
+}
+
+watch(drawerDirty, (dirty) => {
+  if (!dirty) switchError.value = null;
+});
 
 watch(
   profile,
@@ -43,6 +77,7 @@ watch(
     // 换配置时抽屉里那份草稿属于上一份配置：关掉并清空，不能让它跟着 URL 一起漂。
     drawerOpen.value = false;
     editing.value = null;
+    switchError.value = null;
     if (pid !== null) void plugins.refresh(pid);
   },
   { immediate: true },
@@ -69,18 +104,26 @@ if (profiles.profiles.length === 0 && !profiles.loading) void profiles.refresh()
           </p>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
-          <span>
-            当前配置：<b class="text-ink">{{ currentName }}</b>
-          </span>
-          <RouterLink
-            :to="configTarget"
-            class="cursor-pointer rounded text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-          >
-            去配置文件页切换
-          </RouterLink>
+        <div class="ml-auto flex shrink-0 items-center">
+          <ProfileSwitcher
+            :current="profile"
+            :dirty="drawerDirty"
+            @switch="switchProfile"
+            @manage="manageProfiles"
+          />
         </div>
       </header>
+
+      <n-alert
+        v-if="switchError"
+        type="warning"
+        class="mb-4"
+        :show-icon="false"
+        closable
+        @close="clearSwitchError"
+      >
+        {{ switchError }}
+      </n-alert>
 
       <n-alert
         v-if="plugins.error"
