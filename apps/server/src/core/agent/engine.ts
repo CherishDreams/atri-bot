@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Message, SessionDetail } from "@atri/shared";
+import type { Message, MessageImage, SessionDetail } from "@atri/shared";
 import { ApiError } from "#core/errors.ts";
 import type { Logger } from "#core/logger.ts";
 import type { ProviderRegistry } from "#core/provider/registry.ts";
@@ -43,11 +43,18 @@ export interface EngineDeps {
    * 它本来就是全局的。这里只补前两级的差。
    */
   defaultProviderId: string | null;
+  /**
+   * 这一档选用的人格提示。组合根在人格保存后更新它，下一次请求立刻生效；
+   * 空串表示不注入 system 消息。
+   */
+  systemPrompt: string;
 }
 
 export interface HandleMessageOptions {
   sessionId: string;
   content: string;
+  /** 随这条用户消息一起交给模型的图片；直接聊天接口不带它。 */
+  images?: MessageImage[];
   model?: string;
   onDelta?: (delta: string) => void;
   /**
@@ -87,6 +94,11 @@ export class AgentEngine {
    * 下一次发消息立刻用的是新值 —— 不必等一次重载。
    */
   defaultProviderId: string | null;
+  /**
+   * 人格提示。与 `defaultProviderId` 一样可变：保存人格后不必重建引擎，
+   * 下一条消息读到的是新提示词。
+   */
+  systemPrompt: string;
 
   constructor({
     sessions,
@@ -98,6 +110,7 @@ export class AgentEngine {
     events,
     profileId,
     defaultProviderId,
+    systemPrompt,
   }: EngineDeps) {
     this.sessions = sessions;
     this.providers = providers;
@@ -108,6 +121,7 @@ export class AgentEngine {
     this.events = events;
     this.profileId = profileId;
     this.defaultProviderId = defaultProviderId;
+    this.systemPrompt = systemPrompt;
   }
 
   /**
@@ -117,6 +131,7 @@ export class AgentEngine {
   async handleMessage({
     sessionId,
     content,
+    images,
     model,
     onDelta,
     onMessage,
@@ -133,7 +148,12 @@ export class AgentEngine {
       // 库化后每次读都是一份独立快照，反过来写就会把刚刚那条用户消息漏在上下文外面
       // ——模型会回答一个看不见自己问题的那一轮。（这条不是洁癖：改动前它真的漏了，
       // 由 `engine-tools.test.ts` 的「回喂的那一次请求里必须同时有 tool_calls 与工具结果」抓到。）
-      const userMessage = this.#newMessage(sessionId, { role: "user", content });
+      const userMessage = this.#newMessage(sessionId, {
+        role: "user",
+        content,
+        // 空数组不落键：Dashboard 与规格用「有没有 images」区分纯文本与多模态消息。
+        ...(images && images.length > 0 ? { images } : {}),
+      });
       this.sessions.appendMessage(sessionId, userMessage);
       const session = this.sessions.getWithMessages(sessionId);
       // 404 而不是普通 Error：会话可能在预检之后、这一行之前被另一个请求删掉
@@ -202,15 +222,28 @@ export class AgentEngine {
         );
       }
 
+      // 人格只属于这一轮请求的报头，不写历史：它没有「什么时候说过」的语义，
+      // 存进 sqlite 既会让历史详情多出一条假消息，也会在人格修改后留下旧版本。
+      // 每一步都要重新拼一次：工具结果是在循环里追加到 history 的，提前拼好的
+      // 数组不会跟着长，第二轮请求就会看不到工具结果。
+      const prompt = this.systemPrompt.trim();
+      const requestMessages: ChatMessage[] =
+        prompt === "" ? history : [{ role: "system", content: prompt }, ...history];
+
       const result = onDelta
         ? await this.providers.chatStream({
             model,
-            messages: history,
+            messages: requestMessages,
             tools: declared,
             onDelta,
             signal,
           })
-        : await this.providers.chat({ model, messages: history, tools: declared, signal });
+        : await this.providers.chat({
+            model,
+            messages: requestMessages,
+            tools: declared,
+            signal,
+          });
 
       const calls = result?.toolCalls ?? [];
       const assistant = this.#record(session, {
@@ -313,12 +346,13 @@ export class AgentEngine {
    * 那些半截调用就被重新带回上游了（正是这次修复要挡掉的东西）。
    */
   #toChatMessage(
-    message: Pick<Message, "role" | "content" | "toolCallId">,
+    message: Pick<Message, "role" | "content" | "images" | "toolCallId">,
     toolCalls: Message["toolCalls"],
   ): ChatMessage {
     return {
       role: message.role,
       content: message.content,
+      ...(message.images && message.images.length > 0 ? { images: message.images } : {}),
       ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
       ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
     };

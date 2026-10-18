@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client/index.js';
-import type { AuthStatusData, AuthStatusResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetPluginConfigData, GetPluginConfigErrors, GetPluginConfigResponses, GetProfileConfigData, GetProfileConfigErrors, GetProfileConfigResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListLogsData, ListLogsErrors, ListLogsResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, SavePluginConfigData, SavePluginConfigErrors, SavePluginConfigResponses, SaveProfileConfigData, SaveProfileConfigErrors, SaveProfileConfigResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamLogsData, StreamLogsErrors, StreamLogsResponse, StreamLogsResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
+import type { AuthStatusData, AuthStatusResponses, CreateAdapterData, CreateAdapterErrors, CreateAdapterResponses, CreateCronJobData, CreateCronJobErrors, CreateCronJobResponses, CreatePersonaData, CreatePersonaErrors, CreatePersonaResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteAdapterData, DeleteAdapterErrors, DeleteAdapterResponses, DeleteCronJobData, DeleteCronJobErrors, DeleteCronJobResponses, DeletePersonaData, DeletePersonaErrors, DeletePersonaResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetAdapterData, GetAdapterErrors, GetAdapterResponses, GetPluginConfigData, GetPluginConfigErrors, GetPluginConfigResponses, GetProfileConfigData, GetProfileConfigErrors, GetProfileConfigResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListAdapterTemplatesData, ListAdapterTemplatesErrors, ListAdapterTemplatesResponses, ListCronJobsData, ListCronJobsErrors, ListCronJobsResponses, ListLogsData, ListLogsErrors, ListLogsResponses, ListPersonasData, ListPersonasErrors, ListPersonasResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, RunCronJobData, RunCronJobErrors, RunCronJobResponses, SavePluginConfigData, SavePluginConfigErrors, SavePluginConfigResponses, SaveProfileConfigData, SaveProfileConfigErrors, SaveProfileConfigResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetAdapterEnabledData, SetAdapterEnabledErrors, SetAdapterEnabledResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamLogsData, StreamLogsErrors, StreamLogsResponse, StreamLogsResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateAdapterData, UpdateAdapterErrors, UpdateAdapterResponses, UpdateCronJobData, UpdateCronJobErrors, UpdateCronJobResponses, UpdatePersonaData, UpdatePersonaErrors, UpdatePersonaResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -36,6 +36,109 @@ export const listLogs = <ThrowOnError extends boolean = false>(options?: Options
     responseType: 'json',
     url: '/logs',
     ...options
+});
+
+/**
+ * 列出计划任务
+ */
+export const listCronJobs = <ThrowOnError extends boolean = false>(options?: Options<ListCronJobsData, ThrowOnError>): RequestResult<ListCronJobsResponses, ListCronJobsErrors, ThrowOnError> => (options?.client ?? client).get<ListCronJobsResponses, ListCronJobsErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/cron',
+    ...options
+});
+
+/**
+ * 新建计划任务
+ */
+export const createCronJob = <ThrowOnError extends boolean = false>(options: Options<CreateCronJobData, ThrowOnError>): RequestResult<CreateCronJobResponses, CreateCronJobErrors, ThrowOnError> => (options.client ?? client).post<CreateCronJobResponses, CreateCronJobErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/cron',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 删除计划任务
+ */
+export const deleteCronJob = <ThrowOnError extends boolean = false>(options: Options<DeleteCronJobData, ThrowOnError>): RequestResult<DeleteCronJobResponses, DeleteCronJobErrors, ThrowOnError> => (options.client ?? client).delete<DeleteCronJobResponses, DeleteCronJobErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/cron/{id}',
+    ...options
+});
+
+/**
+ * 更新计划任务
+ *
+ * 只覆盖出现的字段；cron、提示词、配置档、名称、启停都可以改。
+ */
+export const updateCronJob = <ThrowOnError extends boolean = false>(options: Options<UpdateCronJobData, ThrowOnError>): RequestResult<UpdateCronJobResponses, UpdateCronJobErrors, ThrowOnError> => (options.client ?? client).post<UpdateCronJobResponses, UpdateCronJobErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/cron/{id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 立即执行计划任务
+ *
+ * 只表示「已开始」；执行结果通过列表里的 running 与 lastStatus/lastError 观察。
+ */
+export const runCronJob = <ThrowOnError extends boolean = false>(options: Options<RunCronJobData, ThrowOnError>): RequestResult<RunCronJobResponses, RunCronJobErrors, ThrowOnError> => (options.client ?? client).post<RunCronJobResponses, RunCronJobErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/cron/{id}/run',
+    ...options
+});
+
+/**
+ * 列出人格
+ */
+export const listPersonas = <ThrowOnError extends boolean = false>(options?: Options<ListPersonasData, ThrowOnError>): RequestResult<ListPersonasResponses, ListPersonasErrors, ThrowOnError> => (options?.client ?? client).get<ListPersonasResponses, ListPersonasErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/personas',
+    ...options
+});
+
+/**
+ * 新建人格
+ */
+export const createPersona = <ThrowOnError extends boolean = false>(options: Options<CreatePersonaData, ThrowOnError>): RequestResult<CreatePersonaResponses, CreatePersonaErrors, ThrowOnError> => (options.client ?? client).post<CreatePersonaResponses, CreatePersonaErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/personas',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 删除人格
+ *
+ * 仍被配置档引用时回 409；先把引用改掉再删除，避免留下悬空的 personaId。
+ */
+export const deletePersona = <ThrowOnError extends boolean = false>(options: Options<DeletePersonaData, ThrowOnError>): RequestResult<DeletePersonaResponses, DeletePersonaErrors, ThrowOnError> => (options.client ?? client).delete<DeletePersonaResponses, DeletePersonaErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/personas/{id}',
+    ...options
+});
+
+/**
+ * 更新人格
+ */
+export const updatePersona = <ThrowOnError extends boolean = false>(options: Options<UpdatePersonaData, ThrowOnError>): RequestResult<UpdatePersonaResponses, UpdatePersonaErrors, ThrowOnError> => (options.client ?? client).post<UpdatePersonaResponses, UpdatePersonaErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/personas/{id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 /**
@@ -365,6 +468,72 @@ export const listAdapters = <ThrowOnError extends boolean = false>(options?: Opt
 });
 
 /**
+ * 新增一个接入平台实例
+ */
+export const createAdapter = <ThrowOnError extends boolean = false>(options: Options<CreateAdapterData, ThrowOnError>): RequestResult<CreateAdapterResponses, CreateAdapterErrors, ThrowOnError> => (options.client ?? client).post<CreateAdapterResponses, CreateAdapterErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/adapters',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 列出可添加的接入平台类型与表单字段
+ */
+export const listAdapterTemplates = <ThrowOnError extends boolean = false>(options?: Options<ListAdapterTemplatesData, ThrowOnError>): RequestResult<ListAdapterTemplatesResponses, ListAdapterTemplatesErrors, ThrowOnError> => (options?.client ?? client).get<ListAdapterTemplatesResponses, ListAdapterTemplatesErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/adapters/templates',
+    ...options
+});
+
+/**
+ * 删除一个接入平台实例（会先停止）
+ */
+export const deleteAdapter = <ThrowOnError extends boolean = false>(options: Options<DeleteAdapterData, ThrowOnError>): RequestResult<DeleteAdapterResponses, DeleteAdapterErrors, ThrowOnError> => (options.client ?? client).delete<DeleteAdapterResponses, DeleteAdapterErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/adapters/{id}',
+    ...options
+});
+
+/**
+ * 读取一个接入平台实例（含 token，仅管理员）
+ */
+export const getAdapter = <ThrowOnError extends boolean = false>(options: Options<GetAdapterData, ThrowOnError>): RequestResult<GetAdapterResponses, GetAdapterErrors, ThrowOnError> => (options.client ?? client).get<GetAdapterResponses, GetAdapterErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/adapters/{id}',
+    ...options
+});
+
+/**
+ * 更新一个接入平台实例
+ */
+export const updateAdapter = <ThrowOnError extends boolean = false>(options: Options<UpdateAdapterData, ThrowOnError>): RequestResult<UpdateAdapterResponses, UpdateAdapterErrors, ThrowOnError> => (options.client ?? client).post<UpdateAdapterResponses, UpdateAdapterErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/adapters/{id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 启用或禁用一个接入平台实例
+ */
+export const setAdapterEnabled = <ThrowOnError extends boolean = false>(options: Options<SetAdapterEnabledData, ThrowOnError>): RequestResult<SetAdapterEnabledResponses, SetAdapterEnabledErrors, ThrowOnError> => (options.client ?? client).post<SetAdapterEnabledResponses, SetAdapterEnabledErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/adapters/{id}/enable',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * 列出可用工具及其启用状态
  */
 export const listTools = <ThrowOnError extends boolean = false>(options: Options<ListToolsData, ThrowOnError>): RequestResult<ListToolsResponses, ListToolsErrors, ThrowOnError> => (options.client ?? client).get<ListToolsResponses, ListToolsErrors, ThrowOnError>({
@@ -422,10 +591,10 @@ export const deleteProfile = <ThrowOnError extends boolean = false>(options: Opt
 /**
  * 读一份配置档的可编辑内容（工作台草稿起点）
  *
- * 把「这一档现在是什么」一次给全：默认模型、单轮步数、工具启用状态、插件启用状态。
- * 存在的理由不是省三次往返，而是**原子性**：分开读的那三份之间没有一致性保证，
+ * 把「这一档现在是什么」一次给全：默认模型、人格、单轮步数、工具启用状态、插件启用状态与准入名单。
+ * 存在的理由不是省几次往返，而是**原子性**：分开读的几份之间没有一致性保证，
  * 两次请求之间恰好有人改了档，草稿的起点就是自相矛盾的，而下一次保存会把这份矛盾写回磁盘。
- * 四段各自仍由原来的存储现算，这个端点只做搬运。
+ * 各段仍由原来的存储现算，这个端点只做搬运。
  */
 export const getProfileConfig = <ThrowOnError extends boolean = false>(options: Options<GetProfileConfigData, ThrowOnError>): RequestResult<GetProfileConfigResponses, GetProfileConfigErrors, ThrowOnError> => (options.client ?? client).get<GetProfileConfigResponses, GetProfileConfigErrors, ThrowOnError>({
     responseType: 'json',

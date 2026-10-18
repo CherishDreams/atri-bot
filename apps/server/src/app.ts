@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { createLogger, LogStore } from "./core/logger.ts";
 import { AgentEngine } from "./core/agent/engine.ts";
 import { SessionEvents } from "./core/agent/events.ts";
+import { PersonaStore } from "./core/persona/store.ts";
+import { CronScheduler } from "./core/cron/manager.ts";
+import { CronStore } from "./core/cron/store.ts";
 import { SessionLock } from "./core/session/lock.ts";
 import { SessionManager } from "./core/session/manager.ts";
 import { ProviderRegistry } from "./core/provider/registry.ts";
@@ -18,6 +21,11 @@ import { AuthManager } from "./core/auth/manager.ts";
 import { ApiError, errorMessage } from "./core/errors.ts";
 import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
 import { AdapterManager } from "./adapters/manager.ts";
+import type { Adapter, AdapterTarget } from "./adapters/manager.ts";
+import { AdapterConfigStore } from "./adapters/store.ts";
+import type { AdapterEntryConfig } from "./adapters/store.ts";
+import { JsonConversationSessions } from "./adapters/conversations.ts";
+import { NapCatAdapter } from "./adapters/napcat.ts";
 import { createHttpServer } from "./api/server.ts";
 import type {
   ProfileBundle,
@@ -39,8 +47,10 @@ import type { ProvidersFileConfig, ProviderSourceEntryConfig } from "./config/fi
 import {
   DEFAULT_PROFILE_ID,
   assertProfileId,
+  emptyAccess,
   listProfileDirs,
   migrateProvidersToGlobal,
+  normalizeAccess,
   profileConfigPath,
   profileDir,
   profilesRoot,
@@ -51,6 +61,7 @@ import {
   seedProfile,
   setProfilePluginEnabled,
   updateProfileConfig,
+  validateAccess,
   writeProfileConfig,
 } from "./config/profiles.ts";
 import type { ProfileFileConfig } from "./config/profiles.ts";
@@ -69,7 +80,14 @@ function disabledPluginsOf(profile: ProfileFileConfig): string[] {
  *（那是已经全局化的死键，写回去就又有两个真源），也能塞进任何我们不认识的东西。
  * 秘密会换名字、会新增，黑名单每一次都迟到（AGENTS.md 里插件白名单那条同判据）。
  */
-const PROFILE_PATCH_KEYS = ["defaultProvider", "maxToolSteps", "tools", "plugins"] as const;
+const PROFILE_PATCH_KEYS = [
+  "defaultProvider",
+  "personaId",
+  "maxToolSteps",
+  "tools",
+  "plugins",
+  "access",
+] as const;
 
 /**
  * 把 `{ "<id>": { enabled: boolean } }` 那一段验成一张可应用的清单。
@@ -172,6 +190,7 @@ export async function createApp(config: AppConfig) {
   const sessions = new SessionManager(config, logger);
   const lock = new SessionLock();
   const events = new SessionEvents();
+  const personas = new PersonaStore({ filePath: join(config.dataDir, "personas.json"), logger });
 
   // 「跑法」住在配置档文件里，供应商住在 `providers.json`，都不在 `atri.config.json`。
   // 顺序是有意的：先建目录、再一次性 seed、**然后**才构造任何对象图 —— 存储拿到的一直是
@@ -372,6 +391,12 @@ export async function createApp(config: AppConfig) {
       typeof profile.defaultProvider === "string" && profile.defaultProvider
         ? profile.defaultProvider
         : null;
+    const personaId =
+      typeof profile.personaId === "string" && profile.personaId ? profile.personaId : null;
+    const access = normalizeAccess(profile.access);
+    if (personaId !== null && personas.get(personaId) === null) {
+      logger.warn(`配置档「${id}」引用的人格「${personaId}」不存在，本轮起不注入人格提示`);
+    }
     if (defaultProviderId !== null && providers.get(defaultProviderId) === null) {
       // 说得出名地提醒，而不是让每条消息静默落到别的模型上：注册表的 `#resolveFor`
       // 会退到全局默认、再退到第一个可用的，症状是「默认写着 A，回的却是 B」。
@@ -425,12 +450,15 @@ export async function createApp(config: AppConfig) {
       events,
       profileId: id,
       defaultProviderId,
+      systemPrompt: personas.promptFor(personaId),
     });
     return {
       id,
       name: profile.name ?? id,
       path,
       defaultProviderId,
+      personaId,
+      access,
       tools,
       toolConfig,
       plugins,
@@ -595,6 +623,18 @@ export async function createApp(config: AppConfig) {
 
       // 校验一次做完，并把**收窄后的值**留成局部量：下面那段读-改-写里再对
       // `body.xxx` 做 typeof 判断的话，编译器与读代码的人都得跟着判第二遍。
+      let nextPersona: string | null | undefined;
+      if (body.personaId !== undefined) {
+        const value: unknown = body.personaId;
+        if (typeof value !== "string" && value !== null) {
+          throw new ApiError("`personaId` 必须是字符串或 null", 400);
+        }
+        if (value !== null && personas.get(value) === null) {
+          throw new ApiError(`人格库中没有「${value}」，不能把它设成这份配置的人格`, 400);
+        }
+        nextPersona = value;
+      }
+
       let nextDefault: string | null | undefined;
       if (body.defaultProvider !== undefined) {
         const value: unknown = body.defaultProvider;
@@ -637,15 +677,29 @@ export async function createApp(config: AppConfig) {
         (pid) => bundle.plugins.get(pid) !== null,
       );
 
+      let nextAccess: ReturnType<typeof validateAccess> | undefined;
+      if (body.access !== undefined) nextAccess = validateAccess(body.access);
+
       // --- 到这里全部验完了，下面才开始动磁盘与运行态 -----------------------
-      if (nextDefault !== undefined || nextSteps !== undefined || tools.length > 0) {
+      if (
+        nextDefault !== undefined ||
+        nextPersona !== undefined ||
+        nextSteps !== undefined ||
+        nextAccess !== undefined ||
+        tools.length > 0
+      ) {
         updateProfileConfig(profileConfigPath(profilesDir, id), (file) => {
+          if (nextPersona !== undefined) {
+            if (nextPersona === null) delete file.personaId;
+            else file.personaId = nextPersona;
+          }
           if (nextDefault !== undefined) {
             // `null` 是「取消档级默认」，删键而不是留空串：留着 `""` 会让下一次读它的人判断两次。
             if (nextDefault === null) delete file.defaultProvider;
             else file.defaultProvider = nextDefault;
           }
           if (nextSteps !== undefined) file.maxToolSteps = nextSteps;
+          if (nextAccess !== undefined) file.access = nextAccess;
           for (const [tid, enabled] of tools) {
             const current = file.tools ?? {};
             // 展开保留这一段里我们不认识的键（`ToolToggle` 是开放类型，与插件段同一条理由）。
@@ -661,6 +715,15 @@ export async function createApp(config: AppConfig) {
         bundle.engine.defaultProviderId = nextDefault;
         const state = states.get(id);
         if (state) states.set(id, { ...state, defaultProviderId: nextDefault });
+      }
+      if (nextPersona !== undefined) {
+        bundle.personaId = nextPersona;
+        bundle.engine.systemPrompt = personas.promptFor(nextPersona);
+      }
+      if (nextAccess !== undefined) {
+        // 适配器的 `resolveAccess` 每次收到消息都读 bundle 上的这一份；
+        // 所以改完这里，下一条消息就是新名单，不需要重启长连接。
+        bundle.access = nextAccess;
       }
 
       const failed: { id: string; error: string }[] = [];
@@ -696,15 +759,112 @@ export async function createApp(config: AppConfig) {
     return found;
   }
 
+  /** 人格内容改了之后同步所有正在运行、且引用了它的引擎。 */
+  function syncPersonaPrompts(): void {
+    for (const bundle of bundles.values()) {
+      bundle.engine.systemPrompt = personas.promptFor(bundle.personaId);
+    }
+  }
+
+  /** 哪些配置档引用了这份人格。删除人格前用它挡住悬空引用（含暂时加载失败的档）。 */
+  function personaUsage(personaId: string): string[] {
+    const users = new Set<string>();
+    for (const id of profiles.ids()) {
+      const bundle = bundles.get(id);
+      if (bundle !== undefined) {
+        if (bundle.personaId === personaId) users.add(id);
+        continue;
+      }
+      // failed 的档没有对象图，但文件里仍可能写着引用；删人格前也应把它算进来。
+      try {
+        const file = readProfileConfig(profileConfigPath(profilesDir, id));
+        if (file.personaId === personaId) users.add(id);
+      } catch {
+        /* 文件本身坏掉的档不参与引用判断，修好后会按缺失人格告警 */
+      }
+    }
+    return [...users].toSorted();
+  }
+
+  const cronStore = new CronStore({ filePath: join(config.dataDir, "cron.json"), logger });
+  const scheduler = new CronScheduler({
+    store: cronStore,
+    logger,
+    sessions,
+    resolveEngine: (profileId) => profiles.get(profileId)?.engine ?? null,
+  });
+
   // 适配器按绑定取那一跑法。注入访问器而不是 `profiles` 本身：`adapters/` 按分层不得
   // import `api/`，而 `ProfileDirectory` 与 `ProfileBundle` 就声明在那里。
-  const adapters = new AdapterManager({
-    config,
+  const resolveProfile = (id: string): AdapterTarget | null => {
+    const bundle = profiles.get(id);
+    return bundle === null ? null : { engine: bundle.engine };
+  };
+
+  /*
+   * 适配器实例现在住在**运行期**的 data/adapters.json：控制台可以新增/删除/启停，
+   * 不再要求用户改 atri.config.json。旧文件里的 adapters 段只在运行期文件不存在时
+   * 迁移一次；之后它不再生效（下面会打日志说清）。
+   */
+  const adapterIo = {
+    exists: existsSync,
+    ensureDir: ensurePrivateDir,
+    read: readConfigFileAt,
+    write: writeConfigFileAt,
+  };
+  const adapterStore = new AdapterConfigStore({
+    filePath: join(config.dataDir, "adapters.json"),
+    seed: config.adapters,
     logger,
-    resolveProfile: (id) => {
-      const bundle = profiles.get(id);
-      return bundle === null ? null : { engine: bundle.engine };
-    },
+    io: adapterIo,
+  });
+  if (adapterStore.source === "seed") {
+    logger.info(
+      "已把 atri.config.json 的 adapters 搬进 data/adapters.json；以后在控制台「接入平台」页维护",
+    );
+  } else if (adapterStore.source === "file" && Object.keys(config.adapters).length > 0) {
+    logger.warn("adapters 已由 data/adapters.json 管理，atri.config.json 的 adapters 段不再生效");
+  }
+
+  /*
+   * 类型分派留在组合根：管理器只认识模板与 `Adapter`，不认识 NapCat。
+   * 每个实例有自己的会话映射文件 data/adapters/<id>/sessions.json（0700/0600），
+   * 里面只有「外部会话 → 内部会话 id」，不含消息内容与凭证。
+   */
+  const createAdapter = (id: string, entry: AdapterEntryConfig): Adapter => {
+    if (entry.type !== "napcat") {
+      throw new Error(`未知适配器类型：${entry.type}`);
+    }
+    const conversations = new JsonConversationSessions({
+      filePath: join(config.dataDir, "adapters", id, "sessions.json"),
+      sessions,
+      logger,
+      io: {
+        ensureDir: ensurePrivateDir,
+        read: readConfigFileAt,
+        write: writeConfigFileAt,
+      },
+    });
+    return new NapCatAdapter({
+      id,
+      profileId: entry.profile,
+      host: entry.settings.host ?? "",
+      port: entry.settings.port ?? "",
+      path: entry.settings.path ?? "",
+      token: entry.settings.token ?? "",
+      logger,
+      resolveTarget: resolveProfile,
+      conversations,
+      // 名单属于配置档，不属于平台实例：每收到一条消息现读绑定档的那一份，
+      // 所以保存档里的 access 后下一条消息就生效，不必重启适配器。
+      resolveAccess: () => profiles.get(entry.profile)?.access ?? emptyAccess(),
+    });
+  };
+  const adapters = new AdapterManager({
+    store: adapterStore,
+    logger,
+    resolveProfile,
+    createAdapter,
   });
 
   const http = createHttpServer({
@@ -719,9 +879,14 @@ export async function createApp(config: AppConfig) {
     profiles,
     providerSurface,
     adapters,
+    personas,
+    onPersonasChanged: syncPersonaPrompts,
+    personaUsage,
+    scheduler,
   });
 
   await adapters.startAll();
+  scheduler.start();
 
   return {
     async start() {
@@ -741,6 +906,7 @@ export async function createApp(config: AppConfig) {
      */
     listeners: () => events.listenerCount,
     async stop() {
+      scheduler.stop();
       await adapters.stopAll();
       await http.close();
       // 每一档都要卸：`unloadAll()` 是插件实例的 `teardown()` 的唯一调用点，

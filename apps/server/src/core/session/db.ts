@@ -57,6 +57,9 @@ const MIGRATIONS: readonly string[] = [
    ) STRICT;
 
    CREATE INDEX messages_by_session ON messages (session_id, seq);`,
+  // 图片随消息落库（base64 JSON），因为平台侧 URL 会过期。旧库由这条加列迁移原地升级；
+  // 纯文本消息该列为 NULL，不写 `[]`，与 `tool_calls` 的「没有这个键」保持一致。
+  `ALTER TABLE messages ADD COLUMN images TEXT;`,
 ];
 
 /**
@@ -84,6 +87,7 @@ export interface RawMessageRow {
   content: string;
   tool_calls: string | null;
   tool_call_id: string | null;
+  images: string | null;
   created_at: string;
 }
 

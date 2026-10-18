@@ -293,6 +293,20 @@ function toOpenAIMessages(messages: ChatMessage[]): Record<string, unknown>[] {
         })),
       };
     }
+    // 图片只可能出现在用户消息上（适配器接收时产生）。有图时必须改成内容块数组：
+    // 纯文本内容不能带图，而空正文的图片消息若仍发字符串，就会变成一条空消息。
+    if (m.role === "user" && m.images?.length) {
+      return {
+        role: "user",
+        content: [
+          ...(m.content ? [{ type: "text", text: m.content }] : []),
+          ...m.images.map((image) => ({
+            type: "image_url",
+            image_url: { url: `data:${image.mediaType};base64,${image.data}` },
+          })),
+        ],
+      };
+    }
     return { role: m.role, content: m.content };
   });
 }

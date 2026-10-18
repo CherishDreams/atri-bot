@@ -25,6 +25,8 @@ import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from 
 import { errorMessage, errorStack, statusForError, ApiError } from "#core/errors.ts";
 import { LOG_BUFFER_CAPACITY, LOG_DEFAULT_LIMIT } from "#core/logger.ts";
 import { SESSION_BUSY_MESSAGE, SESSION_BUSY_DELETE_MESSAGE } from "#core/session/lock.ts";
+import type { AdapterUpdateInput } from "#adapters/manager.ts";
+import { ADAPTER_TEMPLATES } from "#adapters/templates.ts";
 
 /**
  * provider 实例在 `GET /providers` 里的元素：磁盘条目 + 这一条路由额外补上的运行时标注。
@@ -97,10 +99,16 @@ function profileConfigView(bundle: ProfileBundle) {
     id: bundle.id,
     name: bundle.name,
     defaultProviderId: bundle.defaultProviderId,
+    personaId: bundle.personaId,
     // 夹取后的生效值，不是文件里的原值：见 `ProfileConfig.maxToolSteps` 的注释。
     maxToolSteps: bundle.toolConfig.maxSteps(),
     tools: bundle.tools.list().map((tool) => viewTool(tool, bundle.toolConfig.isEnabled(tool.id))),
     plugins: bundle.plugins.list(),
+    access: {
+      whitelistEnabled: bundle.access.whitelistEnabled,
+      allowedIds: [...bundle.access.allowedIds],
+      adminIds: [...bundle.access.adminIds],
+    },
   };
 }
 
@@ -163,6 +171,10 @@ export function createHttpServer(deps: HttpDeps) {
     providerSurface,
     adapters,
     auth,
+    personas,
+    onPersonasChanged,
+    personaUsage,
+    scheduler,
   } = deps;
 
   const cookieName = auth.cookieName;
@@ -373,6 +385,89 @@ export function createHttpServer(deps: HttpDeps) {
 
   router.get(`${API_PREFIX}/auth/status`, async (_req, res) => {
     sendJson(res, 200, { required: auth.enabled });
+  });
+
+  // --- 人格 ---------------------------------------------------------------
+  // 全局资源：一份人格可被多份配置档引用。配置档里只存 `personaId`。
+  router.get(`${API_PREFIX}/personas`, async (_req, res) => {
+    sendJson(res, 200, { personas: personas.list() });
+  });
+
+  router.post(`${API_PREFIX}/personas`, async (req, res) => {
+    try {
+      const persona = personas.create(await readJson(req));
+      onPersonasChanged();
+      sendJson(res, 201, { persona });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/personas/:id`, async (req, res, params) => {
+    try {
+      const persona = personas.update(params.id, await readJson(req));
+      onPersonasChanged();
+      sendJson(res, 200, { persona });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.delete(`${API_PREFIX}/personas/:id`, async (_req, res, params) => {
+    try {
+      const usedBy = personaUsage(params.id);
+      if (usedBy.length > 0) {
+        return sendError(
+          res,
+          409,
+          `人格正被配置档「${usedBy.join("」「")}」使用，请先把这些配置档换成别的人格`,
+        );
+      }
+      if (!personas.remove(params.id)) return sendError(res, 404, "没有这份人格");
+      onPersonasChanged();
+      sendJson(res, 200, { deleted: true });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  // --- 计划任务 -----------------------------------------------------------
+  router.get(`${API_PREFIX}/cron`, async (_req, res) => {
+    sendJson(res, 200, { jobs: scheduler.list() });
+  });
+
+  router.post(`${API_PREFIX}/cron`, async (req, res) => {
+    try {
+      sendJson(res, 201, { job: scheduler.create(await readJson(req)) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/cron/:id`, async (req, res, params) => {
+    try {
+      sendJson(res, 200, { job: scheduler.update(params.id, await readJson(req)) });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/cron/:id/run`, async (_req, res, params) => {
+    try {
+      scheduler.runNow(params.id);
+      sendJson(res, 202, { started: true });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.delete(`${API_PREFIX}/cron/:id`, async (_req, res, params) => {
+    try {
+      scheduler.remove(params.id);
+      sendJson(res, 200, { deleted: true });
+    } catch (err) {
+      fail(res, err);
+    }
   });
 
   // --- 会话 ---------------------------------------------------------------
@@ -760,8 +855,78 @@ export function createHttpServer(deps: HttpDeps) {
     }
   });
 
+  // --- 适配器：运行期增删改启停 -------------------------------------------
+  //
+  // 实例配置住在 data/adapters.json，控制台是唯一写入口。模板把「有哪些类型、
+  // 每种类型要填哪些字段」交给前端，零基础用户不必再手写 JSON。
+  router.get(`${API_PREFIX}/adapters/templates`, async (_req, res) => {
+    sendJson(res, 200, { templates: ADAPTER_TEMPLATES });
+  });
+
   router.get(`${API_PREFIX}/adapters`, async (_req, res) => {
     sendJson(res, 200, { adapters: adapters.list() });
+  });
+
+  router.get(`${API_PREFIX}/adapters/:id`, async (_req, res, params) => {
+    try {
+      sendJson(res, 200, adapters.detail(params.id));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/adapters`, async (req, res) => {
+    const body = await readJson(req);
+    try {
+      const detail = await adapters.create({
+        id: typeof body.id === "string" ? body.id : "",
+        type: typeof body.type === "string" ? body.type : "",
+        ...(typeof body.name === "string" ? { name: body.name } : {}),
+        ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+        profile: typeof body.profile === "string" ? body.profile : "",
+        settings: body.settings,
+      });
+      sendJson(res, 200, detail);
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /** 更新实例。字段按「出现才改」处理；`type` 不可变。 */
+  router.post(`${API_PREFIX}/adapters/:id`, async (req, res, params) => {
+    const body = await readJson(req);
+    const patch: AdapterUpdateInput = {
+      ...(typeof body.name === "string" ? { name: body.name } : {}),
+      ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+      ...(typeof body.profile === "string" ? { profile: body.profile } : {}),
+      ...(body.settings === undefined ? {} : { settings: body.settings }),
+    };
+    try {
+      sendJson(res, 200, await adapters.update(params.id, patch));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/adapters/:id/enable`, async (req, res, params) => {
+    const body = await readJson(req);
+    if (typeof body.enabled !== "boolean") {
+      return sendError(res, 400, "必须提供 `enabled`（布尔值）");
+    }
+    try {
+      sendJson(res, 200, await adapters.setEnabled(params.id, body.enabled));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.delete(`${API_PREFIX}/adapters/:id`, async (_req, res, params) => {
+    try {
+      await adapters.remove(params.id);
+      sendJson(res, 200, { id: params.id, removed: true });
+    } catch (err) {
+      fail(res, err);
+    }
   });
 
   // --- 工具 ---------------------------------------------------------------
@@ -823,7 +988,7 @@ export function createHttpServer(deps: HttpDeps) {
    *
    * 为什么要一个端点而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
    * 那三份之间没有原子性 —— 两次请求之间恰好有人改了或新建了一份档，草稿的起点就成了
-   * 自相矛盾的，而下一次保存会把这份矛盾整个写回磁盘。一次读，四段同源。
+   * 自相矛盾的，而下一次保存会把这份矛盾整个写回磁盘。一次读，各段同源。
    */
   router.get(`${API_PREFIX}/profiles/:id/config`, async (_req, res, params) => {
     const bundle = profileById(res, params.id);

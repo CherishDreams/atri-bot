@@ -2,13 +2,20 @@ import { API_PREFIX, WS_PATH } from "@atri/shared";
 import type { ServerFrame } from "@atri/shared";
 import {
   authStatus as authStatusOp,
+  createAdapter as createAdapterOp,
+  createCronJob as createCronJobOp,
+  createPersona as createPersonaOp,
   createProvider as createProviderOp,
   createProviderSource as createProviderSourceOp,
   createSession as createSessionOp,
+  deleteAdapter as deleteAdapterOp,
+  deleteCronJob as deleteCronJobOp,
+  deletePersona as deletePersonaOp,
   deleteProvider as deleteProviderOp,
   deleteProviderSource as deleteProviderSourceOp,
   deleteSession as deleteSessionOp,
   fetchProviderModels as fetchProviderModelsOp,
+  getAdapter as getAdapterOp,
   getProfileConfig as getProfileConfigOp,
   getPluginConfig as getPluginConfigOp,
   savePluginConfig as savePluginConfigOp,
@@ -17,7 +24,10 @@ import {
   deleteProfile as deleteProfileOp,
   listPlugins as listPluginsOp,
   listAdapters as listAdaptersOp,
+  listAdapterTemplates as listAdapterTemplatesOp,
+  listCronJobs as listCronJobsOp,
   listLogs as listLogsOp,
+  listPersonas as listPersonasOp,
   listProfiles as listProfilesOp,
   saveProfileConfig as saveProfileConfigOp,
   listProviderSources as listProviderSourcesOp,
@@ -27,16 +37,31 @@ import {
   login as loginOp,
   logout as logoutOp,
   me as meOp,
+  setAdapterEnabled as setAdapterEnabledOp,
   setDefaultProvider as setDefaultProviderOp,
   reloadPlugin as reloadPluginOp,
+  runCronJob as runCronJobOp,
   setPluginEnabled as setPluginEnabledOp,
   setToolEnabled as setToolEnabledOp,
   streamMessage,
   unloadPlugin as unloadPluginOp,
+  updateAdapter as updateAdapterOp,
+  updateCronJob as updateCronJobOp,
+  updatePersona as updatePersonaOp,
   updateProvider as updateProviderOp,
   updateProviderSource as updateProviderSourceOp,
 } from "./generated/index.js";
 import type {
+  AdapterCreateRequest,
+  AdapterDetail,
+  AdapterTemplate,
+  AdapterUpdateRequest,
+  CronJobCreateRequest,
+  CronJobInfo,
+  CronJobUpdateRequest,
+  PersonaCreateRequest,
+  PersonaInfo,
+  PersonaUpdateRequest,
   LogEntry,
   ProviderInput,
   ProviderSourceInput,
@@ -462,8 +487,13 @@ export function connect(
 }
 
 export type {
+  AdapterAccessControl,
+  AdapterDetail,
   AdapterInfo,
+  AdapterTemplate,
+  CronJobInfo,
   Message,
+  PersonaInfo,
   ProfileConfig,
   ProfileConfigPatch,
   ProviderInfo,
@@ -475,12 +505,86 @@ export type {
   ToolInfo,
 } from "./generated/index.js";
 
-/**
- * 接入平台列表。**只读**：`adapters` 段今天只能改 `atri.config.json`，没有写端点。
- * `enabled` 与 `bound` 是两件事（没关掉 / 绑的档现在可用），两个都为真才真的在收流量。
- */
+/** 接入平台实例列表。配置在 `data/adapters.json`，由控制台维护。 */
 export async function listAdapters() {
   return body(await listAdaptersOp());
+}
+
+/** 可添加的适配器类型与表单字段（目前只有 NapCat）。 */
+export async function listAdapterTemplates(): Promise<{ templates: AdapterTemplate[] }> {
+  return body(await listAdapterTemplatesOp());
+}
+
+/** 编辑表单的回读：含平台字段（token 也在内，仅管理员可见）。 */
+export async function getAdapter(id: string): Promise<AdapterDetail> {
+  return body(await getAdapterOp({ path: { id } }));
+}
+
+export async function createAdapter(input: AdapterCreateRequest): Promise<AdapterDetail> {
+  return body(await createAdapterOp({ body: input }));
+}
+
+export async function updateAdapter(
+  id: string,
+  patch: AdapterUpdateRequest,
+): Promise<AdapterDetail> {
+  return body(await updateAdapterOp({ path: { id }, body: patch }));
+}
+
+export async function setAdapterEnabled(id: string, enabled: boolean): Promise<AdapterDetail> {
+  return body(await setAdapterEnabledOp({ path: { id }, body: { enabled } }));
+}
+
+export async function deleteAdapter(id: string): Promise<{ id: string; removed: boolean }> {
+  return body(await deleteAdapterOp({ path: { id } }));
+}
+
+// --- 人格 -------------------------------------------------------------------
+
+export async function listPersonas(): Promise<{ personas: PersonaInfo[] }> {
+  return body(await listPersonasOp());
+}
+
+export async function createPersona(
+  input: PersonaCreateRequest,
+): Promise<{ persona: PersonaInfo }> {
+  return body(await createPersonaOp({ body: input }));
+}
+
+export async function updatePersona(
+  id: string,
+  input: PersonaUpdateRequest,
+): Promise<{ persona: PersonaInfo }> {
+  return body(await updatePersonaOp({ path: { id }, body: input }));
+}
+
+export async function deletePersona(id: string): Promise<{ deleted: boolean }> {
+  return body(await deletePersonaOp({ path: { id } }));
+}
+
+// --- 计划任务 ---------------------------------------------------------------
+
+export async function listCronJobs(): Promise<{ jobs: CronJobInfo[] }> {
+  return body(await listCronJobsOp());
+}
+
+export async function createCronJob(input: CronJobCreateRequest): Promise<{ job: CronJobInfo }> {
+  return body(await createCronJobOp({ body: input }));
+}
+
+export async function updateCronJob(
+  id: string,
+  input: CronJobUpdateRequest,
+): Promise<{ job: CronJobInfo }> {
+  return body(await updateCronJobOp({ path: { id }, body: input }));
+}
+
+export async function runCronJob(id: string): Promise<{ started: boolean }> {
+  return body(await runCronJobOp({ path: { id } }));
+}
+
+export async function deleteCronJob(id: string): Promise<{ deleted: boolean }> {
+  return body(await deleteCronJobOp({ path: { id } }));
 }
 
 // --- 配置档 ---------------------------------------------------------------
@@ -513,7 +617,7 @@ export async function setDefaultProvider(id: string, providerId: string | null) 
 /**
  * 一份配置档此刻的可编辑内容（默认模型、单轮步数、工具与插件的开关）。
  *
- * 四段一次读而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
+ * 各段一次读而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
  * 那三份之间没有原子性，两次请求之间恰好有人改了档，草稿的起点就自相矛盾，
  * 而下一次保存会把这份矛盾写回磁盘。
  */

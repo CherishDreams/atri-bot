@@ -16,6 +16,7 @@
  */
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { AdapterAccessControl } from "@atri/shared";
 import { ApiError } from "#core/errors.ts";
 import {
   ensurePrivateDir,
@@ -82,6 +83,8 @@ export interface ProfileFileConfig {
    * 没写这一项时回落到全局 `providers.default`，两级都不是靠猜 —— 见 `app.ts` 的装配。
    */
   defaultProvider?: string;
+  /** 这一档选用的人格 id；缺省表示不注入人格提示。人格本体在 `personas.json`。 */
+  personaId?: string;
   /**
    * 下面两段属于**旧形状**：供应商配置现在住在 `providers.json` 里（全局一份）。
    * 保留是为了读得懂升级前留下的文件，并由 `migrateProvidersToGlobal` 搬出去一次。
@@ -92,7 +95,71 @@ export interface ProfileFileConfig {
   maxToolSteps?: number;
   /** 每份配置档自己的插件启用清单。装是全局的，这里只决定开不开。 */
   plugins?: Record<string, PluginToggle>;
+  /**
+   * 这一档的准入控制。绑定到这一档的适配器共用它；换一档就是另一张名单。
+   * 它不再是适配器实例的属性 —— 平台实例只是这份跑法的入口。
+   */
+  access?: AdapterAccessControl;
   [key: string]: unknown;
+}
+
+/** 一份没有配置过准入的档：全部放行。每次返回新对象，避免调用方误改共享值。 */
+export function emptyAccess(): AdapterAccessControl {
+  return { whitelistEnabled: false, allowedIds: [], adminIds: [] };
+}
+
+function normalizeAccessIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const id = item.trim();
+    if (id === "" || /\s/.test(id) || id.length > 128 || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+/** 读盘时的宽松归一：手改坏的 access 段只退化成全部放行，不让服务起不来。 */
+export function normalizeAccess(raw: unknown): AdapterAccessControl {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return emptyAccess();
+  const record = raw as Record<string, unknown>;
+  return {
+    whitelistEnabled: record.whitelistEnabled === true,
+    allowedIds: normalizeAccessIds(record.allowedIds),
+    adminIds: normalizeAccessIds(record.adminIds),
+  };
+}
+
+/** API 写入时的严格校验：形状不对直接 400，不静默丢条目。 */
+export function validateAccess(raw: unknown): AdapterAccessControl {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ApiError("access 必须是对象", 400);
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.whitelistEnabled !== "boolean") {
+    throw new ApiError("access.whitelistEnabled 必须是布尔值", 400);
+  }
+  for (const key of ["allowedIds", "adminIds"] as const) {
+    const value = record[key];
+    if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+      throw new ApiError(`access.${key} 必须是字符串数组`, 400);
+    }
+    for (const item of value) {
+      const id = item.trim();
+      if (id === "" || /\s/.test(id)) {
+        throw new ApiError(`access.${key} 里的 id 不能为空或包含空白`, 400);
+      }
+      if (id.length > 128) throw new ApiError(`access.${key} 里的 id 太长（最多 128）`, 400);
+    }
+  }
+  return {
+    whitelistEnabled: record.whitelistEnabled,
+    allowedIds: normalizeAccessIds(record.allowedIds),
+    adminIds: normalizeAccessIds(record.adminIds),
+  };
 }
 
 /**

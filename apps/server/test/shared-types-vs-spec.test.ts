@@ -28,10 +28,14 @@ const SPEC_PATH = fileURLToPath(new URL("../openapi.json", import.meta.url));
 
 /** 名字在两边都有、且描述同一个 HTTP 形状的那些 interface / 联合类型。 */
 const COMPARABLE = [
+  "AdapterAccessControl",
   "AdapterInfo",
+  "CronJobInfo",
+  "CronLastStatus",
   "LogEntry",
   "LogLevel",
   "Message",
+  "PersonaInfo",
   "PluginInfo",
   "PluginStatus",
   "ProfileConfig",

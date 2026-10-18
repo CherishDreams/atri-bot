@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, StatementResultingChanges } from "node:sqlite";
-import type { Message, Role, Session, SessionDetail, ToolCall } from "@atri/shared";
+import type { Message, MessageImage, Role, Session, SessionDetail, ToolCall } from "@atri/shared";
 import { ApiError, errorMessage } from "#core/errors.ts";
 import type { Logger } from "#core/logger.ts";
 import { openSessionDb, type RawMessageRow, type RawSessionRow } from "./db.ts";
@@ -187,7 +187,7 @@ export class SessionManager {
     const row = this.#getOne(SQL_SESSION_WITH_COUNT + " WHERE s.id = ? LIMIT 1", id);
     if (!row) return null;
     const rows = this.#allNamed(
-      `SELECT seq, id, session_id, role, content, tool_calls, tool_call_id, created_at
+      `SELECT seq, id, session_id, role, content, tool_calls, tool_call_id, images, created_at
          FROM messages
         WHERE session_id = :sid AND (:before IS NULL OR seq < :before)
         ORDER BY seq DESC LIMIT :limit`,
@@ -270,8 +270,8 @@ export class SessionManager {
         // 得由被追加到的那个会话决定，而不是由调用方随手带的字段决定。
         this.#run(
           `INSERT INTO messages
-             (id, session_id, role, content, tool_calls, tool_call_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+             (id, session_id, role, content, tool_calls, tool_call_id, images, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           message.id,
           sessionId,
           message.role,
@@ -280,6 +280,7 @@ export class SessionManager {
           // 而类型上它是 `string | undefined`，编译期不会提醒你。
           message.toolCalls ? JSON.stringify(message.toolCalls) : null,
           message.toolCallId ?? null,
+          message.images?.length ? JSON.stringify(message.images) : null,
           message.createdAt,
         );
       });
@@ -367,7 +368,7 @@ export class SessionManager {
 
   #messagesOf(sessionId: string): Message[] {
     const rows = this.#all(
-      `SELECT seq, id, session_id, role, content, tool_calls, tool_call_id, created_at
+      `SELECT seq, id, session_id, role, content, tool_calls, tool_call_id, images, created_at
          FROM messages WHERE session_id = ? ORDER BY seq`,
       sessionId,
     ) as RawMessageRow[];
@@ -393,6 +394,9 @@ export class SessionManager {
     if (row.tool_calls !== null) {
       // `as` 用在这里是允许的：这是「自己写进去的 JSON 列」这个真边界，读回来只能是这个形状。
       message.toolCalls = JSON.parse(row.tool_calls) as ToolCall[];
+    }
+    if (row.images !== null) {
+      message.images = JSON.parse(row.images) as MessageImage[];
     }
     if (row.tool_call_id !== null) message.toolCallId = row.tool_call_id;
     return message;

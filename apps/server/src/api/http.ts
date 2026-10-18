@@ -1,6 +1,6 @@
 /** JSON HTTP 处理的辅助函数。 */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ProfileRecord, ProfileStatus } from "@atri/shared";
+import type { AdapterAccessControl, ProfileRecord, ProfileStatus } from "@atri/shared";
 import { ApiError } from "#core/errors.ts";
 import type { AppConfig } from "#config/index.ts";
 import type { AgentEngine } from "#core/agent/engine.ts";
@@ -14,6 +14,8 @@ import type { SessionManager } from "#core/session/manager.ts";
 import type { SessionLock } from "#core/session/lock.ts";
 import type { SessionEvents } from "#core/agent/events.ts";
 import type { AdapterManager } from "#adapters/manager.ts";
+import type { PersonaStore } from "#core/persona/store.ts";
+import type { CronScheduler } from "#core/cron/manager.ts";
 import type { PluginManager } from "#plugins/manager.ts";
 
 /**
@@ -41,6 +43,13 @@ export interface ProfileBundle {
    * 和 `bundle.engine`，那样下一次发消息立刻生效，而不必等一次重载。
    */
   defaultProviderId: string | null;
+  /** 这一档引用的人格 id；`null` 表示不注入人格提示。 */
+  personaId: string | null;
+  /**
+   * 这一档的准入控制。可变：保存配置档时先落盘再改这里，绑定到这一档的适配器
+   * 下一次收到消息就按它判断，不需要重启长连接。
+   */
+  access: AdapterAccessControl;
   tools: ToolRegistry;
   toolConfig: ToolConfigStore;
   plugins: PluginManager;
@@ -182,6 +191,13 @@ export interface HttpDeps {
   profiles: ProfileDirectory;
   providerSurface: ProviderSurface;
   adapters: AdapterManager;
+  personas: PersonaStore;
+  /** 人格内容变更后，把新提示同步到正在运行的引擎。 */
+  onPersonasChanged(): void;
+  /** 哪些配置档正引用这份人格；删除前必须为空。 */
+  personaUsage(personaId: string): string[];
+  /** 计划任务调度器：CRUD、立即执行与下一次触发视图。 */
+  scheduler: CronScheduler;
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {

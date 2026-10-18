@@ -49,8 +49,20 @@
       "description": "配置档本身。这一族的每个 operation 都**不带** `?profile=` 参数：它们操作的是「有哪些档」以及「档与全局清单之间的引用」，而不是「某档里的东西」。"
     },
     {
+      "name": "personas",
+      "description": "人格库。人格是部署级全局资源，住在 data/personas.json；配置档只通过 personaId 引用。"
+    },
+    {
+      "name": "cron",
+      "description": "计划任务。任务保存在 data/cron.json，按服务器本地时区的 5 段 cron 触发；结果写进任务自己的内部会话。"
+    },
+    {
       "name": "logs",
       "description": "程序运行日志。进程内环形缓冲（最近 500 行），重启即清空；日志页通过 SSE 实时订阅。日志是进程级的，不属于任何配置档。"
+    },
+    {
+      "name": "adapters",
+      "description": "入站平台适配器。实例保存在 data/adapters.json，控制台负责增删改与启停。"
     }
   ],
   "paths": {
@@ -109,6 +121,326 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/cron": {
+      "get": {
+        "operationId": "listCronJobs",
+        "summary": "列出计划任务",
+        "tags": ["cron"],
+        "responses": {
+          "200": {
+            "description": "计划任务列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronJobList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCronJob",
+        "summary": "新建计划任务",
+        "tags": ["cron"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronJobCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已创建的任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronJobResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/cron/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "计划任务 id",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "updateCronJob",
+        "summary": "更新计划任务",
+        "description": "只覆盖出现的字段；cron、提示词、配置档、名称、启停都可以改。",
+        "tags": ["cron"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronJobUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已更新的任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronJobResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCronJob",
+        "summary": "删除计划任务",
+        "tags": ["cron"],
+        "responses": {
+          "200": {
+            "description": "已删除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["deleted"],
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/cron/{id}/run": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "计划任务 id",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "runCronJob",
+        "summary": "立即执行计划任务",
+        "description": "只表示「已开始」；执行结果通过列表里的 running 与 lastStatus/lastError 观察。",
+        "tags": ["cron"],
+        "responses": {
+          "202": {
+            "description": "已开始执行",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["started"],
+                  "properties": {
+                    "started": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/personas": {
+      "get": {
+        "operationId": "listPersonas",
+        "summary": "列出人格",
+        "tags": ["personas"],
+        "responses": {
+          "200": {
+            "description": "人格列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPersona",
+        "summary": "新建人格",
+        "tags": ["personas"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已创建的人格",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/personas/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "人格 id",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "updatePersona",
+        "summary": "更新人格",
+        "tags": ["personas"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已更新的人格",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deletePersona",
+        "summary": "删除人格",
+        "description": "仍被配置档引用时回 409；先把引用改掉再删除，避免留下悬空的 personaId。",
+        "tags": ["personas"],
+        "responses": {
+          "200": {
+            "description": "已删除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["deleted"],
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           }
         }
       }
@@ -1252,7 +1584,7 @@
       "get": {
         "operationId": "listAdapters",
         "summary": "列出平台适配器",
-        "tags": ["status"],
+        "tags": ["adapters"],
         "responses": {
           "200": {
             "description": "适配器列表",
@@ -1275,6 +1607,206 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAdapter",
+        "summary": "新增一个接入平台实例",
+        "tags": ["adapters"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdapterCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已创建；enabled 时会尝试启动，启动失败原因在 adapter.error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/adapters/templates": {
+      "get": {
+        "operationId": "listAdapterTemplates",
+        "summary": "列出可添加的接入平台类型与表单字段",
+        "tags": ["adapters"],
+        "responses": {
+          "200": {
+            "description": "类型模板",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterTemplateList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/adapters/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAdapter",
+        "summary": "读取一个接入平台实例（含 token，仅管理员）",
+        "tags": ["adapters"],
+        "responses": {
+          "200": {
+            "description": "实例与配置",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateAdapter",
+        "summary": "更新一个接入平台实例",
+        "tags": ["adapters"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdapterUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的实例",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAdapter",
+        "summary": "删除一个接入平台实例（会先停止）",
+        "tags": ["adapters"],
+        "responses": {
+          "200": {
+            "description": "已删除",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterRemoved"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/adapters/{id}/enable": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "setAdapterEnabled",
+        "summary": "启用或禁用一个接入平台实例",
+        "tags": ["adapters"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdapterEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "启停后的实例",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdapterDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -1515,7 +2047,7 @@
       "get": {
         "operationId": "getProfileConfig",
         "summary": "读一份配置档的可编辑内容（工作台草稿起点）",
-        "description": "把「这一档现在是什么」一次给全：默认模型、单轮步数、工具启用状态、插件启用状态。\n存在的理由不是省三次往返，而是**原子性**：分开读的那三份之间没有一致性保证，\n两次请求之间恰好有人改了档，草稿的起点就是自相矛盾的，而下一次保存会把这份矛盾写回磁盘。\n四段各自仍由原来的存储现算，这个端点只做搬运。",
+        "description": "把「这一档现在是什么」一次给全：默认模型、人格、单轮步数、工具启用状态、插件启用状态与准入名单。\n存在的理由不是省几次往返，而是**原子性**：分开读的几份之间没有一致性保证，\n两次请求之间恰好有人改了档，草稿的起点就是自相矛盾的，而下一次保存会把这份矛盾写回磁盘。\n各段仍由原来的存储现算，这个端点只做搬运。",
         "tags": ["profiles"],
         "parameters": [
           {
@@ -1875,6 +2407,20 @@
         "type": "string",
         "enum": ["system", "user", "assistant", "tool"]
       },
+      "MessageImage": {
+        "type": "object",
+        "required": ["data", "mediaType"],
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "base64 编码的图片字节，不含 `data:` 前缀"
+          },
+          "mediaType": {
+            "type": "string",
+            "description": "图片 MIME 类型，如 image/jpeg"
+          }
+        }
+      },
       "Message": {
         "type": "object",
         "required": ["id", "sessionId", "role", "content", "createdAt"],
@@ -1890,6 +2436,13 @@
           },
           "content": {
             "type": "string"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageImage"
+            },
+            "description": "用户消息附带的图片；纯文本消息没有这个键"
           },
           "toolCalls": {
             "type": "array",
@@ -2184,25 +2737,38 @@
       },
       "AdapterInfo": {
         "type": "object",
-        "required": ["id", "name", "enabled", "profile", "bound"],
+        "required": ["id", "name", "type", "enabled", "profile", "bound", "running", "error"],
         "properties": {
           "id": {
             "type": "string"
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "显示名；没填时为 id。"
+          },
+          "type": {
+            "type": "string",
+            "description": "适配器类型，决定表单与实现，目前只有 napcat。"
           },
           "enabled": {
             "type": "boolean",
-            "description": "`atri.config.json` 里没写 `enabled: false`。不等于在收流量。"
+            "description": "运行期配置里的启用开关；不等于实例真的在跑。"
           },
           "profile": {
             "type": ["string", "null"],
-            "description": "跑在哪份配置档上；没绑定为 null。"
+            "description": "绑定的配置档 id；没绑定为 null。"
           },
           "bound": {
             "type": "boolean",
-            "description": "绑定的那份档此刻可用。为 false 时这个适配器不会被启动。"
+            "description": "绑定的配置档此刻可用。为 false 时不会启动。"
+          },
+          "running": {
+            "type": "boolean",
+            "description": "实例是否已成功启动。NapCat 的 WebSocket 连接状态另见日志。"
+          },
+          "error": {
+            "type": ["string", "null"],
+            "description": "上一次启动失败的原因；正常为 null。"
           }
         }
       },
@@ -2415,10 +2981,92 @@
           }
         }
       },
+      "PersonaInfo": {
+        "type": "object",
+        "required": ["id", "name", "description", "systemPrompt"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "systemPrompt": {
+            "type": "string",
+            "description": "作为 system 消息注入每轮请求；不写入会话历史"
+          }
+        }
+      },
+      "PersonaList": {
+        "type": "object",
+        "required": ["personas"],
+        "properties": {
+          "personas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonaInfo"
+            }
+          }
+        }
+      },
+      "PersonaCreateRequest": {
+        "type": "object",
+        "required": ["id", "name", "systemPrompt"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "systemPrompt": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonaUpdateRequest": {
+        "type": "object",
+        "required": ["name", "systemPrompt"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "systemPrompt": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonaResult": {
+        "type": "object",
+        "required": ["persona"],
+        "properties": {
+          "persona": {
+            "$ref": "#/components/schemas/PersonaInfo"
+          }
+        }
+      },
       "ProfileConfig": {
         "type": "object",
-        "description": "一份配置档此刻的可编辑内容，配置工作台的草稿起点。四段一次读回，避免界面拼三个端点时读到自相矛盾的起点。不引入第二份真源：每一段仍由各自的存储现算，这个响应只做搬运。",
-        "required": ["id", "name", "defaultProviderId", "maxToolSteps", "tools", "plugins"],
+        "description": "一份配置档此刻的可编辑内容，配置工作台的草稿起点。六段一次读回，避免界面拼多个端点时读到自相矛盾的起点。不引入第二份真源：每一段仍由各自的存储现算，这个响应只做搬运。",
+        "required": [
+          "id",
+          "name",
+          "defaultProviderId",
+          "personaId",
+          "maxToolSteps",
+          "tools",
+          "plugins",
+          "access"
+        ],
         "properties": {
           "id": {
             "type": "string"
@@ -2430,6 +3078,10 @@
           "defaultProviderId": {
             "type": ["string", "null"],
             "description": "这一档默认的 provider **实例** id（全局那份清单里的）；`null` 表示用全局 `providers.default`。"
+          },
+          "personaId": {
+            "type": ["string", "null"],
+            "description": "这一档选用的人格 id；`null` 表示不注入人格提示。"
           },
           "maxToolSteps": {
             "type": "integer",
@@ -2448,16 +3100,24 @@
               "$ref": "#/components/schemas/PluginInfo"
             },
             "description": "与 `GET /plugins?profile=<id>` 同源（运行态的 `PluginManager.list()`）。"
+          },
+          "access": {
+            "description": "这一档的准入控制；绑定到这一档的适配器共用这份名单。",
+            "$ref": "#/components/schemas/AdapterAccessControl"
           }
         }
       },
       "ProfileConfigPatch": {
         "type": "object",
-        "description": "配置工作台「保存」发的那一批改动。**全部键可选**：省略的键表示不动，所以它是 diff 而不是整档替换 —— 另一个标签页改过的项不会被这里悄悄写回旧值。\n顶层出现这四个之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。",
+        "description": "配置工作台「保存」发的那一批改动。**全部键可选**：省略的键表示不动，所以它是 diff 而不是整档替换 —— 另一个标签页改过的项不会被这里悄悄写回旧值。\n顶层出现这六个之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。",
         "properties": {
           "defaultProvider": {
             "type": ["string", "null"],
             "description": "这一档默认的 provider **实例** id（全局那份清单里的）；`null` 取消档级默认。"
+          },
+          "personaId": {
+            "type": ["string", "null"],
+            "description": "这一档选用的人格 id；`null` 取消人格。必须是人格库里存在的 id。"
           },
           "maxToolSteps": {
             "type": "integer",
@@ -2488,6 +3148,10 @@
               },
               "required": ["enabled"]
             }
+          },
+          "access": {
+            "description": "整份替换这一档的准入控制；省略表示不动。",
+            "$ref": "#/components/schemas/AdapterAccessControl"
           }
         }
       },
@@ -2562,6 +3226,341 @@
             "items": {
               "$ref": "#/components/schemas/LogEntry"
             }
+          }
+        }
+      },
+      "AdapterAccessControl": {
+        "type": "object",
+        "required": ["whitelistEnabled", "allowedIds", "adminIds"],
+        "properties": {
+          "whitelistEnabled": {
+            "type": "boolean",
+            "description": "启用后只处理白名单里的用户/群；管理员不受限制。"
+          },
+          "allowedIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "私聊用户 id 或群 id"
+          },
+          "adminIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "管理员用户 id；始终越过白名单"
+          }
+        }
+      },
+      "CronLastStatus": {
+        "type": "string",
+        "enum": ["success", "error"]
+      },
+      "CronJobInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "cron",
+          "prompt",
+          "profile",
+          "enabled",
+          "sessionId",
+          "lastRunAt",
+          "lastStatus",
+          "lastError",
+          "nextRunAt",
+          "running"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "cron": {
+            "type": "string",
+            "description": "5 段 cron：分 时 日 月 周，按服务器本地时区"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "sessionId": {
+            "type": ["string", "null"]
+          },
+          "lastRunAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "lastStatus": {
+            "type": ["string", "null"],
+            "enum": ["success", "error", null]
+          },
+          "lastError": {
+            "type": ["string", "null"]
+          },
+          "nextRunAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "running": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CronJobList": {
+        "type": "object",
+        "required": ["jobs"],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronJobInfo"
+            }
+          }
+        }
+      },
+      "CronJobCreateRequest": {
+        "type": "object",
+        "required": ["name", "cron", "prompt", "profile"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "CronJobUpdateRequest": {
+        "type": "object",
+        "description": "只覆盖出现的字段。",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CronJobResult": {
+        "type": "object",
+        "required": ["job"],
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/CronJobInfo"
+          }
+        }
+      },
+      "AdapterSettingEntry": {
+        "type": "object",
+        "required": ["key", "value"],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "AdapterConfigView": {
+        "type": "object",
+        "required": ["type", "name", "enabled", "profile", "settings"],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdapterSettingEntry"
+            }
+          }
+        }
+      },
+      "AdapterDetail": {
+        "type": "object",
+        "required": ["adapter", "config"],
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/AdapterInfo"
+          },
+          "config": {
+            "$ref": "#/components/schemas/AdapterConfigView"
+          }
+        }
+      },
+      "AdapterSettingField": {
+        "type": "object",
+        "required": ["key", "label", "type", "required", "default"],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["text", "password"]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "default": {
+            "type": "string"
+          },
+          "placeholder": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          }
+        }
+      },
+      "AdapterTemplate": {
+        "type": "object",
+        "required": ["type", "name", "description", "fields"],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdapterSettingField"
+            }
+          }
+        }
+      },
+      "AdapterTemplateList": {
+        "type": "object",
+        "required": ["templates"],
+        "properties": {
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdapterTemplate"
+            }
+          }
+        }
+      },
+      "AdapterCreateRequest": {
+        "type": "object",
+        "required": ["id", "type", "profile", "settings"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "实例 id，小写字母/数字开头，只含 a-z0-9._-。"
+          },
+          "type": {
+            "type": "string",
+            "description": "适配器类型，目前只有 napcat。"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "profile": {
+            "type": "string",
+            "description": "绑定的配置档 id。"
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdapterSettingEntry"
+            }
+          }
+        }
+      },
+      "AdapterUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdapterSettingEntry"
+            }
+          }
+        }
+      },
+      "AdapterEnabledRequest": {
+        "type": "object",
+        "required": ["enabled"],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AdapterRemoved": {
+        "type": "object",
+        "required": ["id", "removed"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
           }
         }
       }

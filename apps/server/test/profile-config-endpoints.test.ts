@@ -250,6 +250,64 @@ test("引用不存在的工具 / 插件 / provider 实例都回 400，且说得�
   assert.equal(h.raw(), before, "被拒的写入动了档文件");
 });
 
+test("访问控制按配置档落盘：默认全部放行，保存后规范化并回读", async (t) => {
+  const h = await start(t);
+  const initial = (await h.get("/profiles/default/config")).body as unknown as ProfileConfig;
+  assert.deepEqual(initial.access, {
+    whitelistEnabled: false,
+    allowedIds: [],
+    adminIds: [],
+  });
+
+  const res = await h.post("/profiles/default/config", {
+    access: {
+      whitelistEnabled: true,
+      allowedIds: ["123", "123", " 456 "],
+      adminIds: ["999"],
+    },
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const saved = (res.body.config as unknown as ProfileConfig).access;
+  assert.deepEqual(saved, {
+    whitelistEnabled: true,
+    allowedIds: ["123", "456"],
+    adminIds: ["999"],
+  });
+  assert.deepEqual(JSON.parse(h.raw()).access, saved, "响应说存了而文件里没有");
+
+  // 省略 access 不影响它：保存是 diff，不是整档替换。
+  assert.equal((await h.post("/profiles/default/config", { maxToolSteps: 6 })).status, 200);
+  assert.deepEqual(
+    ((await h.get("/profiles/default/config")).body as unknown as ProfileConfig).access,
+    saved,
+  );
+});
+
+test("访问控制的坏形状回 400，且一个字节都不写", async (t) => {
+  const h = await start(t);
+  const before = h.raw();
+  const cases: [string, unknown, RegExp][] = [
+    ["不是对象", [], /access 必须是对象/],
+    ["开关不是布尔", { whitelistEnabled: "yes", allowedIds: [], adminIds: [] }, /whitelistEnabled/],
+    ["白名单不是数组", { whitelistEnabled: true, allowedIds: "1", adminIds: [] }, /allowedIds/],
+    [
+      "id 带空白",
+      { whitelistEnabled: true, allowedIds: ["a b"], adminIds: [] },
+      /不能为空或包含空白/,
+    ],
+    ["id 太长", { whitelistEnabled: true, allowedIds: [], adminIds: ["x".repeat(129)] }, /太长/],
+  ];
+  const failures: string[] = [];
+  for (const [label, access, pattern] of cases) {
+    const res = await h.post("/profiles/default/config", { access });
+    if (res.status !== 400) failures.push(`${label}：期望 400，实际 ${res.status}`);
+    else if (!pattern.test(String(res.body.error)))
+      failures.push(`${label}：原因不对（${String(res.body.error)}）`);
+  }
+  assert.deepEqual(failures, [], failures.join("\n"));
+  assert.equal(h.raw(), before, "被拒的写入动了档文件");
+});
+
 test("档文件里用户自己写的键，在保存之后仍然在原处", async (t) => {
   // 读-改-写要原样保留我们不认识的键（`FileConfig` 那条同判据）：这一条测的是
   // 「工作台保存会不会顺手把用户手写的东西抹了」，那是最贵的一种数据丢失。

@@ -233,6 +233,36 @@ test("toolCalls 原样往返，读回的行是普通对象", (t) => {
   assert.deepStrictEqual(second, plain);
 });
 
+test("图片附件原样往返，纯文本消息不带 images 键", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+  const s = manager.create();
+  const withImage: Message = {
+    id: "m-image",
+    sessionId: s.id,
+    role: "user",
+    content: "",
+    images: [{ data: "aGVsbG8=", mediaType: "image/png" }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  const plain: Message = {
+    id: "m-text",
+    sessionId: s.id,
+    role: "user",
+    content: "没有图",
+    createdAt: "2026-01-01T00:00:01.000Z",
+  };
+  manager.appendMessage(s.id, withImage);
+  manager.appendMessage(s.id, plain);
+  manager.close();
+
+  const [first, second] = open().getDetail(s.id)?.detail.messages ?? [];
+  assert.deepStrictEqual(first, withImage);
+  assert.ok(second);
+  assert.ok(!("images" in second), "纯文本消息读回来不能多一个 images: null");
+  assert.deepStrictEqual(second, plain);
+});
+
 test("被中断的一轮原样留在库里：不清理、不标记", (t) => {
   const { open } = useStore(t);
   const manager = open();

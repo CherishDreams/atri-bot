@@ -34,11 +34,26 @@ export type AuthSession = {
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
+export type MessageImage = {
+    /**
+     * base64 编码的图片字节，不含 `data:` 前缀
+     */
+    data: string;
+    /**
+     * 图片 MIME 类型，如 image/jpeg
+     */
+    mediaType: string;
+};
+
 export type Message = {
     id: string;
     sessionId: string;
     role: Role;
     content: string;
+    /**
+     * 用户消息附带的图片；纯文本消息没有这个键
+     */
+    images?: Array<MessageImage>;
     /**
      * 仅当 role === "assistant" 且模型在这一轮要求执行工具时存在
      */
@@ -218,19 +233,34 @@ export type DeletedMany = {
 
 export type AdapterInfo = {
     id: string;
+    /**
+     * 显示名；没填时为 id。
+     */
     name: string;
     /**
-     * `atri.config.json` 里没写 `enabled: false`。不等于在收流量。
+     * 适配器类型，决定表单与实现，目前只有 napcat。
+     */
+    type: string;
+    /**
+     * 运行期配置里的启用开关；不等于实例真的在跑。
      */
     enabled: boolean;
     /**
-     * 跑在哪份配置档上；没绑定为 null。
+     * 绑定的配置档 id；没绑定为 null。
      */
     profile: string | null;
     /**
-     * 绑定的那份档此刻可用。为 false 时这个适配器不会被启动。
+     * 绑定的配置档此刻可用。为 false 时不会启动。
      */
     bound: boolean;
+    /**
+     * 实例是否已成功启动。NapCat 的 WebSocket 连接状态另见日志。
+     */
+    running: boolean;
+    /**
+     * 上一次启动失败的原因；正常为 null。
+     */
+    error: string | null;
 };
 
 /**
@@ -379,8 +409,39 @@ export type ProfileRecord = {
     defaultProviderId: string | null;
 };
 
+export type PersonaInfo = {
+    id: string;
+    name: string;
+    description: string;
+    /**
+     * 作为 system 消息注入每轮请求；不写入会话历史
+     */
+    systemPrompt: string;
+};
+
+export type PersonaList = {
+    personas: Array<PersonaInfo>;
+};
+
+export type PersonaCreateRequest = {
+    id: string;
+    name: string;
+    description?: string;
+    systemPrompt: string;
+};
+
+export type PersonaUpdateRequest = {
+    name: string;
+    description?: string;
+    systemPrompt: string;
+};
+
+export type PersonaResult = {
+    persona: PersonaInfo;
+};
+
 /**
- * 一份配置档此刻的可编辑内容，配置工作台的草稿起点。四段一次读回，避免界面拼三个端点时读到自相矛盾的起点。不引入第二份真源：每一段仍由各自的存储现算，这个响应只做搬运。
+ * 一份配置档此刻的可编辑内容，配置工作台的草稿起点。六段一次读回，避免界面拼多个端点时读到自相矛盾的起点。不引入第二份真源：每一段仍由各自的存储现算，这个响应只做搬运。
  */
 export type ProfileConfig = {
     id: string;
@@ -393,6 +454,10 @@ export type ProfileConfig = {
      */
     defaultProviderId: string | null;
     /**
+     * 这一档选用的人格 id；`null` 表示不注入人格提示。
+     */
+    personaId: string | null;
+    /**
      * 单轮允许的工具步数，给的是**夹取后的生效值**（引擎实际用的那一个）。不返回文件里的原值：那会出现「界面写着 999、实际跑 50」，而两个数都"没错"。
      */
     maxToolSteps: number;
@@ -404,17 +469,25 @@ export type ProfileConfig = {
      * 与 `GET /plugins?profile=<id>` 同源（运行态的 `PluginManager.list()`）。
      */
     plugins: Array<PluginInfo>;
+    /**
+     * 这一档的准入控制；绑定到这一档的适配器共用这份名单。
+     */
+    access: AdapterAccessControl;
 };
 
 /**
  * 配置工作台「保存」发的那一批改动。**全部键可选**：省略的键表示不动，所以它是 diff 而不是整档替换 —— 另一个标签页改过的项不会被这里悄悄写回旧值。
- * 顶层出现这四个之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。
+ * 顶层出现这六个之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。
  */
 export type ProfileConfigPatch = {
     /**
      * 这一档默认的 provider **实例** id（全局那份清单里的）；`null` 取消档级默认。
      */
     defaultProvider?: string | null;
+    /**
+     * 这一档选用的人格 id；`null` 取消人格。必须是人格库里存在的 id。
+     */
+    personaId?: string | null;
     /**
      * 单轮允许的工具步数，1..50。**越界回 400 而不是夹取**：静默改成别的值会让界面上的数字与实际生效的数字分家。
      */
@@ -435,6 +508,10 @@ export type ProfileConfigPatch = {
             enabled: boolean;
         };
     };
+    /**
+     * 整份替换这一档的准入控制；省略表示不动。
+     */
+    access?: AdapterAccessControl;
 };
 
 /**
@@ -485,6 +562,142 @@ export type LogList = {
      */
     instance: string;
     logs: Array<LogEntry>;
+};
+
+export type AdapterAccessControl = {
+    /**
+     * 启用后只处理白名单里的用户/群；管理员不受限制。
+     */
+    whitelistEnabled: boolean;
+    /**
+     * 私聊用户 id 或群 id
+     */
+    allowedIds: Array<string>;
+    /**
+     * 管理员用户 id；始终越过白名单
+     */
+    adminIds: Array<string>;
+};
+
+export type CronLastStatus = 'success' | 'error';
+
+export type CronJobInfo = {
+    id: string;
+    name: string;
+    /**
+     * 5 段 cron：分 时 日 月 周，按服务器本地时区
+     */
+    cron: string;
+    prompt: string;
+    profile: string;
+    enabled: boolean;
+    sessionId: string | null;
+    lastRunAt: string | null;
+    lastStatus: 'success' | 'error' | null;
+    lastError: string | null;
+    nextRunAt: string | null;
+    running: boolean;
+};
+
+export type CronJobList = {
+    jobs: Array<CronJobInfo>;
+};
+
+export type CronJobCreateRequest = {
+    name: string;
+    cron: string;
+    prompt: string;
+    profile: string;
+    enabled?: boolean;
+};
+
+/**
+ * 只覆盖出现的字段。
+ */
+export type CronJobUpdateRequest = {
+    name?: string;
+    cron?: string;
+    prompt?: string;
+    profile?: string;
+    enabled?: boolean;
+};
+
+export type CronJobResult = {
+    job: CronJobInfo;
+};
+
+export type AdapterSettingEntry = {
+    key: string;
+    value: string;
+};
+
+export type AdapterConfigView = {
+    type: string;
+    name: string;
+    enabled: boolean;
+    profile: string;
+    settings: Array<AdapterSettingEntry>;
+};
+
+export type AdapterDetail = {
+    adapter: AdapterInfo;
+    config: AdapterConfigView;
+};
+
+export type AdapterSettingField = {
+    key: string;
+    label: string;
+    type: 'text' | 'password';
+    required: boolean;
+    default: string;
+    placeholder?: string;
+    hint?: string;
+    pattern?: string;
+};
+
+export type AdapterTemplate = {
+    type: string;
+    name: string;
+    description: string;
+    fields: Array<AdapterSettingField>;
+};
+
+export type AdapterTemplateList = {
+    templates: Array<AdapterTemplate>;
+};
+
+export type AdapterCreateRequest = {
+    /**
+     * 实例 id，小写字母/数字开头，只含 a-z0-9._-。
+     */
+    id: string;
+    /**
+     * 适配器类型，目前只有 napcat。
+     */
+    type: string;
+    name?: string;
+    enabled?: boolean;
+    /**
+     * 绑定的配置档 id。
+     */
+    profile: string;
+    settings: Array<AdapterSettingEntry>;
+};
+
+export type AdapterUpdateRequest = {
+    name?: string;
+    enabled?: boolean;
+    profile?: string;
+    settings?: Array<AdapterSettingEntry>;
+};
+
+export type AdapterEnabledRequest = {
+    enabled: boolean;
+};
+
+export type AdapterRemoved = {
+    id: string;
+    removed: boolean;
 };
 
 /**
@@ -582,6 +795,310 @@ export type ListLogsResponses = {
 };
 
 export type ListLogsResponse = ListLogsResponses[keyof ListLogsResponses];
+
+export type ListCronJobsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/cron';
+};
+
+export type ListCronJobsErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type ListCronJobsError = ListCronJobsErrors[keyof ListCronJobsErrors];
+
+export type ListCronJobsResponses = {
+    /**
+     * 计划任务列表
+     */
+    200: CronJobList;
+};
+
+export type ListCronJobsResponse = ListCronJobsResponses[keyof ListCronJobsResponses];
+
+export type CreateCronJobData = {
+    body: CronJobCreateRequest;
+    path?: never;
+    query?: never;
+    url: '/cron';
+};
+
+export type CreateCronJobErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type CreateCronJobError = CreateCronJobErrors[keyof CreateCronJobErrors];
+
+export type CreateCronJobResponses = {
+    /**
+     * 已创建的任务
+     */
+    201: CronJobResult;
+};
+
+export type CreateCronJobResponse = CreateCronJobResponses[keyof CreateCronJobResponses];
+
+export type DeleteCronJobData = {
+    body?: never;
+    path: {
+        /**
+         * 计划任务 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/cron/{id}';
+};
+
+export type DeleteCronJobErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type DeleteCronJobError = DeleteCronJobErrors[keyof DeleteCronJobErrors];
+
+export type DeleteCronJobResponses = {
+    /**
+     * 已删除
+     */
+    200: {
+        deleted: boolean;
+    };
+};
+
+export type DeleteCronJobResponse = DeleteCronJobResponses[keyof DeleteCronJobResponses];
+
+export type UpdateCronJobData = {
+    body: CronJobUpdateRequest;
+    path: {
+        /**
+         * 计划任务 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/cron/{id}';
+};
+
+export type UpdateCronJobErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type UpdateCronJobError = UpdateCronJobErrors[keyof UpdateCronJobErrors];
+
+export type UpdateCronJobResponses = {
+    /**
+     * 已更新的任务
+     */
+    200: CronJobResult;
+};
+
+export type UpdateCronJobResponse = UpdateCronJobResponses[keyof UpdateCronJobResponses];
+
+export type RunCronJobData = {
+    body?: never;
+    path: {
+        /**
+         * 计划任务 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/cron/{id}/run';
+};
+
+export type RunCronJobErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     */
+    409: ApiError;
+};
+
+export type RunCronJobError = RunCronJobErrors[keyof RunCronJobErrors];
+
+export type RunCronJobResponses = {
+    /**
+     * 已开始执行
+     */
+    202: {
+        started: boolean;
+    };
+};
+
+export type RunCronJobResponse = RunCronJobResponses[keyof RunCronJobResponses];
+
+export type ListPersonasData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/personas';
+};
+
+export type ListPersonasErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type ListPersonasError = ListPersonasErrors[keyof ListPersonasErrors];
+
+export type ListPersonasResponses = {
+    /**
+     * 人格列表
+     */
+    200: PersonaList;
+};
+
+export type ListPersonasResponse = ListPersonasResponses[keyof ListPersonasResponses];
+
+export type CreatePersonaData = {
+    body: PersonaCreateRequest;
+    path?: never;
+    query?: never;
+    url: '/personas';
+};
+
+export type CreatePersonaErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     */
+    409: ApiError;
+};
+
+export type CreatePersonaError = CreatePersonaErrors[keyof CreatePersonaErrors];
+
+export type CreatePersonaResponses = {
+    /**
+     * 已创建的人格
+     */
+    201: PersonaResult;
+};
+
+export type CreatePersonaResponse = CreatePersonaResponses[keyof CreatePersonaResponses];
+
+export type DeletePersonaData = {
+    body?: never;
+    path: {
+        /**
+         * 人格 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/personas/{id}';
+};
+
+export type DeletePersonaErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     */
+    409: ApiError;
+};
+
+export type DeletePersonaError = DeletePersonaErrors[keyof DeletePersonaErrors];
+
+export type DeletePersonaResponses = {
+    /**
+     * 已删除
+     */
+    200: {
+        deleted: boolean;
+    };
+};
+
+export type DeletePersonaResponse = DeletePersonaResponses[keyof DeletePersonaResponses];
+
+export type UpdatePersonaData = {
+    body: PersonaUpdateRequest;
+    path: {
+        /**
+         * 人格 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/personas/{id}';
+};
+
+export type UpdatePersonaErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type UpdatePersonaError = UpdatePersonaErrors[keyof UpdatePersonaErrors];
+
+export type UpdatePersonaResponses = {
+    /**
+     * 已更新的人格
+     */
+    200: PersonaResult;
+};
+
+export type UpdatePersonaResponse = UpdatePersonaResponses[keyof UpdatePersonaResponses];
 
 export type StreamLogsData = {
     body?: never;
@@ -1666,6 +2183,196 @@ export type ListAdaptersResponses = {
 };
 
 export type ListAdaptersResponse = ListAdaptersResponses[keyof ListAdaptersResponses];
+
+export type CreateAdapterData = {
+    body: AdapterCreateRequest;
+    path?: never;
+    query?: never;
+    url: '/adapters';
+};
+
+export type CreateAdapterErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     */
+    409: ApiError;
+};
+
+export type CreateAdapterError = CreateAdapterErrors[keyof CreateAdapterErrors];
+
+export type CreateAdapterResponses = {
+    /**
+     * 已创建；enabled 时会尝试启动，启动失败原因在 adapter.error
+     */
+    200: AdapterDetail;
+};
+
+export type CreateAdapterResponse = CreateAdapterResponses[keyof CreateAdapterResponses];
+
+export type ListAdapterTemplatesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/adapters/templates';
+};
+
+export type ListAdapterTemplatesErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type ListAdapterTemplatesError = ListAdapterTemplatesErrors[keyof ListAdapterTemplatesErrors];
+
+export type ListAdapterTemplatesResponses = {
+    /**
+     * 类型模板
+     */
+    200: AdapterTemplateList;
+};
+
+export type ListAdapterTemplatesResponse = ListAdapterTemplatesResponses[keyof ListAdapterTemplatesResponses];
+
+export type DeleteAdapterData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/adapters/{id}';
+};
+
+export type DeleteAdapterErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type DeleteAdapterError = DeleteAdapterErrors[keyof DeleteAdapterErrors];
+
+export type DeleteAdapterResponses = {
+    /**
+     * 已删除
+     */
+    200: AdapterRemoved;
+};
+
+export type DeleteAdapterResponse = DeleteAdapterResponses[keyof DeleteAdapterResponses];
+
+export type GetAdapterData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/adapters/{id}';
+};
+
+export type GetAdapterErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type GetAdapterError = GetAdapterErrors[keyof GetAdapterErrors];
+
+export type GetAdapterResponses = {
+    /**
+     * 实例与配置
+     */
+    200: AdapterDetail;
+};
+
+export type GetAdapterResponse = GetAdapterResponses[keyof GetAdapterResponses];
+
+export type UpdateAdapterData = {
+    body: AdapterUpdateRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/adapters/{id}';
+};
+
+export type UpdateAdapterErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type UpdateAdapterError = UpdateAdapterErrors[keyof UpdateAdapterErrors];
+
+export type UpdateAdapterResponses = {
+    /**
+     * 更新后的实例
+     */
+    200: AdapterDetail;
+};
+
+export type UpdateAdapterResponse = UpdateAdapterResponses[keyof UpdateAdapterResponses];
+
+export type SetAdapterEnabledData = {
+    body: AdapterEnabledRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/adapters/{id}/enable';
+};
+
+export type SetAdapterEnabledErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type SetAdapterEnabledError = SetAdapterEnabledErrors[keyof SetAdapterEnabledErrors];
+
+export type SetAdapterEnabledResponses = {
+    /**
+     * 启停后的实例
+     */
+    200: AdapterDetail;
+};
+
+export type SetAdapterEnabledResponse = SetAdapterEnabledResponses[keyof SetAdapterEnabledResponses];
 
 export type ListToolsData = {
     body?: never;

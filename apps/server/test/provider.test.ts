@@ -246,6 +246,41 @@ test("OpenAI：请求体不传 max_tokens（该项可选）", async () => {
   );
 });
 
+test("OpenAI：用户图片转成 image_url，纯图片不产生空 text 块", async () => {
+  const provider = new OpenAIProvider({ id: "o", baseUrl: "https://x/v1" });
+  const image = { data: "aGVsbG8=", mediaType: "image/png" };
+  await withFetch(
+    async (_url, init) => {
+      const sent = JSON.parse(init.body) as {
+        messages: { role: string; content: unknown }[];
+      };
+      assert.deepEqual(sent.messages[0], {
+        role: "user",
+        content: [
+          { type: "text", text: "看图" },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,aGVsbG8=" },
+          },
+        ],
+      });
+      assert.deepEqual(sent.messages[1], {
+        role: "user",
+        content: [{ type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } }],
+      });
+      return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+    },
+    () =>
+      provider.chat({
+        model: "m",
+        messages: [
+          { role: "user", content: "看图", images: [image] },
+          { role: "user", content: "", images: [image] },
+        ],
+      }),
+  );
+});
+
 test("OpenAI：流式按 delta.content 累积并逐段回调", async () => {
   const provider = new OpenAIProvider({ id: "o", baseUrl: "https://x/v1" });
   const deltas: string[] = [];
@@ -309,6 +344,22 @@ test("Anthropic：system 提到顶层，messages 里不留 system", () => {
   ]);
   assert.equal(system, "S1\n\nS2", "多条 system 应合并而不是互相覆盖");
   assert.deepEqual(body, [{ role: "user", content: "hi" }]);
+});
+
+test("Anthropic：用户图片转成 base64 image 块，纯图片只有 image 块", () => {
+  const image = { data: "aGVsbG8=", mediaType: "image/png" };
+  const { body } = splitMessages([
+    { role: "user", content: "看图", images: [image] },
+    { role: "assistant", content: "看到了" },
+    { role: "user", content: "", images: [image] },
+  ]);
+  assert.deepEqual(body[0]?.content, [
+    { type: "text", text: "看图" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+  ]);
+  assert.deepEqual(body[2]?.content, [
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
+  ]);
 });
 
 test("Anthropic：相邻同角色消息被合并（上游要求严格交替）", () => {

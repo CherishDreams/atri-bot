@@ -293,9 +293,16 @@ interface AnthropicToolUseBlock {
   input: Record<string, unknown>;
 }
 
+/** 用户消息里的一张图片。Anthropic 的 base64 源不接受 `data:` 前缀。 */
+interface AnthropicImageBlock {
+  type: "image";
+  source: { type: "base64"; media_type: string; data: string };
+}
+
 /** 内容块联合。文本既可以是裸 string 也可以是 text 块，取决于消息里有没有别的块。 */
 type AnthropicContentBlock =
   | { type: "text"; text: string }
+  | AnthropicImageBlock
   | AnthropicToolUseBlock
   | AnthropicToolResultBlock;
 
@@ -348,6 +355,21 @@ export function splitMessages(messages: ChatMessage[]): {
         blocks.push({ type: "tool_use", id: call.id, name: call.name, input: parseInput(call) });
       }
       body.push({ role: "assistant", content: blocks });
+      continue;
+    }
+
+    // 图片只可能出现在用户消息上。Anthropic 要求图片走内容块（base64 源），
+    // 与 OpenAI 的 `image_url` 不是同一种结构，所以两家的换算各自留在自己的文件里。
+    if (message.role === "user" && message.images?.length) {
+      const blocks: AnthropicContentBlock[] = [];
+      if (message.content) blocks.push({ type: "text", text: message.content });
+      for (const image of message.images) {
+        blocks.push({
+          type: "image",
+          source: { type: "base64", media_type: image.mediaType, data: image.data },
+        });
+      }
+      body.push({ role: "user", content: blocks });
       continue;
     }
 

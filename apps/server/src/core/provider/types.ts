@@ -1,4 +1,4 @@
-import type { Role, ToolCall } from "@atri/shared";
+import type { MessageImage, Role, ToolCall } from "@atri/shared";
 import type { JsonSchema } from "#core/tool/types.ts";
 
 /**
@@ -14,6 +14,8 @@ import type { JsonSchema } from "#core/tool/types.ts";
 export interface ChatMessage {
   role: Role;
   content: string;
+  /** 用户消息附带的图片；两家 provider 各自换算成自己的内容块。 */
+  images?: MessageImage[];
   toolCallId?: string;
   tool_call_id?: string;
   /** 助手消息要求调用工具时带上；`role === "tool"` 的那条用 `toolCallId` 配回这里。 */

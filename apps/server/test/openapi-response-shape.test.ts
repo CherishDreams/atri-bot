@@ -33,9 +33,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AdapterInfo } from "@atri/shared";
-import { AdapterManager } from "#adapters/manager.ts";
-import { createLogger } from "#core/logger.ts";
 import { createApp } from "#app.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
@@ -88,6 +85,15 @@ const ORDER = [
   "createProfile",
   "getProfileConfig",
   "saveProfileConfig",
+  "listPersonas",
+  "createPersona",
+  "updatePersona",
+  "deletePersona",
+  "createCronJob",
+  "listCronJobs",
+  "updateCronJob",
+  "runCronJob",
+  "deleteCronJob",
   "listProviderSources",
   "createProviderSource",
   "updateProviderSource",
@@ -106,7 +112,13 @@ const ORDER = [
   "setPluginEnabled",
   "getPluginConfig",
   "savePluginConfig",
+  "listAdapterTemplates",
+  "createAdapter",
+  "getAdapter",
+  "updateAdapter",
+  "setAdapterEnabled",
   "listAdapters",
+  "deleteAdapter",
   "listTools",
   "setToolEnabled",
   "deleteSession",
@@ -118,13 +130,6 @@ const ORDER = [
 ];
 
 // --- 规格的窄子集校验器 -----------------------------------------------------
-
-/**
- * `GET /adapters` 的元素数组恒空：仓库里没有任何适配器实现（`AdapterManager.register()`
- * 无调用方），HTTP 侧造不出非空列表。放行空数组的同时，元素形状改由「进程内核对」那条
- * 用例负责 —— 它直接调 `AdapterManager.list()`，用的就是端点读的同一个函数。
- */
-const EMPTY_OK = new Set(["adapters"]);
 
 /** 解析文档内 `$ref`，并合并 `allOf`（本规格只有一处 allOf：SessionDetail）。 */
 function resolve(node: unknown, stack: string[] = []): Node {
@@ -161,7 +166,7 @@ function jsonType(value: unknown): string {
 }
 
 /**
- * 空数组一律算假绿 —— **唯一的例外是 `EMPTY_OK`**（见其注释）。
+ * 空数组一律算假绿：驱动必须真的造出数据，否则元素形状根本没被检查。
  *
  * 递归比对。**相对 JSON Schema 有一处刻意收紧**：对象按「闭合」处理 ——
  * 实际多出、规格没声明的键也算漂移。JSON Schema 默认允许额外属性，而
@@ -193,7 +198,6 @@ function checkShape(value: unknown, rawNode: Node, path: string, problems: strin
     const arr = value as unknown[];
     // 空数组会让「元素形状」整层静默通过，所以驱动必须真的造出数据。
     if (arr.length === 0) {
-      if (EMPTY_OK.has(path.replace(/^\$\./, ""))) return;
       problems.push(`${path}: 数组为空，元素形状根本没被检查（这是假绿，驱动没造出数据）`);
       return;
     }
@@ -500,6 +504,7 @@ test("每个端点的真实响应与规格逐字段一致", async (t) => {
     sessionId: "",
     streamSessionId: "",
     profileId: "",
+    cronId: "",
   };
 
   for (const operationId of ORDER) {
@@ -540,34 +545,6 @@ test("每个端点的真实响应与规格逐字段一致", async (t) => {
   }
 });
 
-/** `GET /adapters` 恒空：没有适配器实现，`register()` 无调用方。 */
-test("GET /adapters 的元素形状（经进程内 AdapterManager 核对）", () => {
-  // `AdapterManager` 只读 `config.adapters` 与它自己那份 `#adapters`，所以这里只需要一个
-  // logger。这条用例以前要构造**一整条真实依赖链**（一座临时目录里的 sqlite、一个引擎、
-  // 两个注册表），唯一的原因是那个 `engine` 字段 —— 它被存起来而从未被读，却要求所有
-  // 靠近它的测试替它把下游补齐。删掉之后这里回到了它本来该有的大小。
-  // 绑定解析器在这里给一个「什么都不存在」的：本条只核对**形状**，
-  // 绑定的行为由 `test/adapters.test.ts` 管。
-  const manager = new AdapterManager({
-    config: { adapters: { "spec-x": { profile: "spec-profile" } } },
-    logger: createLogger("error"),
-    resolveProfile: () => null,
-  });
-  manager.register("spec-x", { name: "X", start() {}, stop() {} });
-  const listed: AdapterInfo[] = manager.list();
-  const problems: string[] = [];
-  const schema: Node = {
-    type: "array",
-    items: resolve(SPEC.components.schemas.AdapterInfo as unknown as Node),
-  };
-  checkShape(listed, schema, "$", problems);
-  assert.deepEqual(
-    problems,
-    [],
-    `AdapterManager.list() 的返回值与规格 AdapterInfo 不一致：\n${problems.join("\n")}`,
-  );
-});
-
 /** 共享资源 id。写成接口而不是 Record：索引签名会让每个读取都带上 undefined。 */
 interface Ids {
   sourceId: string;
@@ -576,6 +553,7 @@ interface Ids {
   streamSessionId: string;
   /** 驱动自己 `createProfile` 出来的那份档，供 rename / reload 用（绝不碰 `default`）。 */
   profileId: string;
+  cronId: string;
 }
 
 /**
@@ -642,15 +620,26 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       ids.profileId = "guard-profile";
       return r;
     }
-    case "getProfileConfig":
+    case "getProfileConfig": {
+      // 先写一份非空名单：`access.allowedIds` / `adminIds` 是数组，空数组会让
+      // 形状检查的「元素形状根本没被检查」判据把这一层判成假绿。
+      await call("POST", `/profiles/${ids.profileId}/config`, {
+        access: { whitelistEnabled: true, allowedIds: ["10001"], adminIds: ["10002"] },
+      });
       return call("GET", `/profiles/${ids.profileId}/config`);
+    }
     case "saveProfileConfig": {
-      // 两样都要：`maxToolSteps` 走「省略即不动」那条 diff 语义（发整档就等于把它测漏了），
-      // 而那颗**按设计起不来**的夹具插件让 `failed` 真的带上元素 —— 空数组会让这一层的
-      // 形状检查假绿，那是这个守卫自己的规矩（见 EMPTY_OK 那段注释）。
+      // 三样都要：`maxToolSteps` 走「省略即不动」那条 diff 语义（发整档就等于把它测漏了），
+      // 那颗**按设计起不来**的夹具插件让 `failed` 真的带上元素，而 `access` 的数组
+      // 必须有内容 —— 空数组会让这一层的形状检查假绿（见 checkShape 的注释）。
       return call("POST", `/profiles/${ids.profileId}/config`, {
         maxToolSteps: 7,
         plugins: { "fixture-broken": { enabled: true } },
+        access: {
+          whitelistEnabled: true,
+          allowedIds: ["10001", "20001"],
+          adminIds: ["10002"],
+        },
       });
     }
     case "deleteProfile": {
@@ -660,6 +649,51 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       const victim = idOf(created.body);
       return call("DELETE", `/profiles/${victim}`);
     }
+
+    case "listPersonas":
+      return at("/personas");
+    case "createPersona":
+      return call("POST", "/personas", {
+        id: "guard-persona",
+        name: "守卫人格",
+        description: "形状检查用",
+        systemPrompt: "你是形状守卫。",
+      });
+    case "updatePersona":
+      return call("POST", "/personas/guard-persona", {
+        name: "改名后的人格",
+        description: "形状检查用",
+        systemPrompt: "你是改名后的形状守卫。",
+      });
+    case "deletePersona": {
+      await call("POST", "/personas", {
+        id: "persona-victim",
+        name: "待删人格",
+        description: "",
+        systemPrompt: "临时",
+      });
+      return call("DELETE", "/personas/persona-victim");
+    }
+
+    case "createCronJob": {
+      const r = await call("POST", "/cron", {
+        name: "形状守卫任务",
+        cron: "0 9 * * *",
+        prompt: "生成一份简短的状态说明",
+        profile: "default",
+        enabled: false,
+      });
+      ids.cronId = idOf(r.body);
+      return r;
+    }
+    case "listCronJobs":
+      return at("/cron");
+    case "updateCronJob":
+      return call("POST", `/cron/${ids.cronId}`, { name: "改名后的守卫任务", enabled: false });
+    case "runCronJob":
+      return call("POST", `/cron/${ids.cronId}/run`);
+    case "deleteCronJob":
+      return call("DELETE", `/cron/${ids.cronId}`);
 
     case "createSession": {
       const r = await at("/sessions", { title: "形状守卫" });
@@ -761,8 +795,42 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       });
     case "unloadPlugin":
       return at("/plugins/fixture/unload");
+    case "listAdapterTemplates":
+      return at("/adapters/templates");
+    case "createAdapter":
+      return at("/adapters", {
+        id: "guard-adapter",
+        type: "napcat",
+        name: "守卫适配器",
+        enabled: false,
+        profile: "default",
+        settings: [
+          { key: "host", value: "127.0.0.1" },
+          { key: "port", value: "6199" },
+          { key: "path", value: "/ws" },
+          { key: "token", value: "secret" },
+        ],
+      });
+    case "getAdapter":
+      return at("/adapters/guard-adapter");
+    case "updateAdapter":
+      return at("/adapters/guard-adapter", {
+        name: "改名后的适配器",
+        enabled: false,
+        profile: "default",
+        settings: [
+          { key: "host", value: "127.0.0.1" },
+          { key: "port", value: "6200" },
+          { key: "path", value: "/ws" },
+          { key: "token", value: "secret" },
+        ],
+      });
+    case "setAdapterEnabled":
+      return at("/adapters/guard-adapter/enable", { enabled: false });
     case "listAdapters":
       return at("/adapters");
+    case "deleteAdapter":
+      return at("/adapters/guard-adapter");
     case "listTools":
       return at("/tools");
     case "setToolEnabled": {
@@ -789,6 +857,10 @@ function pathIds(operationId: string, ids: Ids): string {
       return ids.sourceId;
     case "updateProvider":
       return ids.providerId;
+    case "updateCronJob":
+    case "runCronJob":
+    case "deleteCronJob":
+      return ids.cronId;
     default:
       return "";
   }

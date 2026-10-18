@@ -2,12 +2,28 @@
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
+/**
+ * 消息里的一张图片。
+ *
+ * 存的是图片**本体**而不是一个会过期的 URL：QQ 的图片链接通常带时效性参数，
+ * 只在会话里留链的话，历史消息过几个小时就变成破图，回喂给模型时也取不到。
+ * `data` 是 base64（不含 `data:` 前缀），与 provider 两家的线协议都能直接换算。
+ */
+export interface MessageImage {
+  /** base64 编码的图片字节。 */
+  data: string;
+  /** MIME 类型，如 `image/jpeg`。 */
+  mediaType: string;
+}
+
 export interface Message {
   id: string;
   sessionId: string;
   role: Role;
-  /** 文本内容。当消息纯粹是工具调用/结果时为空。 */
+  /** 文本内容。当消息纯粹是工具调用/结果、或只发了图片时为空。 */
   content: string;
+  /** 用户消息附带的图片；纯文本消息没有这个键。 */
+  images?: MessageImage[];
   /** 当 role === "assistant" 且模型请求了工具调用时存在。 */
   toolCalls?: ToolCall[];
   /** 当 role === "tool" 时存在：本条在回应哪个调用。 */
@@ -109,22 +125,72 @@ export interface ProviderModelList {
  * 适配器把外部界面（HTTP、QQ、Discord、WebSocket…）桥接到内部消息管线。
  * 刻意保持通用，这样纯 agent 部署完全不需要聊天平台。
  */
-export interface AdapterInfo {
+/** 计划任务最近一次执行的结果；从未执行时为 null。 */
+export type CronLastStatus = "success" | "error";
+
+/**
+ * 一条计划任务。任务是**部署级**的，但每次执行使用 `profile` 指定的配置档；
+ * 结果写进该任务自己的内部会话（`sessionId`），不会凭空发到外部平台。
+ */
+export interface CronJobInfo {
   id: string;
   name: string;
-  /**
-   * 这个接入端**已启用**（`atri.config.json` 里没写 `enabled: false`）。
-   * 注意它不等于「真的在收流量」—— 启用了但绑定不可用时也不会启动，
-   * 那一半由 `bound` 说。
-   */
+  /** 5 段 cron：分 时 日 月 周，按服务器本地时区。 */
+  cron: string;
+  /** 到点后作为用户消息发给引擎的内容。 */
+  prompt: string;
+  /** 用哪一份配置档的人格、模型与工具执行。 */
+  profile: string;
   enabled: boolean;
-  /** 它跑在哪份配置档上（`adapters.<id>.profile`）；没绑定为 `null`。 */
+  /** 任务专属的内部会话；第一次执行时创建。 */
+  sessionId: string | null;
+  lastRunAt: string | null;
+  lastStatus: CronLastStatus | null;
+  /** 最近一次失败的中文原因；成功或未执行时为 null。 */
+  lastError: string | null;
+  /** 下一次触发时间（ISO）；禁用或 cron 不可计算时为 null。 */
+  nextRunAt: string | null;
+  /** 此刻是否有一轮正在跑（手动或定时）。 */
+  running: boolean;
+}
+
+/**
+ * 可复用的人格。人格是**全局资源**，配置档只通过 `personaId` 引用它；
+ * 提示词内容不随历史落库，而是在每次请求前作为 system 消息注入。
+ */
+export interface PersonaInfo {
+  id: string;
+  name: string;
+  description: string;
+  /** 给模型看的系统提示词。 */
+  systemPrompt: string;
+}
+
+export interface AdapterAccessControl {
+  /** 是否启用白名单。关闭时所有人都能触发。 */
+  whitelistEnabled: boolean;
+  /** 白名单：私聊用户 id 或群 id。 */
+  allowedIds: string[];
+  /** 管理员 id。管理员始终越过白名单，且不参与白名单校验。 */
+  adminIds: string[];
+}
+
+export interface AdapterInfo {
+  id: string;
+  /** 显示名；没填时为 id。 */
+  name: string;
+  /** 适配器类型（目前只有 `napcat`），决定用哪套表单与哪个实现。 */
+  type: string;
+  /** 运行期配置里的启用开关。它不等于真的在跑：启动失败时 `running` 为 false。 */
+  enabled: boolean;
+  /** 绑定的配置档 id；没绑定为 `null`。 */
   profile: string | null;
-  /**
-   * 绑定的那份配置档此刻是否可用。`enabled === false` 时这一项没有意义（不会去启动它），
-   * 但仍然照实算 —— 控制台要能在用户把档修好之后看到它变绿，而不是等启用之后才知道。
-   */
+  /** 绑定的那份配置档此刻是否可用。 */
   bound: boolean;
+  /** 适配器实例是否已成功启动（NapCat 的 WebSocket 连接状态另见日志）。 */
+  running: boolean;
+  /** 上一次启动失败的原因；正常为 `null`。 */
+  error: string | null;
 }
 
 /**
@@ -233,7 +299,7 @@ export interface ProfileRecord {
  *
  * 为什么要一个端点而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
  * 那三份之间没有原子性 —— 两次请求之间恰好有人改了或新建了一份档，草稿的起点就是
- * 自相矛盾的，而下一次保存会把这份矛盾整个写回磁盘。一次读，四段同源。
+ * 自相矛盾的，而下一次保存会把这份矛盾整个写回磁盘。一次读，各段同源。
  *
  * 它**不引入第二份真源**：每一段仍由各自的存储现算（工具与步数读这份档的文件、
  * 插件是运行态、`defaultProviderId` 来自装配），这个端点只做搬运。
@@ -244,6 +310,8 @@ export interface ProfileConfig {
   name: string;
   /** 这一档默认的 provider **实例** id；`null` = 用全局 `providers.default`。 */
   defaultProviderId: string | null;
+  /** 这一档选用的人格 id；`null` = 不注入人格提示。 */
+  personaId: string | null;
   /**
    * 单轮允许的工具步数，给的是**夹取后的生效值**（引擎实际用的那一个）。
    *
@@ -253,6 +321,11 @@ export interface ProfileConfig {
   maxToolSteps: number;
   tools: ToolInfo[];
   plugins: PluginInfo[];
+  /**
+   * 这一档的准入控制。**按配置档一份**：绑定到这一档的所有适配器共用它，
+   * 换一档就是另一张名单。不是适配器实例的属性 —— 适配器只是这份跑法的入口。
+   */
+  access: AdapterAccessControl;
 }
 
 /**

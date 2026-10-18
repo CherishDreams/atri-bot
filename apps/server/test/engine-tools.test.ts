@@ -106,6 +106,7 @@ async function harness(
     events,
     profileId: "default",
     defaultProviderId: null,
+    systemPrompt: "",
   });
   const session = await engine.sessions.create({ title: "测试" });
   const frames: ServerFrame[] = [];
@@ -156,6 +157,37 @@ test("已注册但本轮未授权的工具，模型硬要调用也不会被执�
   assert.equal(reply.content, "那我直接回答");
   const toolMessage = historyOf(h.sessions, h.session.id)[2];
   assert.match(toolMessage?.content ?? "", /未授权执行/, "拒绝的理由要回喂给模型，而不是静默丢掉");
+});
+
+test("人格提示作为 system 注入每次请求，但不写进会话历史", async (t) => {
+  const h = await harness(t, { replies: [{ content: "好" }] });
+  h.engine.systemPrompt = "你是测试人格。";
+  await h.engine.handleMessage({ sessionId: h.session.id, content: "你好" });
+
+  const sent = h.provider.seen[0]?.messages ?? [];
+  assert.deepEqual(sent[0], { role: "system", content: "你是测试人格。" });
+  assert.equal(sent[1]?.role, "user");
+  assert.deepEqual(
+    historyOf(h.sessions, h.session.id).map((m) => m.role),
+    ["user", "assistant"],
+    "人格不应被落成一条消息，否则历史详情会多出一条假消息",
+  );
+});
+
+test("用户图片随消息落库，并出现在发给上游的历史里", async (t) => {
+  const h = await harness(t, { replies: [{ content: "看到了" }] });
+  const image = { data: "aGVsbG8=", mediaType: "image/png" };
+  await h.engine.handleMessage({
+    sessionId: h.session.id,
+    content: "",
+    images: [image],
+  });
+
+  const [user] = historyOf(h.sessions, h.session.id);
+  assert.deepEqual(user?.images, [image]);
+  const sent = h.provider.seen[0]?.messages[0];
+  assert.deepEqual(sent?.images, [image]);
+  assert.equal(sent?.content, "", "纯图片消息的正文保持为空，占位不该被回填进历史");
 });
 
 test("两步收敛：落库次序、广播帧与 onMessage 各自只覆盖中间消息", async (t) => {
@@ -365,6 +397,7 @@ test("工具集在一次运行内固定：中途改配置文件不影响在途�
     events: new SessionEvents(),
     profileId: "default",
     defaultProviderId: null,
+    systemPrompt: "",
   });
   const session = await engine.sessions.create({ title: "测试" });
 

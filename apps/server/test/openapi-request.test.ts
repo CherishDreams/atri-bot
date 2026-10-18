@@ -105,6 +105,7 @@ test("规格声明的必填请求字段，实现真的在拒", async (t) => {
     // 内置工具由组合根无条件注册，id 是代码里的常量。用假 id 的话，
     // 省略必填得到的 400 是「未知工具」给的，enabled 校验被删也照样绿。
     "/tools/{id}/enable": "/tools/current_time/enable",
+    "/personas/{id}": "/personas/default",
   };
 
   const cases: { operationId: string; full: Record<string, unknown> }[] = [
@@ -114,6 +115,18 @@ test("规格声明的必填请求字段，实现真的在拒", async (t) => {
     { operationId: "createProvider", full: { id: "req-probe", source: "stub", model: "m" } },
     { operationId: "createProviderSource", full: { id: "req-probe-src" } },
     { operationId: "setToolEnabled", full: { enabled: true } },
+    {
+      operationId: "createPersona",
+      full: { id: "req-persona", name: "必填探针", systemPrompt: "探针" },
+    },
+    {
+      operationId: "updatePersona",
+      full: { name: "必填探针", systemPrompt: "探针" },
+    },
+    {
+      operationId: "createCronJob",
+      full: { name: "必填探针", cron: "0 9 * * *", prompt: "探针", profile: "default" },
+    },
   ];
 
   for (const { operationId, full } of cases) {
@@ -304,6 +317,23 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
     "getSession",
     "deleteSession",
     "listAdapters",
+    // 适配器实例是部署级运行期配置（data/adapters.json），不属于任何一份配置档。
+    "listAdapterTemplates",
+    "createAdapter",
+    "getAdapter",
+    "updateAdapter",
+    "setAdapterEnabled",
+    "deleteAdapter",
+    // 人格与计划任务都是部署级全局资源；任务自己保存所用的配置档 id。
+    "listPersonas",
+    "createPersona",
+    "updatePersona",
+    "deletePersona",
+    "listCronJobs",
+    "createCronJob",
+    "updateCronJob",
+    "deleteCronJob",
+    "runCronJob",
     // 日志是进程级的：不属于任何一份配置档，也不接受 profile 参数。
     "listLogs",
     "streamLogs",
