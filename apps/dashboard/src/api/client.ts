@@ -1,4 +1,4 @@
-import { WS_PATH } from "@atri/shared";
+import { API_PREFIX, WS_PATH } from "@atri/shared";
 import type { ServerFrame } from "@atri/shared";
 import {
   authStatus as authStatusOp,
@@ -17,6 +17,7 @@ import {
   deleteProfile as deleteProfileOp,
   listPlugins as listPluginsOp,
   listAdapters as listAdaptersOp,
+  listLogs as listLogsOp,
   listProfiles as listProfilesOp,
   saveProfileConfig as saveProfileConfigOp,
   listProviderSources as listProviderSourcesOp,
@@ -36,6 +37,7 @@ import {
   updateProviderSource as updateProviderSourceOp,
 } from "./generated/index.js";
 import type {
+  LogEntry,
   ProviderInput,
   ProviderSourceInput,
   ProviderSourceUpdate,
@@ -146,6 +148,54 @@ export async function me() {
 
 export async function authStatus() {
   return body(await authStatusOp());
+}
+
+// --- 日志 -------------------------------------------------------------------
+
+/** 最近的程序日志。`limit` 由服务端夹在 1–500，默认 200。 */
+export async function listLogs(limit = 200) {
+  return body(await listLogsOp({ query: { limit } }));
+}
+
+/**
+ * 订阅实时日志。先由服务端补发 `after` 之后的缓冲区内容，再持续推送。
+ *
+ * 这里手写而不用生成的 SSE 客户端：生成的循环自带重连，而重连时机与 `after`
+ * 续传必须由调用方掌握（见 `stores/logs.ts` 的序号对账）。用同一套 fetch 泵，
+ * 401 也走 `sseFetch` 的统一出口。
+ */
+export async function* streamLogs(after: number, signal?: AbortSignal): AsyncGenerator<LogEntry> {
+  const url = new URL(`${API_PREFIX}/logs/stream`, window.location.origin);
+  url.searchParams.set("after", String(after));
+  const res = await sseFetch(url, {
+    credentials: "include",
+    headers: { accept: "text/event-stream" },
+    signal,
+  });
+  if (!res.body) throw new Error("日志流没有响应体");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      for (;;) {
+        const boundary = buffer.indexOf("\n\n");
+        if (boundary < 0) break;
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = block.split("\n").find((line) => line.startsWith("data: "));
+        if (!data) continue;
+        // 边界收窄：服务端发的就是 LogEntry，形状由 openapi 与响应形状守卫钉着。
+        yield JSON.parse(data.slice(6)) as LogEntry;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
 }
 
 // --- 会话 -------------------------------------------------------------------

@@ -79,6 +79,8 @@ interface Node {
  */
 const ORDER = [
   "health",
+  "listLogs",
+  "streamLogs",
   "authStatus",
   "login",
   "me",
@@ -329,6 +331,11 @@ interface Harness {
     body?: unknown,
   ): Promise<{ status: number; body: Record<string, unknown> }>;
   sse(path: string, body: unknown): Promise<{ status: number; frames: Record<string, unknown>[] }>;
+  /** 日志流不会自己结束：读到 `want` 个 data 帧就主动取消。 */
+  sseGet(
+    path: string,
+    want: number,
+  ): Promise<{ status: number; frames: Record<string, unknown>[] }>;
 }
 
 async function setup(t: TestContext): Promise<Harness> {
@@ -341,6 +348,7 @@ async function setup(t: TestContext): Promise<Harness> {
   const app = await createApp(
     makeTestConfig({
       root,
+      logLevel: "info",
       pluginDirs: [pluginsRoot],
       providerSources: {
         stub: {
@@ -405,6 +413,34 @@ async function setup(t: TestContext): Promise<Harness> {
         )
         .filter((data): data is string => Boolean(data))
         .map((data) => JSON.parse(data) as Record<string, unknown>);
+      return { status: res.status, frames };
+    },
+    async sseGet(path, want) {
+      const res = await fetch(`${origin}/api/v1${path}`, { headers: { cookie } });
+      if (!res.body) return { status: res.status, frames: [] };
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      const frames: Record<string, unknown>[] = [];
+      let buffer = "";
+      try {
+        while (frames.length < want) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          for (;;) {
+            const boundary = buffer.indexOf("\n\n");
+            if (boundary < 0) break;
+            const block = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            const data = block.split("\n").find((line) => line.startsWith("data: "));
+            if (!data) continue;
+            frames.push(JSON.parse(data.slice(6)) as Record<string, unknown>);
+            if (frames.length >= want) break;
+          }
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+      }
       return { status: res.status, frames };
     },
   };
@@ -578,6 +614,13 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       const res = await fetch(`${h.origin}/api/v1/${id === "health" ? "health" : "auth/status"}`);
       return { status: res.status, body: (await res.json()) as Record<string, unknown> };
     }
+    case "listLogs":
+      return at("/logs?limit=3");
+    case "streamLogs": {
+      const r = await h.sseGet("/logs/stream?after=0", 2);
+      return { status: r.status, frames: r.frames };
+    }
+
     case "login": {
       const res = await fetch(`${h.origin}/api/v1/auth/login`, {
         method: "POST",

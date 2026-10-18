@@ -35,13 +35,14 @@ const router = useRouter();
 const { profile } = useProfile();
 
 /**
- * 不带 `?profile=` 的那几个：`providers` / `adapters` 在路由表上都标了 `noProfile` ——
- * 它们是部署级全局一份。给它们挂一个与页面无关的档名，等于在 URL 上谎称「这一页是按档的」。
+ * 不带 `?profile=` 的那几个：`providers` / `adapters` / `logs` 在路由表上都标了
+ * `noProfile` —— 它们是部署级/进程级的一份。给它们挂一个与页面无关的档名，
+ * 等于在 URL 上谎称「这一页是按档的」。
  */
 const PROFILE_ROUTES = new Set(["console", "config", "plugins"]);
 
 function to(name: string) {
-  // `profile.value` 在 `noProfile` 页面（配置 / 供应商 / 接入平台）上是 null。
+  // `profile.value` 在 `noProfile` 页面（供应商 / 接入平台 / 日志）上是 null。
   // 把 null 塞进 query 会被 vue-router 序列化成裸的 `?profile`（实测），虽然守卫
   // 随后会补成默认档，但那条 URL 本身是坏的；没有档名时干脆不带。
   return {
@@ -63,6 +64,8 @@ const items: { key: string; label: string; icon: IconName }[] = [
   // 「平台配置」就在主导航里这个位置。它们不属于某一份配置，所以不带 `?profile=`。
   { key: "providers", label: "供应商", icon: "provider" },
   { key: "adapters", label: "接入平台", icon: "chat" },
+  // 日志是进程级的，不看当前配置；链接不带 `?profile=`。
+  { key: "logs", label: "日志", icon: "logs" },
 ];
 
 const menuOptions = computed<MenuOption[]>(() =>

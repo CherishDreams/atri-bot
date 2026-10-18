@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLogger } from "./core/logger.ts";
+import { createLogger, LogStore } from "./core/logger.ts";
 import { AgentEngine } from "./core/agent/engine.ts";
 import { SessionEvents } from "./core/agent/events.ts";
 import { SessionLock } from "./core/session/lock.ts";
@@ -159,7 +159,10 @@ function readServerVersion(): string {
 }
 
 export async function createApp(config: AppConfig) {
-  const logger = createLogger(config.logLevel);
+  // 先建缓冲区、再建 logger：启动阶段的日志（seed、插件加载）也要能被日志页看到，
+  // 而那时 HTTP 服务还没构造。顺序反过来会丢掉启动日志，且没有任何报错。
+  const logs = new LogStore();
+  const logger = createLogger(config.logLevel, logs);
 
   const auth = new AuthManager(config, logger);
   // 必须早于 HTTP 服务启动：未配置口令时要先把随机口令写进配置文件。
@@ -707,6 +710,7 @@ export async function createApp(config: AppConfig) {
   const http = createHttpServer({
     config,
     logger,
+    logs,
     version: readServerVersion(),
     auth,
     sessions,

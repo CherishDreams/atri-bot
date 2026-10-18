@@ -49,6 +49,13 @@ export const router = createRouter({
           component: () => import("@/views/AdaptersView.vue"),
           meta: { noProfile: true },
         },
+        // 日志是进程级的：不属于任何一份配置，也不该在 URL 上挂一个无关的档名。
+        {
+          path: "logs",
+          name: "logs",
+          component: () => import("@/views/LogsView.vue"),
+          meta: { noProfile: true },
+        },
         // 两个旧入口保留成 redirect，而不是删掉：它们可能已经出现在别人的书签或文档里。
         // `/tools` 仍是档级页面，所以用函数形式把 `?profile=` 一并带过去（丢掉它的话，
         // 从旧链接进来会先换一档）；`/provider` 现在是不随档的独立页，query 原样丢掉。

@@ -47,6 +47,10 @@
     {
       "name": "profiles",
       "description": "配置档本身。这一族的每个 operation 都**不带** `?profile=` 参数：它们操作的是「有哪些档」以及「档与全局清单之间的引用」，而不是「某档里的东西」。"
+    },
+    {
+      "name": "logs",
+      "description": "程序运行日志。进程内环形缓冲（最近 500 行），重启即清空；日志页通过 SSE 实时订阅。日志是进程级的，不属于任何配置档。"
     }
   ],
   "paths": {
@@ -65,6 +69,84 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/logs": {
+      "get": {
+        "operationId": "listLogs",
+        "summary": "读取最近的程序日志",
+        "description": "返回进程内缓冲区里最近的日志，按 id 升序。默认 200 条，最多 500 条。日志只存在内存里，服务重启后清空。",
+        "tags": ["logs"],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "最多返回多少条，1–500，默认 200。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "日志列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/logs/stream": {
+      "get": {
+        "operationId": "streamLogs",
+        "summary": "实时订阅程序日志（SSE）",
+        "description": "响应为 `text/event-stream`。每个事件的 data 是一个 `LogEntry` JSON，事件 id 就是日志序号；连接建立时先补发最近的日志（或 `after` 之后的部分），随后实时推送。以 `:` 开头的注释帧只是保活，不是日志。",
+        "tags": ["logs"],
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "只补发 id 大于它的日志；省略时补发最近 200 条。客户端重连时传最后收到的那条 id。",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "日志事件流",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2433,6 +2515,52 @@
                   "description": "中文原因，来自那颗插件自己抛的东西"
                 }
               }
+            }
+          }
+        }
+      },
+      "LogLevel": {
+        "type": "string",
+        "enum": ["debug", "info", "warn", "error"]
+      },
+      "LogEntry": {
+        "type": "object",
+        "required": ["instance", "id", "time", "level", "message"],
+        "properties": {
+          "instance": {
+            "type": "string",
+            "description": "产生这一行的进程实例；服务重启后会变，客户端据此丢弃旧的续传水位。"
+          },
+          "id": {
+            "type": "integer",
+            "description": "同一进程内单调递增的序号；SSE 事件 id 与断线续传的 `after` 都用它。"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 时间。"
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevel"
+          },
+          "message": {
+            "type": "string",
+            "description": "已经格式化好的一行日志正文；超长会被截断。日志的 `meta` 参数只进控制台，不进这里。"
+          }
+        }
+      },
+      "LogList": {
+        "type": "object",
+        "required": ["instance", "logs"],
+        "properties": {
+          "instance": {
+            "type": "string",
+            "description": "当前进程实例；与客户端手里的不同就说明服务重启过。"
+          },
+          "logs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogEntry"
             }
           }
         }

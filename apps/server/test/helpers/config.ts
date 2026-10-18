@@ -49,6 +49,8 @@ export interface TestConfigInput {
   adapters?: AppConfig["adapters"];
   /** 工具开关。默认空 = 全部禁用（工具是能力授予，默认关闭）。 */
   tools?: Record<string, ToolToggle>;
+  /** 默认 error，避免测试输出被 info 日志淹没；日志相关用例显式传 info。 */
+  logLevel?: string;
   /** 默认 5；测试要证「撞上限」这类行为时显式传，别改默认值。 */
   maxToolSteps?: number;
   /** 覆盖 `auth` 段里的任意键（如测试要验证 `cookieSecure` 开关）。 */
@@ -67,6 +69,7 @@ export function makeTestConfig({
   pluginDirs = [],
   adapters = {},
   tools = {},
+  logLevel = "error",
   maxToolSteps = DEFAULT_MAX_TOOL_STEPS,
   auth = {},
   staticDir = join(root, "nonexistent"),
@@ -106,7 +109,7 @@ export function makeTestConfig({
     root,
     host: "127.0.0.1",
     port: 0, // 随机端口，避免测试之间抢端口
-    logLevel: "error",
+    logLevel,
     dataDir,
     pluginDirs,
     adapters,

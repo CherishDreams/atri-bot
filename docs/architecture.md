@@ -198,6 +198,36 @@ HTTP 请求
 这样 `GET /sessions/:id` 与其它的具体路径不会互相遮蔽，行为完全由注册顺序决定，
 不需要理解框架的优先级规则。
 
+## 日志
+
+`createLogger` 除了写 console，还会把同一行交给一个 `LogStore`。组合根先建 store、
+再建 logger，所以建库、seed、插件加载这些**启动阶段**的日志也在缓冲区里；顺序反过来会
+丢掉它们，而且没有任何报错。
+
+`LogStore` 是 500 行环形缓冲 + 订阅集合：
+
+- **只在内存里。** 日志是进程输出，不写 `dataDir`；写文件会立刻带出轮转、清理、权限、
+  磁盘满四件事，而「重启即清空」是这一版明确接受的语义。要持久化应交给部署侧收集 stdout。
+- **只存达到 `ATRI_LOG_LEVEL` 的消息**，与 console 用的是同一个阈值；`debug` 在默认
+  `info` 下根本不会进缓冲区。
+- **`meta` 不进缓冲区。** 它是调用方顺手挂的任意对象，序列化形状不稳定，也可能带着不该
+  出现在第二个出口的上下文。今天没有调用方用它；要展示的内容应写进消息本身。
+- **订阅者的异常不能反向打断业务。** 日志流的 socket 可能在竞态里已经断了，`push` 逐个
+  listener 捕获异常 —— 否则一次日志推送失败会升级成产生这条日志的请求失败。
+- 消息按 4 KiB 截断；最坏内存占用因此有上限。
+
+HTTP 面是 `GET /logs`（历史）与 `GET /logs/stream`（SSE）。流先补发历史、再订阅新的；
+`id:` 行就是日志序号。每一行还带一个进程实例 id（`LogStore.instance`），因为服务重启后
+序号会从 1 重新开始，单看 `id` 分不清「新进程」与「旧进程只收到更少的行」。客户端重连时
+**先读一次历史对账**：实例变了就整份换掉，实例相同才按序号补缺口。这条对账在
+`stores/logs.ts`，不在传输层。
+
+选 SSE 而不是复用聊天 WS：日志是单向流，SSE 自带断线重连与事件 id 语义，也不需要给聊天
+协议加一种只有日志页关心的帧。日志流进入 `openStreams`：`http.close()` 会 abort 它，
+清理函数负责退订阅、停 keepalive、结束响应，否则 keepalive 定时器会把关停拖住。
+
+日志是**进程级**的，两个端点都不带 `?profile=`；它们仍在鉴权闸门内，匿名访问是 401。
+
 ## 配置档：什么共享、什么各一份
 
 **供应商（provider source 与模型实例）不属于配置档**，它是部署级全局的一份，
@@ -919,11 +949,11 @@ src/
 ├── api/
 │ ├── client.ts 唯一的 HTTP/WS 出口（手写）
 │ └── generated/ 由 openapi.json 生成的类型化 SDK（入库，不手改）
-├── stores/ auth / sessions / plugins / pluginSettings / providers / profiles / profileConfig（Pinia）
+├── stores/ auth / sessions / plugins / pluginSettings / providers / profiles / profileConfig / logs（Pinia）
 ├── router/index.ts 路由、登录守卫，以及给作用域页面补 `?profile=` 的那一条
 ├── layouts/ bot/BotLayout（顶栏 + 侧栏） / chat/ChatLayout（侧栏 + 顶栏）
 ├── views/ LoginView / ConsoleView / ConfigWorkbench / PluginsView / ProvidersView / AdaptersView /
-│ chat 下的创建与会话页
+│ LogsView / chat 下的创建与会话页
 └── components/
 ├── shared/ icons / TopBarMenu / PlatformSwitch / ModelSelectMenu / ProfileGate
 ├── config/ 配置工作台：分类表 / 分类菜单 / 卡片与行 / 三个档级面板 / 档切换与保存
@@ -941,7 +971,7 @@ src/
 
 - `components/bot/BotHeader.vue` —— 左侧汉堡（≤767px 才出现）+ logo，右侧
   `PlatformSwitch` + `ThemeToggle` + `TopBarMenu`。侧栏在那个断点收进 `n-drawer`，
-  汉堡是窄屏下到达「控制台 / 配置文件 / 插件 / 供应商 / 接入平台」的唯一入口。
+  汉堡是窄屏下到达「控制台 / 配置文件 / 插件 / 供应商 / 接入平台 / 日志」的唯一入口。
 - `components/chat/ChatHeader.vue` —— 左侧模型选择器，右侧同样是那三个控件。
 
 **bot 侧没有模型选择器**（以前有）。判据不是审美而是「它在这儿不做事」：bot 侧发消息走的
@@ -1013,6 +1043,10 @@ src/
   拦下并提示先保存或关闭抽屉 —— 这是本页唯一的未保存拦截；配置本身的增删仍走切换器里的
   「管理配置」入口。插件的启停与配置**只在这一页**：控制台保持会话工作区两栏，
   右侧旧的快捷面板已删除，避免同一组操作在两个地方各有一套状态。
+- **日志（`/logs`）不随配置档**：它显示进程内存里的最近 500 行，SSE 实时追加。
+  `LogsView` 只负责「是否跟随底部」这种界面状态；序号对账与重连在 `stores/logs.ts`。
+  向上翻后新日志不再强行拉回底部，出现「回到最新」；过滤与清空只作用于当前页面，
+  清空不会重置续传水位，所以旧行不会在重连时回来。
 - **供应商（`/providers`）与接入平台（`/adapters`）是主导航里的整页**，不在上面那张分类表里：
   两者都是部署级全局一份，改一次对所有配置生效。放进工作台时，左上角明明写着配置名而那一项
   立刻影响所有配置 —— 分组标题挡不住这种误读，只有「它不在这一页」能挡住。这一条与 AstrBot
@@ -1032,8 +1066,8 @@ src/
 - **保存即生效，没有「重载」按钮**：`POST /profiles/{id}/config` 在响应里回读整份配置，
   服务端当场应用（工具与步数是每轮现读、插件逐颗 `setEnabled`、默认模型同时写 bundle 与
   engine）。刻意**不**重建整张对象图 —— 那会重估所有插件，代价远大于收益。
-- **`/providers`、`/adapters` 标了 `noProfile`**：两者是部署级全局一份 —— 给它们挂一个
-  与页面无关的档名，等于在 URL 上谎称「这一页是按档的」。
+- **`/providers`、`/adapters`、`/logs` 标了 `noProfile`**：前两者是部署级全局一份，
+  后者是进程级输出 —— 给它们挂一个与页面无关的档名，等于在 URL 上谎称「这一页是按档的」。
   三个旧入口只剩 redirect：`/tools` 把 `?profile=` 一并带进 `/config` 的分类、`/provider`
   指向 `/providers`、`/profiles` 指向 `/config`（管理在它的切换器弹窗里）。
 - **模型选择器写的是档文件**：它调 `POST /profiles/{id}/default-provider`，成功之后靠

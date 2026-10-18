@@ -23,6 +23,7 @@ import {
 } from "./http.ts";
 import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from "./auth.ts";
 import { errorMessage, errorStack, statusForError, ApiError } from "#core/errors.ts";
+import { LOG_BUFFER_CAPACITY, LOG_DEFAULT_LIMIT } from "#core/logger.ts";
 import { SESSION_BUSY_MESSAGE, SESSION_BUSY_DELETE_MESSAGE } from "#core/session/lock.ts";
 
 /**
@@ -153,6 +154,7 @@ export function createHttpServer(deps: HttpDeps) {
   const {
     config,
     logger,
+    logs,
     version,
     sessions,
     lock,
@@ -259,6 +261,77 @@ export function createHttpServer(deps: HttpDeps) {
     // 版本由装配注入（见 `readServerVersion`）：写死这一句时它与 package.json、
     // openapi.json 各说各话，bump 之后运维拿到的是一条假凭证。
     sendJson(res, 200, { ok: true, app: APP_NAME, version });
+  });
+
+  // --- 日志 ---------------------------------------------------------------
+  //
+  // 日志是**进程级**的，不属于任何一份配置档，所以这一组不带 `?profile=`。
+  // 它也不是「配置文件」：缓冲区在内存里，重启即清空。
+
+  router.get(`${API_PREFIX}/logs`, async (req, res) => {
+    const raw = searchOf(req).get("limit");
+    const limit = raw === null ? LOG_DEFAULT_LIMIT : Number(raw);
+    if (!Number.isInteger(limit) || limit < 1 || limit > LOG_BUFFER_CAPACITY) {
+      return sendError(res, 400, `limit 必须是 1–${LOG_BUFFER_CAPACITY} 的整数`);
+    }
+    sendJson(res, 200, { instance: logs.instance, logs: logs.recent(limit) });
+  });
+
+  /**
+   * 实时日志流。先补发历史，再订阅新的；`id:` 行就是日志序号，客户端重连时带回来。
+   *
+   * 选 SSE 而不是复用聊天 WS：日志是**单向**的，SSE 天然支持断线重连与 `Last-Event-ID`，
+   * 也不需要给聊天协议加一种只有日志页关心的帧。会话增量流已经证明这条传输可用。
+   */
+  router.get(`${API_PREFIX}/logs/stream`, async (req, res) => {
+    const search = searchOf(req);
+    const header = req.headers["last-event-id"];
+    const rawAfter = search.get("after") ?? (Array.isArray(header) ? header[0] : header);
+    let after: number | null = null;
+    if (rawAfter !== undefined && rawAfter !== null && rawAfter !== "") {
+      after = Number(rawAfter);
+      if (!Number.isInteger(after) || after < 0) {
+        return sendError(res, 400, "after 必须是 ≥ 0 的整数");
+      }
+    }
+
+    startSse(res);
+    const controller = new AbortController();
+    openStreams.add(controller);
+
+    let closed = false;
+    let keepalive: NodeJS.Timeout | null = null;
+    let unsubscribe: (() => void) | null = null;
+    const stop = (): void => {
+      if (closed) return;
+      closed = true;
+      if (keepalive !== null) clearInterval(keepalive);
+      unsubscribe?.();
+      openStreams.delete(controller);
+      if (!res.writableEnded) res.end();
+    };
+    // `http.close()` 会 abort 这个集合里的每个 controller；日志流没有上游请求可中断，
+    // 但必须在这里结束响应，否则 keepalive 定时器会让 server.close() 一直等下去。
+    controller.signal.addEventListener("abort", stop, { once: true });
+    res.on("close", () => controller.abort());
+
+    unsubscribe = logs.subscribe((entry) => {
+      if (closed || res.writableEnded || res.destroyed) return;
+      sendSse(res, entry, "log", entry.id);
+    });
+    keepalive = setInterval(() => {
+      if (closed || res.writableEnded || res.destroyed) {
+        controller.abort();
+        return;
+      }
+      res.write(": keepalive\n\n");
+    }, 15_000);
+
+    const history = after === null ? logs.recent(LOG_DEFAULT_LIMIT) : logs.after(after);
+    for (const entry of history) {
+      if (closed || res.writableEnded || res.destroyed) break;
+      sendSse(res, entry, "log", entry.id);
+    }
   });
 
   // --- 鉴权 ---------------------------------------------------------------

@@ -278,3 +278,23 @@ export interface LoginResponse {
 export interface AuthStatus {
   required: boolean;
 }
+
+/** 程序日志的级别，与 `createLogger` 的四档一致。 */
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/**
+ * 日志页看到的一行。
+ *
+ * `id` 在**同一个服务端进程**内单调递增，客户端用它去重、以及在 SSE 重连时带
+ * `after` 续传。服务重启后序号从头开始，所以客户端发现最新 id 比自己手里的小时
+ * 必须整份刷新，不能拿旧 id 继续订阅。
+ */
+export interface LogEntry {
+  /** 产生这一行的进程实例。服务重启后会变，客户端据此丢弃旧的续传水位。 */
+  instance: string;
+  id: number;
+  /** ISO 8601。 */
+  time: string;
+  level: LogLevel;
+  message: string;
+}

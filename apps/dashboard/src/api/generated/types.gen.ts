@@ -457,6 +457,36 @@ export type ProfileConfigSaveResult = {
     }>;
 };
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+export type LogEntry = {
+    /**
+     * 产生这一行的进程实例；服务重启后会变，客户端据此丢弃旧的续传水位。
+     */
+    instance: string;
+    /**
+     * 同一进程内单调递增的序号；SSE 事件 id 与断线续传的 `after` 都用它。
+     */
+    id: number;
+    /**
+     * ISO 8601 时间。
+     */
+    time: string;
+    level: LogLevel;
+    /**
+     * 已经格式化好的一行日志正文；超长会被截断。日志的 `meta` 参数只进控制台，不进这里。
+     */
+    message: string;
+};
+
+export type LogList = {
+    /**
+     * 当前进程实例；与客户端手里的不同就说明服务重启过。
+     */
+    instance: string;
+    logs: Array<LogEntry>;
+};
+
 /**
  * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。必须挂在**具体 operation** 上，不要「顺手归位」到 path-item 的 parameters：那里会被同一路径下的每个方法共享，`DELETE /sessions/{id}` 因此在 SDK 里 advertise 两个服务端从不读的参数（handler 压根不看 query），而三道规格守卫谁也看不见这种说谎。
  */
@@ -518,6 +548,74 @@ export type HealthResponses = {
 };
 
 export type HealthResponse = HealthResponses[keyof HealthResponses];
+
+export type ListLogsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * 最多返回多少条，1–500，默认 200。
+         */
+        limit?: number;
+    };
+    url: '/logs';
+};
+
+export type ListLogsErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type ListLogsError = ListLogsErrors[keyof ListLogsErrors];
+
+export type ListLogsResponses = {
+    /**
+     * 日志列表
+     */
+    200: LogList;
+};
+
+export type ListLogsResponse = ListLogsResponses[keyof ListLogsResponses];
+
+export type StreamLogsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * 只补发 id 大于它的日志；省略时补发最近 200 条。客户端重连时传最后收到的那条 id。
+         */
+        after?: number;
+    };
+    url: '/logs/stream';
+};
+
+export type StreamLogsErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type StreamLogsError = StreamLogsErrors[keyof StreamLogsErrors];
+
+export type StreamLogsResponses = {
+    /**
+     * 日志事件流
+     */
+    200: LogEntry;
+};
+
+export type StreamLogsResponse = StreamLogsResponses[keyof StreamLogsResponses];
 
 export type LoginData = {
     body: LoginRequest;

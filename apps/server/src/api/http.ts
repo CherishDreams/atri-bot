@@ -5,7 +5,7 @@ import { ApiError } from "#core/errors.ts";
 import type { AppConfig } from "#config/index.ts";
 import type { AgentEngine } from "#core/agent/engine.ts";
 import type { AuthManager } from "#core/auth/manager.ts";
-import type { Logger } from "#core/logger.ts";
+import type { Logger, LogStore } from "#core/logger.ts";
 import type { ProviderConfigStore, ProviderEntry } from "#core/provider/store.ts";
 import type { ProviderRegistry } from "#core/provider/registry.ts";
 import type { ToolConfigStore } from "#core/tool/store.ts";
@@ -166,6 +166,8 @@ export interface ProfileDirectory {
 export interface HttpDeps {
   config: AppConfig;
   logger: Logger;
+  /** 进程内日志缓冲。组合根先建它再建 logger，所以启动日志也在里面。 */
+  logs: LogStore;
   /**
    * 服务端版本号，`GET /health` 用。由组合根从 `apps/server/package.json` 读一次注入 ——
    * 以前这里写死 `"1.0.0"`，而同一个字符串在本仓有四份（根与三个包的 `package.json`、
@@ -215,8 +217,14 @@ export function startSse(res: ServerResponse): void {
   res.write(": connected\n\n");
 }
 
-/** 发一个 SSE 事件。默认事件名即 `message`，前端 SDK 会解析 data 里的 JSON。 */
-export function sendSse(res: ServerResponse, data: unknown, event?: string): void {
+/**
+ * 发一个 SSE 事件。默认事件名即 `message`，前端 SDK 会解析 data 里的 JSON。
+ *
+ * `id` 只给需要断线续传的流用（日志页）：客户端可以把最后收到的 id 带回来，
+ * 服务端据此补发。会话增量流是一次性的，不需要它。
+ */
+export function sendSse(res: ServerResponse, data: unknown, event?: string, id?: number): void {
+  if (id !== undefined) res.write(`id: ${id}\n`);
   if (event) res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }

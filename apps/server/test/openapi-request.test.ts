@@ -304,6 +304,9 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
     "getSession",
     "deleteSession",
     "listAdapters",
+    // 日志是进程级的：不属于任何一份配置档，也不接受 profile 参数。
+    "listLogs",
+    "streamLogs",
     "listProfiles",
     "createProfile",
     "deleteProfile",
