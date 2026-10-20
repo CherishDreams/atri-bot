@@ -4,12 +4,14 @@ import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { useProfile } from "@/composables/useProfile";
 import { useProfileConfigStore } from "@/stores/profileConfig";
 import { useProfilesStore } from "@/stores/profiles";
+import AccessPanel from "@/components/config/AccessPanel.vue";
 import CategoryNav from "@/components/config/CategoryNav.vue";
 import ConfigToolbar from "@/components/config/ConfigToolbar.vue";
 import ManageProfilesModal from "@/components/config/ManageProfilesModal.vue";
 import SaveButton from "@/components/config/SaveButton.vue";
 import UnsavedModal from "@/components/config/UnsavedModal.vue";
 import DefaultModelPanel from "@/components/config/DefaultModelPanel.vue";
+import PersonaPanel from "@/components/config/PersonaPanel.vue";
 import RuntimePanel from "@/components/config/RuntimePanel.vue";
 import ToolListPanel from "@/components/config/ToolListPanel.vue";
 import { categoryOf, matches } from "@/components/config/categories";
@@ -20,13 +22,18 @@ import { categoryOf, matches } from "@/components/config/categories";
  * 形状：顶部工具条（左上角是当前配置 + 切换；右侧搜索）→ 左侧分类菜单 →
  * 右侧这一类的配置项卡片 → 右下角浮动保存键。
  *
- * **这里只有本档的三类**（默认模型 / 工具 / 运行参数）。供应商与接入平台是
- * 部署级全局一份，各自是主导航里的整页 —— 见 `categories.ts` 里那段为什么不能合进来。
+ * **这里只有本配置档的五类**：默认模型 / 人格 / 工具 / 运行参数 / 访问控制，
+ * 全都写 `data/profiles/<id>/config.json`。人格库与计划任务是主导航里的独立整页，
+ * 供应商与接入平台改外部连接，插件有自己的页面 —— 它们都不是「这一档怎么跑」。
+ *
+ * 访问控制也在这一页：名单按配置档保存，绑定到这一档的所有适配器共用它。
+ * 它曾作为「全局」项写 `data/adapters.json`，那会让「左上角写着档名、名单却影响
+ * 所有档」；现在范围与写入位置一致。
  *
  * ## 保存语义
  *
- * 页内编辑只改草稿（`stores/profileConfig.ts`），点「保存」才一次写回。**这是与仓库其余
- * 部分相反的**：供应商、插件页那些都是一改就发请求。差别不是随意的：
+ * 五类的编辑只改草稿（`stores/profileConfig.ts`），点「保存」才一次写回。**这是与仓库
+ * 其余部分相反的**：供应商、接入平台、插件页那些都是一改就发请求。差别不是随意的：
  * 那几样是「一次动作」，而这里是一组互相有关联的开关，用户需要能反悔着改完再一起确认。
  * 代价是必须把「还没保存」这件事做实 —— 脏点、保存键、离开拦截三处都要在，
  * 否则「改了但没生效」会没有任何症状。
@@ -66,22 +73,27 @@ if (legacyTarget !== undefined) void router.replace({ name: legacyTarget });
 
 const PANELS = {
   model: DefaultModelPanel,
+  persona: PersonaPanel,
   tools: ToolListPanel,
   runtime: RuntimePanel,
+  access: AccessPanel,
 } as const;
 const panel = computed(() => PANELS[active.value.key as keyof typeof PANELS]);
 
 /**
- * 左菜单里哪些分类还有命中项。搜索对三类都生效，且与各面板自己的过滤用同一个
- * `matches()` —— 两处各写一遍的话，迟早出现「菜单灰着而点进去有结果」。
+ * 左菜单里哪些分类还有命中项。搜索对五类都生效；访问控制没有预加载的名单内容
+ * 可以比对（名单在草稿里），至少按分类名/关键词命中 —— 面板内部再用同一个关键词
+ * 过滤绑定的接入平台。
  */
 const matched = computed<Record<string, boolean>>(() => {
   const k = keyword.value;
   const loaded = draft.loaded;
   return {
     model: matches(k, "默认模型", "对话模型", loaded?.defaultProviderId ?? ""),
+    persona: matches(k, "人格", "人设", loaded?.personaId ?? ""),
     tools: (loaded?.tools ?? []).some((t) => matches(k, t.name, t.id, t.description)),
     runtime: matches(k, "运行参数", "maxToolSteps", "单轮工具步数"),
+    access: matches(k, "访问控制", "白名单", "管理员", "准入"),
   };
 });
 
@@ -158,6 +170,7 @@ function onUnsavedStay(): void {
  *
  * **切档不会走到这里**：`?profile=` 变化仍是同一条 route record，vue-router 不跑
  * 离开守卫 —— 所以 `requestSwitch` 必须自己走同一个弹窗（AstrBot 那边也是这个形状）。
+ * 切分类也不会触发它：草稿还在，回到别的分类可以继续编辑。
  */
 onBeforeRouteLeave((to) => {
   if (!draft.dirty) return true;
@@ -217,8 +230,8 @@ onBeforeRouteLeave((to) => {
       </main>
     </div>
 
-    <!-- 三类都是「先改草稿、再统一保存」，所以保存键常驻。供应商那边是另一个页面、
-         即时生效，不会让人在两套写入语义之间猜。 -->
+    <!-- 五类都是「先改草稿、再统一保存」，所以保存键常驻。供应商/接入平台/插件
+         是另一套即时生效的语义，不在这张分类表里。 -->
     <save-button :dirty="draft.dirty" :saving="draft.saving" @save="save" />
 
     <unsaved-modal

@@ -35,16 +35,16 @@ const router = useRouter();
 const { profile } = useProfile();
 
 /**
- * 不带 `?profile=` 的那几个：`providers` / `adapters` / `logs` 在路由表上都标了
- * `noProfile` —— 它们是部署级/进程级的一份。给它们挂一个与页面无关的档名，
- * 等于在 URL 上谎称「这一页是按档的」。
+ * 不带 `?profile=` 的那几个：`personas` / `providers` / `adapters` / `cron` / `logs`
+ * 在路由表上都标了 `noProfile` —— 它们是部署级或进程级的一份。给它们挂一个与页面
+ * 无关的档名，等于在 URL 上谎称「这一页是按档的」。
  */
 const PROFILE_ROUTES = new Set(["console", "config", "plugins"]);
 
 function to(name: string) {
-  // `profile.value` 在 `noProfile` 页面（供应商 / 接入平台 / 日志）上是 null。
-  // 把 null 塞进 query 会被 vue-router 序列化成裸的 `?profile`（实测），虽然守卫
-  // 随后会补成默认档，但那条 URL 本身是坏的；没有档名时干脆不带。
+  // `profile.value` 在 `noProfile` 页面（人格配置 / 供应商 / 接入平台 / 计划任务 / 日志）
+  // 上是 null。把 null 塞进 query 会被 vue-router 序列化成裸的 `?profile`（实测），
+  // 虽然守卫随后会补成默认档，但那条 URL 本身是坏的；没有档名时干脆不带。
   return {
     name,
     ...(PROFILE_ROUTES.has(name) && profile.value !== null
@@ -53,26 +53,75 @@ function to(name: string) {
   };
 }
 
-const items: { key: string; label: string; icon: IconName }[] = [
-  { key: "console", label: "控制台", icon: "console" },
-  // 档级的默认模型 / 工具 / 运行参数在这页里；配置本身的增删在这一页左上角
-  // 切换器的弹窗里，不单列一项。插件有自己的页面（见下一项）。
-  { key: "config", label: "配置文件", icon: "settings" },
-  // 插件页：每份档各有一套启用清单与配置值，所以链接要带 `?profile=`。
-  { key: "plugins", label: "插件", icon: "plugin" },
-  // 供应商与接入平台是**部署级**的整页，各自占一项 —— AstrBot 的「模型提供商」
-  // 「平台配置」就在主导航里这个位置。它们不属于某一份配置，所以不带 `?profile=`。
-  { key: "providers", label: "供应商", icon: "provider" },
-  { key: "adapters", label: "接入平台", icon: "chat" },
-  // 日志是进程级的，不看当前配置；链接不带 `?profile=`。
-  { key: "logs", label: "日志", icon: "logs" },
+interface NavItem {
+  key: string;
+  label: string;
+  icon: IconName;
+}
+
+/**
+ * 分组侧栏对齐 AstrBot：它把「运行 / 配置 / 扩展」分开，而不是一条平铺的菜单。
+ * 这里的判据同样是**作用域**：运行只放控制台；个性化配置是档级与内容资产；
+ * 接入与扩展是外部能力；系统是部署级调度与进程诊断。
+ *
+ * 「个性化配置」放配置文件、人格配置与插件：三者都回答「这台 bot 怎么跑」。
+ * 人格库是全局内容资产、配置档只存引用，所以它是同级的一项，而不是配置文件页里
+ * 的一个分类；插件按档启用，也放在这一组。计划任务写部署级 cron，不跟档走，
+ * 所以放在「系统」而不是配置文件页。
+ */
+const GROUPS: { key: string; label: string; items: NavItem[] }[] = [
+  {
+    key: "group-run",
+    label: "运行",
+    items: [{ key: "console", label: "控制台", icon: "console" }],
+  },
+  {
+    key: "group-personal",
+    label: "个性化配置",
+    items: [
+      // 本档五类在配置文件页；配置本身的增删在左上角切换器的「管理配置」弹窗里。
+      { key: "config", label: "配置文件", icon: "settings" },
+      // 人格库是全局资源；配置档只在配置文件页的「人格」分类里选用。
+      { key: "personas", label: "人格配置", icon: "persona" },
+      // 插件页：每份档各有一套启用清单与配置值，所以链接要带 `?profile=`。
+      { key: "plugins", label: "插件", icon: "plugin" },
+    ],
+  },
+  {
+    key: "group-extend",
+    label: "接入与扩展",
+    items: [
+      {
+        key: "providers",
+        label: "供应商",
+        icon: "provider",
+      },
+      { key: "adapters", label: "接入平台", icon: "chat" },
+    ],
+  },
+  {
+    key: "group-system",
+    label: "系统",
+    items: [
+      // 计划任务写部署级 cron.json，任务自己保存所用配置档，不跟 URL 上的档走。
+      { key: "cron", label: "计划任务", icon: "clock" },
+      { key: "logs", label: "日志", icon: "logs" },
+    ],
+  },
 ];
 
+const items = GROUPS.flatMap((group) => group.items);
+
 const menuOptions = computed<MenuOption[]>(() =>
-  items.map((item) => ({
-    key: item.key,
-    icon: icon(item.icon),
-    label: () => h(RouterLink, { to: to(item.key) }, { default: () => item.label }),
+  GROUPS.map((group) => ({
+    type: "group" as const,
+    key: group.key,
+    label: group.label,
+    children: group.items.map((item) => ({
+      key: item.key,
+      icon: icon(item.icon),
+      label: () => h(RouterLink, { to: to(item.key) }, { default: () => item.label }),
+    })),
   })),
 );
 

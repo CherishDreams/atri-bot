@@ -4,7 +4,9 @@ import { icon } from "@/components/shared/icons";
 import ProfileSwitcher from "./ProfileSwitcher.vue";
 
 /**
- * 工作台顶部工具条：左边「改的是哪一份档」，右边搜索（AstrBot 的 `config-toolbar`）。
+ * 配置文件页顶部工具条：左边「改的是哪一份档」，右边搜索（AstrBot 的 `config-toolbar`）。
+ *
+ * 这一页的五类全部按档，所以切换器始终是当前改的是谁的那一个锚点。
  *
  * 搜索框默认收起：常驻一个输入框会占掉顶栏最值钱的那段宽度（375 视口下档名与搜索框
  * 加在一起会互相挤），而它每天用不了几次。

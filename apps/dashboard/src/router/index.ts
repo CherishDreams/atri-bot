@@ -17,12 +17,23 @@ export const router = createRouter({
       meta: { requiresAuth: true },
       children: [
         { path: "", name: "console", component: ConsoleView },
-        // 配置工作台：左上角切档 + 左侧分类 + 右侧配置项。工具、档默认、步数都在这一页，
-        // 所以它**需要** `?profile=`（本档那几类是写在档文件里的）。
+        /*
+         * 配置文件页：左上角切档 + 左侧分类 + 右侧配置项。分类只有本档的五类
+         * （默认模型 / 人格 / 工具 / 运行参数 / 访问控制），都写在档文件里，
+         * 所以这一页**需要** `?profile=`。人格库与计划任务是独立的全局页，
+         * 不属于这条 route record。
+         */
         {
           path: "config",
           name: "config",
           component: () => import("@/views/ConfigWorkbench.vue"),
+        },
+        // 人格库是全局内容资产；配置档只在配置文件页里引用它。
+        {
+          path: "personas",
+          name: "personas",
+          component: () => import("@/views/PersonasView.vue"),
+          meta: { noProfile: true },
         },
         // 插件是独立一页（启用清单 + schema 驱动的配置）：配置抽屉的保存是即时动作，
         // 与工作台「草稿 + 一次保存」不是同一种语义，合进 `?cat=` 会让两套写入方式并存。
@@ -33,7 +44,7 @@ export const router = createRouter({
         },
         /*
          * 供应商与接入平台是**部署级**的两页（AstrBot 的「模型提供商」「平台配置」就是主导航里
-         * 各自的一项）：前者写 `data/providers.json`，后者只读 `atri.config.json` 的 adapters 段。
+         * 各自的一项）：前者写 `data/providers.json`，后者写 `data/adapters.json`（实例管理）。
          * 两者都不随档变，所以标 `noProfile` —— 给它们挂一个与页面无关的 `?profile=`，
          * 等于在 URL 上谎称「这一页是按档的」。
          */
@@ -49,6 +60,13 @@ export const router = createRouter({
           component: () => import("@/views/AdaptersView.vue"),
           meta: { noProfile: true },
         },
+        // 计划任务是部署级调度：任务自己保存所用配置档，不跟随 URL 上的档名。
+        {
+          path: "cron",
+          name: "cron",
+          component: () => import("@/views/CronView.vue"),
+          meta: { noProfile: true },
+        },
         // 日志是进程级的：不属于任何一份配置，也不该在 URL 上挂一个无关的档名。
         {
           path: "logs",
@@ -56,7 +74,7 @@ export const router = createRouter({
           component: () => import("@/views/LogsView.vue"),
           meta: { noProfile: true },
         },
-        // 两个旧入口保留成 redirect，而不是删掉：它们可能已经出现在别人的书签或文档里。
+        // 旧入口保留成 redirect，而不是删掉：它们可能已经出现在书签或文档里。
         // `/tools` 仍是档级页面，所以用函数形式把 `?profile=` 一并带过去（丢掉它的话，
         // 从旧链接进来会先换一档）；`/provider` 现在是不随档的独立页，query 原样丢掉。
         {
@@ -67,7 +85,14 @@ export const router = createRouter({
           path: "provider",
           redirect: { name: "providers" },
         },
-        // 配置的增删不单独占一页：它就在「配置文件」页左上角切换器的「管理配置」弹窗里。
+        // 访问控制已并入配置文件页的「本档配置」分类；旧整页 URL 留 redirect，
+        // 落到对应的 `?cat=`，而不是回 404 或默认分类。人格与计划任务重新有独立页，
+        // 不需要 redirect。
+        {
+          path: "access",
+          redirect: { name: "config", query: { cat: "access" } },
+        },
+        // 配置的增删不单独占一页：它就在配置文件页左上角切换器的「管理配置」弹窗里。
         // `/profiles` 这个旧入口留一条 redirect（它可能已经出现在书签里）。
         {
           path: "profiles",
@@ -110,9 +135,9 @@ function pickProfile(usable: ProfileRecord[]): string | null {
 }
 
 /**
- * 这个目标路由需不需要 `?profile=`。登录页不需要；「供应商」与「接入平台」是部署级全局
- * 一份，与当前是哪一份配置无关 —— 这三处都不带。（`/profiles` 已经降成 redirect，
- * 配置的增删改在「配置文件」页的切换器弹窗里。）
+ * 这个目标路由需不需要 `?profile=`。登录页、供应商、接入平台、人格配置、计划任务与日志
+ * 都是部署级或进程级的一份，与当前是哪一份配置无关 —— 这几处都不带。配置文件页与插件页
+ * 按档，所以带档名。（`/profiles` 已经降成 redirect，配置的增删改在配置文件页的切换器弹窗里。）
  */
 function needsProfile(to: RouteLocationNormalized): boolean {
   return Boolean(to.meta.requiresAuth) && to.meta.noProfile !== true;

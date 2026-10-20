@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import type { ProfileConfig, ProfileConfigPatch } from "../api/client.js";
+import type { AdapterAccessControl, ProfileConfig, ProfileConfigPatch } from "../api/client.js";
 import * as api from "../api/client.js";
 
 /**
@@ -26,17 +26,36 @@ import * as api from "../api/client.js";
 /** 草稿里可编辑的那几项。目录（名称、说明）不在这里 —— 那些永远来自服务端。 */
 interface Draft {
   defaultProviderId: string | null;
+  personaId: string | null;
   maxToolSteps: number;
   /** 工具 id -> 是否启用。插件不在这里：它有自己的页面与保存语义。 */
   tools: Record<string, boolean>;
+  /** 这一档的准入控制；绑定到这一档的所有适配器共用它。 */
+  access: AdapterAccessControl;
 }
 
 function draftOf(config: ProfileConfig): Draft {
   return {
     defaultProviderId: config.defaultProviderId,
+    personaId: config.personaId,
     maxToolSteps: config.maxToolSteps,
     tools: Object.fromEntries(config.tools.map((t) => [t.id, t.enabled])),
+    access: {
+      whitelistEnabled: config.access.whitelistEnabled,
+      allowedIds: [...config.access.allowedIds],
+      adminIds: [...config.access.adminIds],
+    },
   };
+}
+
+function sameAccess(a: AdapterAccessControl, b: AdapterAccessControl): boolean {
+  return (
+    a.whitelistEnabled === b.whitelistEnabled &&
+    a.allowedIds.length === b.allowedIds.length &&
+    a.adminIds.length === b.adminIds.length &&
+    a.allowedIds.every((id, index) => id === b.allowedIds[index]) &&
+    a.adminIds.every((id, index) => id === b.adminIds[index])
+  );
 }
 
 function sameDraft(a: Draft, b: Draft): boolean {
@@ -53,8 +72,14 @@ function sameDraft(a: Draft, b: Draft): boolean {
 function copyDraft(draft: Draft): Draft {
   return {
     defaultProviderId: draft.defaultProviderId,
+    personaId: draft.personaId,
     maxToolSteps: draft.maxToolSteps,
     tools: { ...draft.tools },
+    access: {
+      whitelistEnabled: draft.access.whitelistEnabled,
+      allowedIds: [...draft.access.allowedIds],
+      adminIds: [...draft.access.adminIds],
+    },
   };
 }
 
@@ -75,9 +100,17 @@ function patchOf(original: Draft, draft: Draft): ProfileConfigPatch {
   if (original.defaultProviderId !== draft.defaultProviderId) {
     patch.defaultProvider = draft.defaultProviderId;
   }
+  if (original.personaId !== draft.personaId) patch.personaId = draft.personaId;
   if (original.maxToolSteps !== draft.maxToolSteps) patch.maxToolSteps = draft.maxToolSteps;
   const tools = diffToggles(original.tools, draft.tools);
   if (tools) patch.tools = tools;
+  if (!sameAccess(original.access, draft.access)) {
+    patch.access = {
+      whitelistEnabled: draft.access.whitelistEnabled,
+      allowedIds: [...draft.access.allowedIds],
+      adminIds: [...draft.access.adminIds],
+    };
+  }
   return patch;
 }
 
@@ -147,12 +180,28 @@ export const useProfileConfigStore = defineStore("profileConfig", {
       if (this.draft) this.draft.defaultProviderId = providerId;
     },
 
+    setPersona(personaId: string | null): void {
+      if (this.draft) this.draft.personaId = personaId;
+    },
+
     setMaxSteps(steps: number): void {
       if (this.draft) this.draft.maxToolSteps = steps;
     },
 
     setTool(id: string, enabled: boolean): void {
       if (this.draft) this.draft.tools = { ...this.draft.tools, [id]: enabled };
+    },
+
+    setAccessWhitelist(enabled: boolean): void {
+      if (this.draft) this.draft.access = { ...this.draft.access, whitelistEnabled: enabled };
+    },
+
+    setAccessAllowedIds(ids: string[]): void {
+      if (this.draft) this.draft.access = { ...this.draft.access, allowedIds: [...ids] };
+    },
+
+    setAccessAdminIds(ids: string[]): void {
+      if (this.draft) this.draft.access = { ...this.draft.access, adminIds: [...ids] };
     },
 
     /** 丢掉草稿：只在「确认放弃未保存改动」之后调用，所以它必须显式存在。 */

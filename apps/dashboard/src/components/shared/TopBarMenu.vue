@@ -36,6 +36,8 @@ const menuItems = computed<MenuItem[]>(() => [
     label: "配置文件",
     icon: icon("settings"),
   },
+  { key: "personas", label: "人格配置", icon: icon("persona") },
+  { key: "cron", label: "计划任务", icon: icon("clock") },
   { key: "new-session", label: "新建会话", icon: icon("plus") },
   // 退出登录单独分组：以后新增的普通功能都放上面，它会一直留在最后一段。
   { type: "divider", key: "divider-account" },
@@ -59,15 +61,16 @@ function menuProps(): HTMLAttributes {
  */
 
 /**
- * 作用域链接。`profile.value` 在 `noProfile` 页面（配置 / 供应商 / 接入平台）上是 null，
- * 塞进 query 会变成裸的 `?profile`（实测）；没有档名时就不带，交给守卫去补。
+ * 作用域链接。`profile.value` 在 `noProfile` 页面（人格配置 / 供应商 / 接入平台 /
+ * 计划任务 / 日志）上是 null，塞进 query 会变成裸的 `?profile`（实测）；
+ * 没有档名时就不带，交给守卫去补。
  */
 function scoped(name: string): { name: string; query?: { profile: string } } {
   return profile.value === null ? { name } : { name, query: { profile: profile.value } };
 }
 
 async function onSelect(key: string): Promise<void> {
-  // 三个作用域页面都带着当前档 `?profile=`：这个菜单从 bot 与 chat 两侧都能打开，
+  // 作用域页面都带着当前档 `?profile=`：这个菜单从 bot 与 chat 两侧都能打开，
   // 不带的话，从 chat 里点「配置」会先被守卫补一次档 —— 而它补的不一定是刚在用的那份。
   switch (key) {
     case "console":
@@ -75,6 +78,11 @@ async function onSelect(key: string): Promise<void> {
       break;
     case "config":
       await router.push(scoped("config"));
+      break;
+    case "personas":
+    case "cron":
+      // 这两个是部署级/全局资源，不带 `?profile=`。
+      await router.push({ name: key });
       break;
     case "new-session":
       await router.push(scoped("chat-new"));

@@ -66,6 +66,7 @@ const emit = defineEmits<{ (e: "loadEarlier"): void }>();
     :data-msg-id="m.id"
     :role="m.role"
     :content="m.content"
+    :images="m.images"
     :tool-calls="m.toolCalls"
     :pending="m.id === streamingId && !m.content"
   />

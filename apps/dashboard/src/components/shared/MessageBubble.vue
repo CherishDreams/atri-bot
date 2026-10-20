@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Role, ToolCall } from "@/api/generated/index.js";
+import type { MessageImage, Role, ToolCall } from "@/api/generated/index.js";
 import MarkdownView from "./MarkdownView.vue";
 
 /**
@@ -13,6 +13,8 @@ import MarkdownView from "./MarkdownView.vue";
 const props = defineProps<{
   role: Role;
   content: string;
+  /** 用户消息附带的图片。服务端存的是 base64，模板里换成 data URI。 */
+  images?: MessageImage[];
   /** 这条还是没有内容的流式草稿 —— 显示占位而不是一个空气泡。 */
   pending?: boolean;
   /** 助手在这一轮要求执行的工具调用（`role === "assistant"` 时才可能有）。 */
@@ -21,6 +23,9 @@ const props = defineProps<{
 
 const isUser = computed(() => props.role === "user");
 const isTool = computed(() => props.role === "tool");
+const imageSources = computed(() =>
+  (props.images ?? []).map((image) => `data:${image.mediaType};base64,${image.data}`),
+);
 
 /**
  * 线协议里的 role 是英文（`user` / `assistant` / `tool`），直接显示会在整片中文界面里
@@ -65,9 +70,19 @@ const label = computed(() => ROLE_LABELS[props.role] ?? props.role);
     <!-- 用户侧保持纯文本 + pre-wrap：把输入里的 * 与 _ 当强调符号解析会排错版。 -->
     <div
       v-else-if="isUser"
-      class="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm break-words whitespace-pre-wrap text-on-primary shadow-sm"
+      class="flex max-w-[85%] flex-col gap-2 rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm break-words text-on-primary shadow-sm"
     >
-      {{ content }}
+      <!-- 图片与正文各占一段：纯图片消息的 content 为空，不能因此画出一个空气泡。 -->
+      <img
+        v-for="(src, index) in imageSources"
+        :key="index"
+        :src="src"
+        :alt="`用户发送的图片 ${index + 1}`"
+        data-message-image
+        loading="lazy"
+        class="max-h-72 max-w-full self-start rounded-lg object-contain"
+      />
+      <span v-if="content" class="whitespace-pre-wrap">{{ content }}</span>
     </div>
     <!--
       助手侧：正文仍是 markdown（底色必须是 surface —— 行内代码用 raised，
