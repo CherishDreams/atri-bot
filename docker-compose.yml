@@ -1,0 +1,34 @@
+# 本地调试用的 NapCat（OneBot 11）容器。
+#
+# 数据全部落在仓库根的 .napcat/（已 gitignore）：config 里是 WebUI 与 OneBot 配置，
+# QQ 里是登录态，logs/plugins 分别是日志与插件目录，方便直接打开排查。
+#
+#   docker compose up -d napcat
+#   docker compose logs -f napcat
+#
+# WebUI: http://127.0.0.1:6099（token 见 .napcat/config/webui.json 或容器日志）
+# 反向 WS：NapCat 的 WebSocket 客户端连宿主机上的 atri-bot；extra_hosts 让容器里的
+# host.docker.internal 指向宿主机（Linux 需要 Docker 20.10+）。
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: atri-napcat
+    restart: unless-stopped
+    environment:
+      # 挂载目录的属主。普通用户可先用 NAPCAT_UID=$(id -u) NAPCAT_GID=$(id -g) 覆盖。
+      NAPCAT_UID: "${NAPCAT_UID:-0}"
+      NAPCAT_GID: "${NAPCAT_GID:-0}"
+      TZ: "Asia/Shanghai"
+    extra_hosts:
+      # NapCat 作为 WebSocket 客户端要连宿主机上的 atri-bot（默认 6199/ws）。
+      - "host.docker.internal:host-gateway"
+    ports:
+      # 只绑定本机：这是开发/调试用的协议端，不直接暴露到公网。
+      - "127.0.0.1:3000:3000" # OneBot HTTP（可选，本仓反向模式不用）
+      - "127.0.0.1:3001:3001" # NapCat 的 WS 服务器（反向模式不用；保留给联调）
+      - "127.0.0.1:6099:6099" # WebUI：扫码登录、网络配置
+    volumes:
+      - ./.napcat/QQ:/app/.config/QQ
+      - ./.napcat/config:/app/napcat/config
+      - ./.napcat/logs:/app/napcat/logs
+      - ./.napcat/plugins:/app/napcat/plugins

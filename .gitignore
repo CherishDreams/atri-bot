@@ -34,6 +34,10 @@ atri.config.json.tmp
 
 # 运行时数据与本地状态
 data/
+
+# NapCat Docker 的持久化数据（QQ 登录态、配置、日志、插件）。只在本机调试用，
+# 里面会有账号登录态与 WebUI/OneBot 的 access token，绝不能入库。
+.napcat/
 *.sqlite
 *.sqlite-journal
 # WAL 模式的两个边车文件（会话库用 WAL；`data/` 已经盖住默认 dataDir，
