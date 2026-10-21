@@ -1,11 +1,17 @@
 {
   "name": "示例配置档",
   "maxToolSteps": 5,
+  "personaId": "default",
   "defaultProvider": "deepseek-chat",
   "tools": {
     "current_time": { "enabled": false }
   },
   "plugins": {
     "hello": {}
+  },
+  "access": {
+    "whitelistEnabled": false,
+    "allowedIds": [],
+    "adminIds": []
   }
 }

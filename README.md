@@ -83,40 +83,60 @@ pnpm dev:dashboard                 # 启动控制台，监听 127.0.0.1:5173
 
 ## 配置
 
-配置分**三层**，各有一个文件：
+配置分**三层**，实际落在六个文件里（人格与计划任务也是部署级运行期资源）：
 
-| 层               | 文件                             | 里面是什么                                                                       | 谁写它                                            |
-| ---------------- | -------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------- |
-| 部署级（启动）   | `atri.config.json`（仓库根）     | 监听地址与端口、日志级别、数据目录、插件安装目录、适配器开关、静态目录、登录口令 | 手写；`auth.adminPassword` 由服务端首次启动时填入 |
-| 部署级（运行期） | `data/providers.json`            | 供应商：`providerSources`（连接与密钥）与 `providers`（模型实例清单 + 全局默认） | 控制台的「供应商」页，或手写                      |
-| 配置档           | `data/profiles/<id>/config.json` | 这份「跑法」开哪些工具、单轮最多几步、开哪些插件，默认用清单里的哪一个模型       | 控制台的「配置文件」页，或手写                    |
+| 层               | 文件                             | 里面是什么                                                                                               | 谁写它                                            |
+| ---------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| 部署级（启动）   | `atri.config.json`（仓库根）     | 监听地址与端口、日志级别、数据目录、插件安装目录、静态目录、登录口令                                     | 手写；`auth.adminPassword` 由服务端首次启动时填入 |
+| 部署级（运行期） | `data/providers.json`            | 供应商：`providerSources`（连接与密钥）与 `providers`（模型实例清单 + 全局默认）                         | 控制台的「供应商」页，或手写                      |
+| 部署级（运行期） | `data/adapters.json`             | 接入平台实例：类型、绑定配置、启停、平台字段                                                             | 控制台的「接入平台」页，或旧配置迁移              |
+| 部署级（运行期） | `data/personas.json`             | 可复用的人格：`id` / 名称 / 说明 / 系统提示词                                                            | 控制台的「人格配置」页                            |
+| 部署级（运行期） | `data/cron.json`                 | 计划任务：名称、cron、提示词、所用配置档、启停与最近一次结果                                             | 控制台的「计划任务」页                            |
+| 配置档           | `data/profiles/<id>/config.json` | 这份「跑法」开哪些工具、单轮最多几步、开哪些插件、用哪个人格、默认用哪个模型、这一档的白名单与管理员名单 | 控制台的「配置文件」页，或手写                    |
 
 为什么供应商不按配置档各存一份：它里面是**密钥与端点**，按档复制只会让同一个 `apiKey`
 躺在 N 个文件里，而「换一档换一套后端」在真实使用里从来没有发生过（bot 侧发消息根本不传
 model）。这一条分界与 AstrBot 一致：除了配置文件，其余都是全局的，配置档只管启用与默认值。
 
-控制台把这三层分成**一个配置页 + 四个整页**（照 AstrBot）：
+控制台采用 AstrBot 式的**顶栏 + 分组侧栏 + 整页内容**，把三层分成
+**一个「配置文件」页 + 六个整页**：
 
-- **「配置文件」页**（`/config`）：左上角显示并切换当前配置，左侧三类（默认模型 / 工具 /
-  运行参数），右侧是该分类的配置项。三类都**先改草稿、点「保存」才写回**（离开或
-  切档时会拦一道）。`/tools` 只是转进「工具」分类的旧链接。
+- **「配置文件」页**（`/config`）：左上角显示并切换当前配置，左侧五类（默认模型 / 人格 /
+  工具 / 运行参数 / 访问控制），右侧是该分类的配置项。五类都写
+  `data/profiles/<id>/config.json`，都**先改草稿、点「保存」才写回**（离开或切档时会拦一道）。
+  访问控制是这一档的名单，绑定到这一档的所有接入平台共用它。`/tools` 与 `/access`
+  是转进对应分类的旧链接。
+- **「人格配置」页**（`/personas`）：全局人格库，新建 / 编辑 / 删除人格提示词；被配置档引用的
+  人格删除会回 409。配置档只在「配置文件 → 人格」里选用哪一份，本体不按档复制。
 - **「插件」页**（`/plugins`）：已安装的插件、它们在这份配置里的启用状态，以及按
   `_conf_schema.json` 渲染的配置表单。页头可以直接切换配置；启停与配置都是**即时动作**，
   保存配置后插件自动重载。抽屉里有未保存改动时，先保存或关闭抽屉再切配置。
 - **「供应商」页**（`/providers`）：部署级全局一份，增删源与模型**即时**写回
   `data/providers.json`。`/provider` 是它的旧链接。
-- **「接入平台」页**（`/adapters`）：只读，配置在 `atri.config.json` 的 `adapters` 段。
+- **「接入平台」页**（`/adapters`）：新增、编辑、删除、启用/禁用接入平台实例（目前 NapCat）。
+  配置写进 `data/adapters.json`，全程在网页完成，不需要手写 JSON。
+- **「计划任务」页**（`/cron`）：按 5 段 cron 定时执行提示词。任务选用一份配置档，
+  结果写进任务自己的内部会话，可在页面上跳到该会话；支持立即执行、启停与删除。
 - **「日志」页**（`/logs`）：服务端最近 500 行日志，按级别过滤、实时追加、跟随滚动。
   日志只在内存里，重启即清空；它不属于任何配置，也不进 `data/`。
 - 配置本身的增删不单独占一页：在「配置文件」页左上角的切换器里点「管理配置」。
   创建后**不能改名**（id 是目录名），删除会连同 `profiles/<id>/` 一起移除。
 
-供应商与接入平台不放进「配置文件」页：它们属于部署，不属于某一份配置。留在里面时的症状是
-左上角明明写着当前配置名、而那一项改的东西立刻对所有配置生效 —— 分组标题挡不住这种误读。
-它们各自是左侧主导航的一整项，AstrBot 的「模型提供商」「平台配置」就在这个位置。
-插件同样不在工作台里：它的配置是「改一项、保存即重载」，与工作台的「草稿 + 一次保存」
-不是同一种语义，合在一页会让两套写入方式并存。日志更不在工作台里：它是进程级输出，
-不属于任何一份配置。
+主导航按「运行 / 个性化配置 / 接入与扩展 / 系统」分组（对齐 AstrBot）：
+
+| 分组       | 菜单项                   |
+| ---------- | ------------------------ |
+| 运行       | 控制台                   |
+| 个性化配置 | 配置文件、人格配置、插件 |
+| 接入与扩展 | 供应商、接入平台         |
+| 系统       | 计划任务、日志           |
+
+「配置文件」页只放本档的五类。人格库与计划任务虽然也回答「这台 bot 怎么跑」，但它们是部署级
+资源（一份人格可被多档引用、任务自己保存所用配置档），所以各自是主导航的一项，而不是配置文件
+页里的分类；访问控制相反，它的名单按档保存，所以留在配置文件页。供应商与接入平台改的是外部
+连接与平台实例（端口、token、启停、重连），不属于「这一跑法」。插件与工作台也不是同一种写入
+语义：它的配置是 schema 驱动的「改一项、保存即重载」，合在一页会让两套写入方式并存。
+日志更不在配置文件页里：它是进程级输出，不属于任何一份配置。
 
 解析顺序对**启动那一份**成立：**内置默认值 → `atri.config.json` → 环境变量**。
 环境变量可参考 `.env.example`；`atri.config.example.json` 复制成 `atri.config.json`，
@@ -124,7 +144,7 @@ model）。这一条分界与 AstrBot 一致：除了配置文件，其余都是
 `atri.profile.example.json` 复制成 `data/profiles/<你的 id>/config.json`。
 密钥放在环境变量里，结构性设置放在文件里。
 
-为什么运行期的两份都住在 `data/` 而不是仓库根的一个 `configs/` 目录：`.gitignore` 忽略的是
+为什么运行期的几份都住在 `data/` 而不是仓库根的一个 `configs/` 目录：`.gitignore` 忽略的是
 **精确名** `atri.config.json`，把带 `apiKey` 的兄弟文件放进仓库根就是「未跟踪但也不忽略」——
 一次顺手 `git add -A` 会把所有配置档的密钥提交进版本库。`data/` 整体被忽略，
 并且权限是 `0700`。
@@ -141,16 +161,123 @@ model）。这一条分界与 AstrBot 一致：除了配置文件，其余都是
 它们已经是个摆设，并说清真源在哪个文件）。`default` 这个名字没有任何运行期特权：
 它只是第一次落盘的位置，控制台会优先把界面切到它，而每个请求仍然把档名写在 URL 上。
 
-### 接入平台绑定到配置
+### 接入平台管理
 
-`adapters.<id>.profile` 说这个平台**跑在哪份配置**上。适配器本身留在部署级文件里：
-它占的资源是部署级的（一个监听端口、一个 webhook 回调地址、一个平台的机器人 token），
-要选的是「这个平台用哪一套模型与工具」。
+适配器实例住在**运行期**的 `data/adapters.json`，控制台的「接入平台」页负责新增、编辑、
+删除与启停；用户不需要改任何 JSON。每个实例有一个 `profile`，说它**跑在哪份配置**上：
+平台占的资源（监听端口、webhook、平台 token）属于部署，而「用哪套模型与工具」才按配置分。
 
-绑定指不到一份可用配置时，那个适配器**不会被启动**，并单独报一条 error ——
+绑定指不到一份可用配置时，那个实例**不会被启动**，原因显示在卡片上，也写进日志 ——
 不退回 `default`，也不挑第一个能用的档：跑错一套配置没有任何症状，平台侧的流量照样进来。
-`GET /adapters` 把两件事分开报：`enabled`（你没关掉它）与 `bound`（它绑的那份配置现在可用），
-两个都为真才真的在收流量。没写 `profile` 的适配器是 `enabled: true` + `bound: false`。
+`GET /adapters` 把几件事分开报：`enabled`（开关）、`bound`（绑的配置现在可用）、
+`running`（实例是否成功启动）与 `error`（上一次启动失败的原因）。
+
+旧版 `atri.config.json` 的 `adapters` 段只在 `data/adapters.json` 不存在时**迁移一次**；
+迁移之后它不再生效，控制台会提示这一点。要加第二个同类型账号，就在页面上再添加一个实例。
+
+#### NapCat 适配器
+
+仓库内置的 NapCat 适配器走 **OneBot 11 反向 WebSocket**（与 AstrBot 一致）：
+**atri-bot 监听，NapCat 作为 WebSocket 客户端连进来**。先在控制台「接入平台」页添加
+NapCat，填写：
+
+- 监听地址：`0.0.0.0`（容器/远程都能连）或 `127.0.0.1`（仅本机）
+- 监听端口：`6199`
+- WebSocket 路径：`/ws`
+- Access Token：添加时页面会自动生成，也可以改成自己的
+- 配置：选一份可用配置
+- 启用：打开
+
+保存后 atri-bot 开始监听；`/adapters` 的 `running` 表示**监听器已启动**，NapCat 客户端
+是否连上、何时重连看服务端日志。然后在 NapCat WebUI 的「网络配置」里新建
+**WebSocket 客户端**：
+
+- URL：`ws://<atri-bot 所在主机>:6199/ws`；如果 NapCat 在 Docker 而 atri-bot 在宿主机，
+  用 `ws://host.docker.internal:6199/ws`（仓库的 compose 已加 `host-gateway`）。
+- Token：与表单里的 Access Token 一致。
+
+服务端同时接受 `Authorization: Bearer <token>` 与 `?access_token=<token>` 两种写法。
+Token 保存在 `data/adapters.json`（目录 `0700`、文件 `0600`），不要写进日志或提交。
+
+> 之前版本的正向 WS 实例不会自动转换：旧配置里的 `url` 是「NapCat 服务器地址」，
+> 而反向模式需要的是「atri-bot 的监听地址/端口/路径」，方向已经反过来。请在页面里
+> 编辑或重新添加一次，并把 NapCat 的网络配置改成 WebSocket 客户端。
+
+- 私聊按 QQ 号各建一条内部会话；群聊按群号建一条，所有成员共享，模型看到的每条消息带
+  `[群名片或昵称]` 前缀。群聊目前对**所有**文本消息响应，不要求 `@` 机器人。
+- 会话映射落在 `data/adapters/<实例 id>/sessions.json`（目录 `0700`、文件 `0600`）；
+  里面只有「外部会话 → 内部会话 id」，不含消息内容或凭证。删掉映射或从控制台删掉会话后，
+  下一条消息会新建一条会话。
+- 图片会**实际下载**并作为多模态附件交给模型：支持 PNG / JPEG / GIF / WebP，单张上限
+  4 MiB、单条最多 4 张；下载失败或超限时退回 `[图片]` 占位，消息本身不会丢。所选模型
+  必须支持视觉输入，否则上游会拒绝带图的请求。`at` 归一成 `@QQ号`，语音/文件等仍是占位。
+  长回复按 1500 字左右在换行/空格处切块发送；机器人自己的消息会被忽略。
+- 客户端断开后由 NapCat 自己重连，atri-bot 的监听不关闭；连接/断线写服务端日志。
+- 收到与回复都会写结构化日志，例如：
+  `[napcat:privateMessage:123456]: 你好`、`[napcat:groupMessage:456]: [群名片] 大家好`、
+  `发送[napcat:privateMessage:123456]:你好`。图片消息在日志里显示 `[图片]`；群聊内容带
+  发送人前缀，「日志」页可以直接按 `privateMessage` / `groupMessage` / QQ 号搜索。
+- v1 不做正向 WebSocket（不需要 NapCat 再开 WS 服务器）、图片上传、好友/加群请求处理；
+  这些是后续的适配器能力。
+
+##### 用 Docker 跑 NapCat（本地调试）
+
+仓库根的 `docker-compose.yml` 负责协议端；QQ 登录态、配置、日志与插件都落在
+`.napcat/`（已 gitignore，可以直接打开排查）：
+
+```bash
+docker compose up -d napcat
+docker compose logs -f napcat
+```
+
+- WebUI：<http://127.0.0.1:6099>。登录 token 在 `.napcat/config/webui.json`
+  （首次启动后生成；也可以看容器日志里的 WebUI 地址）。
+- 扫码登录 QQ 后，先在控制台「接入平台」页添加 NapCat（监听 `0.0.0.0:6199`、
+  路径 `/ws`，页面会生成 token），再到 WebUI 的「网络配置」里新增 **WebSocket 客户端**：
+  URL 填 `ws://host.docker.internal:6199/ws`（compose 已让容器可以访问宿主机），
+  Token 填页面生成的那一个。
+- 端口在 compose 里只绑定 `127.0.0.1`。要从别的机器访问 WebUI，改端口绑定前先想清楚
+  它等同于协议端的管理入口。
+- `docker compose down` 只停容器，`.napcat/` 里的数据保留；升级用
+  `docker compose pull && docker compose up -d`。
+- 挂载目录默认按 root（UID/GID 0）写；普通用户可先执行
+  `NAPCAT_UID=$(id -u) NAPCAT_GID=$(id -g) docker compose up -d`。
+
+## 人格、访问控制与计划任务
+
+### 人格
+
+人格是**全局资源**（`data/personas.json`），一份人格包含 id、名称、说明与系统提示词；
+每份配置档在 `config.json` 里只保存一个 `personaId` 引用。这样同一个人格可被多份配置复用，
+改一次所有引用它的配置下一轮就生效，不会出现 N 份会漂移的副本。
+
+提示词作为 **system 消息**注入每一轮请求，**不写进会话历史**：它没有「什么时候说过」的语义，
+写进 sqlite 会让历史详情多出一条假消息，也会在修改人格后留下旧版本。切换人格不需要重建引擎；
+组合根在保存后同步正在运行的引擎。
+
+### 白名单与管理员
+
+访问控制是**配置档的属性**（`data/profiles/<id>/config.json` 的 `access` 段），不是平台实例的：
+
+- 每份档一张名单：开启白名单、允许的私聊用户 id 或群 id、管理员用户 id；
+- 绑定到这一档的所有接入平台共用它；换一档就是另一张，互不影响；
+- 在「配置文件 → 访问控制」里改，和本档其他项一起点「保存」；保存后下一条消息立即按新名单
+  判断，不重启 WebSocket 监听。
+
+管理员**始终越过白名单**，这是白名单配错时不让机器人彻底失联的逃生口。群聊按群 id 判白名单，
+私聊按发送人 id。被挡下的消息只写一条带事件键的日志，不记录正文。
+
+名单里存的是平台坐标（QQ 号、群号）。把两个不同平台绑到同一份配置档时，它们的 id 会共用
+这一张表；需要各自独立的名单，就把它们绑到不同的配置档。
+
+### 计划任务
+
+任务保存在 `data/cron.json`，字段是名称、5 段 cron、提示词、所用配置档与启停。调度器使用
+**服务器本地时区**，最小粒度是分钟；服务启动时不为过去的时刻补跑。到点后用指定配置档的
+人格、模型与工具跑一轮，结果写进任务自己的内部会话（第一次执行时创建）。
+
+任务可以在控制台「立即执行」，也可以禁用后保留配置。今天的版本不把结果主动发到 QQ/其他平台：
+主动发送需要平台侧寻址与额外权限，先把「按时跑一轮、结果可查」做对。
 
 ## 登录鉴权
 
@@ -257,6 +384,11 @@ pnpm dev
 | `headers`   | 额外请求头                       | 同左                                                   |
 | `timeoutMs` | 默认 `120000`（毫秒）            | 同左                                                   |
 
+图片输入按两家自己的线协议编码：OpenAI 兼容接口发 `image_url` 内容块（data URI），
+Anthropic 发 base64 `image` 内容块。适配器下载的图片会随消息落库并进入历史，
+所以后续轮次仍能看见它；直接聊天接口目前不接收图片。模型本身需要支持视觉，
+只配了一个纯文本模型时上游会拒绝请求。
+
 `timeoutMs` 在两条路径上**不是同一个意思**：非流式（一次请求一次回答、拉模型列表）按
 **总预算**算；流式按**空闲上限**算 —— 连续这么多毫秒没有任何增量才算卡住，
 正在往前推的长回复不会被掐断。之所以要分开：引擎是在 `chatStream` 返回**之后**才落库助手那条，
@@ -308,7 +440,7 @@ provider 启动，并且在控制台的「供应商」页里以 `loaded: false` 
 **要按保存**；chat 顶栏那个模型选择器是它的快捷入口，写的是同一个键、走同一个服务端校验，
 所以两处显示的永远是同一个默认，换浏览器、换设备也一样。
 
-工具与单轮步数也在「配置文件」页：它们都是**这一档**的属性，同样要点保存。
+工具与单轮步数也在「配置文件」页的「本档配置」组里：它们都是**这一档**的属性，同样要点保存。
 插件启停与插件配置在「插件」页，保存即生效。
 
 两点需要知情：
@@ -347,15 +479,16 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 ### 数据目录、备份与单实例
 
-`dataDir`（默认 `data/`，可用 `ATRI_DATA_DIR` 或配置文件里的 `dataDir` 改）下有四样运行状态：
+`dataDir`（默认 `data/`，可用 `ATRI_DATA_DIR` 或配置文件里的 `dataDir` 改）下是这些运行状态：
 `sessions.sqlite`（全部对话历史）、`providers.json`（供应商：连接、密钥与全局默认）、
-`profiles/<id>/config.json`（各配置档的跑法，含「默认用清单里哪一个」）、
-以及 `profiles/<id>/plugins/<插件 id>/`（插件自己的数据与配置值；其中 `config.json`
-由框架按 schema 读-改-写，其余内容框架不管理）。
+`adapters.json`（接入平台实例与平台 token）、`adapters/<实例 id>/sessions.json`
+（外部会话到内部会话的映射）、`profiles/<id>/config.json`（各配置档的跑法，
+含「默认用清单里哪一个」），以及 `profiles/<id>/plugins/<插件 id>/`
+（插件自己的数据与配置值；其中 `config.json` 由框架按 schema 读-改-写，其余内容框架不管理）。
 **登录口令在 `atri.config.json`。** **需要备份的就是这几样**，
 其余（`apps/dashboard/dist`）可由源码重新构建。
-`providers.json` 与配置档文件里都可能有明文 `apiKey`，所以它们与 `dataDir` 一起带走时
-要按同一档秘密对待。
+`providers.json`、`adapters.json` 与配置档文件里都可能有明文 `apiKey`/token，
+所以它们与 `dataDir` 一起带走时要按同一档秘密对待。
 整个 `dataDir` 的权限是 `0700`：保护落在**目录**上，`sessions.sqlite` 的 WAL 边车
 （`-wal` / `-shm`）由 SQLite 按 umask 反复重建，逐文件收紧是一次性的假安全感。
 `plugins/` 下**有目录不等于那个插件在跑**：加载失败的插件也留下了它已经写过的数据
@@ -393,8 +526,12 @@ pnpm start            # 或 node apps/server/src/index.ts
   控制台按它渲染表单，值落在插件自己的数据目录（见[插件配置](#插件配置)）。
   要存数据用 `ctx.dataDir`（见[插件的动态加载](#插件的动态加载)），**不要**写进插件自己那个目录 ——
   那个目录是会被升级覆盖、被用户改名的。参见 `apps/server/plugins/hello`。
-- **适配器** —— 实现 `start()`/`stop()` 并注册到 `AdapterManager`；
-  在 `config.adapters.<id>.enabled` 中按需启用。纯 agent 部署可以不启用任何一个。
+- **适配器** —— 入站平台。消息类适配器继承 `adapters/message.ts` 的 `MessageAdapter`，
+  实现 `start()` / `stop()` / `sendText()`；`adapters/templates.ts` 声明可添加的类型与表单字段，
+  `AdapterConfigStore` 把实例存到 `data/adapters.json`，`AdapterManager` 管增删改与启停。
+  会话映射、发送人前缀、按会话串行与长回复切块由基类统一处理。
+  控制台的「接入平台」页是唯一写入口。仓库内置 `NapCat`（OneBot 11 反向 WebSocket），
+  见上面的 [NapCat 适配器](#napcat-适配器)。
 - **工具（function calling）** —— 内置工具一颗一个文件（`apps/server/src/core/tool/builtins/`），
   在 `builtins.ts` 的清单里登记后由组合根注册进 `ToolRegistry`。目前有两颗：`current_time`
   （报此刻的日期与时钟，可传 IANA 时区）与 `list_plugins`（列已安装的插件及其加载结果）。
@@ -523,44 +660,53 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 基础路径 `/api/v1`：
 
-| 方法         | 路径                                            | 说明                                                                                             |
-| ------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| GET          | `/health`                                       | 存活检查（公开）                                                                                 |
-| POST         | `/auth/login`、`/auth/logout`                   | 登录 / 登出（公开，见上）                                                                        |
-| GET          | `/auth/me`、`/auth/status`                      | 当前用户 / 是否需要登录                                                                          |
-| GET / POST   | `/sessions`                                     | 列出（默认最新 100 个，创建序 + `nextCursor`）/ 创建会话                                         |
-| GET / DELETE | `/sessions/:id`                                 | 读取（默认**最新 100 条**消息 + `nextCursor`）/ 删除会话                                         |
-| POST         | `/sessions/:id/messages`                        | 发送用户消息，等完整回复后返回（同会话串行，占用中返回 409）                                     |
-| POST         | `/sessions/:id/messages/stream`                 | 同上，但以 SSE 逐段推送回复增量（409 在开流**之前**判，所以是状态码而不是流里的错误帧）          |
-| GET          | `/providers`、`/plugins`、`/adapters`、`/tools` | 供控制台使用的状态                                                                               |
-| GET          | `/logs`                                         | 最近的程序日志（默认 200 条，最多 500 条）                                                       |
-| GET          | `/logs/stream`                                  | 实时日志流（SSE，先补发历史再推送；`after` 续传）                                                |
-| POST/DELETE  | `/providers`、`/providers/:id`                  | 新增 / 修改 / 删除模型实例                                                                       |
-| GET          | `/provider-sources`                             | 列出 provider source（**明文含 apiKey**）                                                        |
-| POST/DELETE  | `/provider-sources`、`/provider-sources/:id`    | 新增 / 修改 / 删除 provider source                                                               |
-| POST         | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                                                                   |
-| POST         | `/plugins/:id/reload`                           | 重载插件（销毁旧实例并重新求值代码）                                                             |
-| POST         | `/plugins/:id/unload`                           | 卸载插件（释放副作用并移除）                                                                     |
-| POST         | `/plugins/:id/enable`                           | 在**这份配置档**里启用 / 禁用插件，body `{ "enabled": true }`（插件本身是全局安装的）            |
-| GET          | `/plugins/:id/config`                           | 读这个插件的 schema 与当前生效值；schema / 配置坏了也会返回原因（`schemaError` / `configError`） |
-| POST         | `/plugins/:id/config`                           | 保存插件配置，body `{ values: [{ key, value }] }`；保存后尝试重载，失败原因在 `reloadError`      |
-| POST         | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填）                                              |
-| GET          | `/profiles`                                     | 列出全部配置档及其加载状态（含 `failed` 与它的原因）                                             |
-| POST         | `/profiles`                                     | 新建配置档，body `{ id, name? }`                                                                 |
-| GET          | `/profiles/:id/config`                          | 读一份配置档的可编辑内容（工作台草稿起点：默认模型 / 步数 / 工具 / 插件一次读回）                |
-| POST         | `/profiles/:id/config`                          | 保存这批改动（只发 diff；插件失败项在响应的 `failed` 里点名；改动当场生效）                      |
-| POST         | `/profiles/:id/default-provider`                | 设这一档默认的 provider 实例，body `{ "providerId": "<实例 id>" }`；`null` 取消档级默认          |
-| DELETE       | `/profiles/:id`                                 | 删除一份配置（连同 `profiles/<id>/` 目录；正被某个会话占用时返回 409）                           |
+| 方法            | 路径                                            | 说明                                                                                                |
+| --------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| GET             | `/health`                                       | 存活检查（公开）                                                                                    |
+| POST            | `/auth/login`、`/auth/logout`                   | 登录 / 登出（公开，见上）                                                                           |
+| GET             | `/auth/me`、`/auth/status`                      | 当前用户 / 是否需要登录                                                                             |
+| GET / POST      | `/sessions`                                     | 列出（默认最新 100 个，创建序 + `nextCursor`）/ 创建会话                                            |
+| GET / DELETE    | `/sessions/:id`                                 | 读取（默认**最新 100 条**消息 + `nextCursor`）/ 删除会话                                            |
+| POST            | `/sessions/:id/messages`                        | 发送用户消息，等完整回复后返回（同会话串行，占用中返回 409）                                        |
+| POST            | `/sessions/:id/messages/stream`                 | 同上，但以 SSE 逐段推送回复增量（409 在开流**之前**判，所以是状态码而不是流里的错误帧）             |
+| GET             | `/providers`、`/plugins`、`/adapters`、`/tools` | 供控制台使用的状态                                                                                  |
+| GET/POST        | `/adapters`                                     | 列出 / 新增接入平台实例                                                                             |
+| GET             | `/adapters/templates`                           | 可添加的适配器类型与表单字段                                                                        |
+| GET/POST/DELETE | `/adapters/{id}`                                | 读取（含平台字段）/ 更新 / 删除一个实例                                                             |
+| POST            | `/adapters/{id}/enable`                         | 启用或禁用实例，body `{ "enabled": true }`                                                          |
+| GET / POST      | `/personas`                                     | 列出 / 新建人格                                                                                     |
+| POST / DELETE   | `/personas/{id}`                                | 更新 / 删除人格（仍被配置档引用时删除回 409）                                                       |
+| GET / POST      | `/cron`                                         | 列出 / 新建计划任务                                                                                 |
+| POST / DELETE   | `/cron/{id}`                                    | 更新 / 删除计划任务                                                                                 |
+| POST            | `/cron/{id}/run`                                | 立即执行（202 `{ started: true }`，结果看列表里的状态）                                             |
+| GET             | `/logs`                                         | 最近的程序日志（默认 200 条，最多 500 条）                                                          |
+| GET             | `/logs/stream`                                  | 实时日志流（SSE，先补发历史再推送；`after` 续传）                                                   |
+| POST/DELETE     | `/providers`、`/providers/:id`                  | 新增 / 修改 / 删除模型实例                                                                          |
+| GET             | `/provider-sources`                             | 列出 provider source（**明文含 apiKey**）                                                           |
+| POST/DELETE     | `/provider-sources`、`/provider-sources/:id`    | 新增 / 修改 / 删除 provider source                                                                  |
+| POST            | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                                                                      |
+| POST            | `/plugins/:id/reload`                           | 重载插件（销毁旧实例并重新求值代码）                                                                |
+| POST            | `/plugins/:id/unload`                           | 卸载插件（释放副作用并移除）                                                                        |
+| POST            | `/plugins/:id/enable`                           | 在**这份配置档**里启用 / 禁用插件，body `{ "enabled": true }`（插件本身是全局安装的）               |
+| GET             | `/plugins/:id/config`                           | 读这个插件的 schema 与当前生效值；schema / 配置坏了也会返回原因（`schemaError` / `configError`）    |
+| POST            | `/plugins/:id/config`                           | 保存插件配置，body `{ values: [{ key, value }] }`；保存后尝试重载，失败原因在 `reloadError`         |
+| POST            | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填）                                                 |
+| GET             | `/profiles`                                     | 列出全部配置档及其加载状态（含 `failed` 与它的原因）                                                |
+| POST            | `/profiles`                                     | 新建配置档，body `{ id, name? }`                                                                    |
+| GET             | `/profiles/:id/config`                          | 读一份配置档的可编辑内容（工作台草稿起点：默认模型 / 人格 / 步数 / 工具 / 插件 / 准入名单一次读回） |
+| POST            | `/profiles/:id/config`                          | 保存这批改动（只发 diff；插件失败项在响应的 `failed` 里点名；改动当场生效）                         |
+| POST            | `/profiles/:id/default-provider`                | 设这一档默认的 provider 实例，body `{ "providerId": "<实例 id>" }`；`null` 取消档级默认             |
+| DELETE          | `/profiles/:id`                                 | 删除一份配置（连同 `profiles/<id>/` 目录；正被某个会话占用时返回 409）                              |
 
 除标注「公开」的路径外，其余接口都需要登录（未登录返回 401）。
 
 **下面这些路径还必须带 `?profile=<配置档 id>`**：`/tools*`、`/plugins*`、
 `/sessions/:id/messages[/stream]`。缺了它一律 **400**，
 不会回落到 `default` —— 「界面在 B、写进 A、还回 201」这类错只有在服务端拒绝猜的时候才可能被发现。
-`/health`、`/auth/*`、`/sessions*`（列表与增删会话本身）、`/adapters`、`/logs*`、
-`/profiles*`、以及**整个 `/providers*` 与 `/provider-sources*`** 都不需要：前两样是对话历史与配置档清单本身，
-后者是**部署级全局一份**的供应商配置（按档各要一个 `profile` 反而会让「在 A 上改了源、
-B 以为自己也有」变成可能）。
+`/health`、`/auth/*`、`/sessions*`（列表与增删会话本身）、`/adapters*`、`/logs*`、
+`/profiles*`、`/personas*`、`/cron*`、以及**整个 `/providers*` 与 `/provider-sources*`** 都不需要：
+前两样是对话历史与配置档清单本身，人格与计划任务是部署级资源（计划任务自己保存所用配置档），
+供应商是部署级全局一份（按档各要一个 `profile` 反而会让「在 A 上改了源、B 以为自己也有」变成可能）。
 
 `/profiles/:id/*` 那一族（default-provider / config）的档 id 在**路径**里，
 所以既不要求也不接受 `?profile=` —— 同一个值写两遍，两处不一致时听谁的是个没有答案的问题。

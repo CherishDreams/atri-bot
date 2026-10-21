@@ -104,7 +104,8 @@ config/   ── 与 core/ 双向（按文件看没有环）
   这条是测试能直接 `createApp(config)` 起真服务、而不必 mock 掉半个世界的原因。
 - 每个模块往里收一层：`index.ts` 薄入口 → `app.ts` 装配 → `core/` 逻辑 → `api/` 传输。
 
-新增能力时的落点：入站适配 → `adapters/`；出站模型 → `core/provider/factory.ts` 的 `TYPES` 表；
+新增能力时的落点：入站适配 → `adapters/`（消息类继承 `MessageAdapter`）；
+出站模型 → `core/provider/factory.ts` 的 `TYPES` 表；
 工具能力 → `core/tool/`（注册表不 import 具体工具、也不读配置，内置工具由组合根注册；
 工具需要别层的数据时**由组合根注入访问器**，不要在 `core/tool/` 里 import 那一层 ——
 `list_plugins` 收 `() => plugins.list()` 就是这个形状，分层规则没有检查守着）；
@@ -165,6 +166,63 @@ config/   ── 与 core/ 双向（按文件看没有环）
 `dataDir` 下的 sqlite、重启不丢）。写文档与注释时要么说全，要么换新词 ——
 architecture.md 与 README 里各有一句「重启即全部失效」只在前一个意义上成立，
 读的人若不确定，就会得出「对话历史会丢」这个错结论。
+
+### 适配器
+
+- 入站平台只住在 `adapters/`，`core/` 不知道任何平台。消息类适配器继承
+  `adapters/message.ts` 的 `MessageAdapter`，只实现 `start()` / `stop()` / `sendText()`
+  与平台事件解析；按外部会话串行、找/建内部会话、群聊发送人前缀、长回复切块与错误兜底
+  都在基类里。不要把某一家的消息格式或重连策略塞进 `core/`。
+- **实例管理是运行期的，不是让用户改 JSON**：`adapters/templates.ts` 声明类型与表单字段，
+  `AdapterConfigStore` 写 `data/adapters.json`（`data/` 下，0600），`AdapterManager`
+  管新增/编辑/删除/启停；控制台的「接入平台」页是唯一写入口。旧版 `atri.config.json`
+  的 `adapters` 段只在运行期文件不存在时迁移一次，之后不再生效。
+- 外部会话 → 内部会话的映射由 `JsonConversationSessions` 落盘到
+  `data/adapters/<适配器 id>/sessions.json`（键含 profile id；目录 `0700`、文件 `0600`；
+  坏文件从空表开始）。不要改成「每条消息新建会话」，也不要把它塞进 `core/session`：
+  这是平台坐标到内部 UUID 的映射，不是消息历史的一部分。
+- **准入控制在 `MessageAdapter.receive()` 里统一做**，不要下沉到某一家的适配器：
+  白名单按平台坐标（私聊发送人 / 群 id）判断，管理员始终越过白名单。规则属于**配置档**
+  （`data/profiles/<id>/config.json` 的 `access` 段），适配器通过注入的 `resolveAccess()`
+  每条消息现读，保存档后立即生效、不重启长连接。被挡下的消息只记事件键与发送人，不记正文。
+  两个不同平台绑到同一档会共用一张名单；需要隔离就绑到不同档。
+- 群聊内容带 `[群名片或昵称]` 前缀，私聊不带；机器人自己的消息必须忽略。
+  平台侧错误原文、堆栈与绝对路径只进服务端日志，用户只收到固定中文提示。
+- 接收/回复事件用统一日志标签记录：
+  `[<适配器 id>:<privateMessage|groupMessage>:<会话 id>]: <内容>` 与
+  `发送[<...>]:<内容>`；第一段是实例 id（如 `napcat`），不是配置档 id。
+  群聊内容带发送人前缀；发送人 id/message_id 与回复摘要只在 debug 写。
+  平台昵称与内容里的换行必须收成空格，否则用户可伪造日志行。
+- NapCat 走 OneBot 11 **反向 WebSocket**：atri-bot 监听 `host:port/path`，NapCat 作为
+  WebSocket 客户端连入；token 用 `Authorization: Bearer` 或 `?access_token=` 校验，
+  **不打印 token**。客户端断开后由 NapCat 自己重连，监听不关。
+  入站图片会优先按 `url` 下载、失败再用 `get_image` 刷新，成功则转 base64 随
+  `Message.images` 落库；单张 4 MiB、单条最多 4 张，失败/超限退回 `[图片]` 占位。
+  provider 各自把 `images` 翻成自己的多模态内容块（OpenAI `image_url`、Anthropic
+  base64 `image`）。不做正向 WS、图片上传与请求处理；协议细节与理由见
+  `adapters/napcat.ts` 与 architecture.md 的适配器、模型 provider 两节。
+
+### 人格、访问控制与计划任务
+
+- 人格是**全局资源**（`data/personas.json`），配置档只存 `personaId`。提示词作为
+  **每轮请求的 system 消息**注入，不写进会话历史；组合根在保存后同步到运行中的引擎。
+  不要改成「保存时把人格复制进档文件」或「把 system 消息落库」—— 前者会产生漂移副本，
+  后者会在历史详情里出现一条假消息。
+- 白名单与管理员**属于配置档**：一份档一张名单，绑定到这一档的适配器共用它。
+  不要改成部署级全局一份 —— 换档就换名单是用户要的差异化；平台坐标提醒写在
+  `AccessPanel` 的说明里：需要隔离时把不同平台绑到不同档。
+- 计划任务是部署级资源（`data/cron.json`），任务自己保存 `profile` 与 `sessionId`。
+  `core/cron/cron.ts` 是 5 段 cron 解析器（不引依赖），`manager.ts` 通过注入的
+  `resolveEngine(profileId)` 执行，所以任务的模型、人格与工具和手动发消息同源。
+  调度按服务器本地时区、最小粒度分钟，启动时不补跑过去；结果只写任务自己的会话，
+  **不要偷偷主动发到平台**（寻址与权限另算）。
+- 控制台主导航按「运行 / 个性化配置 / 接入与扩展 / 系统」分组（对齐 AstrBot）：
+  个性化配置 = 配置文件 / 人格配置 / 插件；系统 = 计划任务 / 日志。
+  **配置文件页只放本档的五类**（默认模型 / 人格 / 工具 / 运行参数 / 访问控制），
+  都走草稿 + 保存。人格库与计划任务是部署级资源，各自是独立整页（`/personas` 与
+  `/cron`），不要拆回配置文件页的分类 —— 它们不跟随 URL 上的档名。供应商、接入平台与
+  日志也是标 `noProfile` 的独立整页，插件页按档独立一页：它们改的是外部连接、第三方
+  代码或进程输出，不是「这一档怎么跑」。
 
 ## 代码风格
 
@@ -385,7 +443,7 @@ apps/server/openapi.json  -->  pnpm codegen  -->  apps/dashboard/src/api/generat
 | `test/openapi-request.test.ts`        | **请求侧与鉴权侧**：省略必填必须 400、畸形 JSON 必须 400、匿名访问与规格的 401 双向一致 | 运行时校验被删 / 新路由忘了声明 401    |
 
 红了统一按这句话办：**改 `openapi.json`，然后 `pnpm codegen` 并提交生成物；不要为了让检查变绿去改这三个测试。**
-唯一允许「登记差异」的地方是响应形状文件里的 `EMPTY_OK`（目前只有 `adapters` 一项，理由写在它的注释里）。
+响应形状检查不允许空数组：驱动必须为每个数组端点真的造出数据，不能靠豁免放过。
 
 ### 为什么规格是手写的，不由代码生成
 
@@ -414,11 +472,14 @@ WebSocket 描述不了，永远手写。
 
 **配置分三层，界线不许漂**：
 
-| 层               | 文件                             | 内容                                                            |
-| ---------------- | -------------------------------- | --------------------------------------------------------------- |
-| 部署级（启动）   | `atri.config.json`               | 端口、数据目录、插件安装目录、适配器、口令                      |
-| 部署级（运行期） | `data/providers.json`            | 供应商：源（连接与密钥）、模型实例清单、全局默认                |
-| 配置档           | `data/profiles/<id>/config.json` | 跑法：工具开关、`maxToolSteps`、插件启用清单、`defaultProvider` |
+| 层               | 文件                             | 内容                                                                                        |
+| ---------------- | -------------------------------- | ------------------------------------------------------------------------------------------- |
+| 部署级（启动）   | `atri.config.json`               | 端口、数据目录、插件安装目录、口令                                                          |
+| 部署级（运行期） | `data/providers.json`            | 供应商：源（连接与密钥）、模型实例清单、全局默认                                            |
+| 部署级（运行期） | `data/adapters.json`             | 接入平台实例：类型、绑定配置、启停、平台字段                                                |
+| 部署级（运行期） | `data/personas.json`             | 可复用的人格（名称、说明、系统提示词）；配置档只存引用                                      |
+| 部署级（运行期） | `data/cron.json`                 | 计划任务（cron、提示词、所用配置档、最近结果）                                              |
+| 配置档           | `data/profiles/<id>/config.json` | 跑法：工具开关、`maxToolSteps`、插件启用清单、`personaId`、`defaultProvider`、`access` 名单 |
 
 判据是「**这个东西占的资源属于谁**」：密钥与端点属于部署（按档各存一份就是让同一个
 `apiKey` 躺在 N 个文件里，轮换要改 N 处），而「开哪些工具、开哪些插件、默认打哪个模型」
@@ -427,8 +488,9 @@ WebSocket 描述不了，永远手写。
 并用 `x-profile-scoped` 与一批作用域测试钉死），翻回来付的代价是重写那批守卫与契约。
 
 - 解析顺序（只对**启动那一份**成立）：**内置默认值 → `atri.config.json` → 环境变量**。
-  密钥走环境变量，结构性设置走文件。运行期那两个文件由控制台的写操作维护，
-  启动时只搬一次（`seedProfile` / `migrateProvidersToGlobal`，判据都是「目标文件在不在」）。
+  密钥走环境变量，结构性设置走文件。运行期的那几份由控制台的写操作维护；
+  只有供应商与老配置档段需要启动时搬一次（`seedProfile` / `migrateProvidersToGlobal`，
+  判据都是「目标文件在不在」）。人格与计划任务不做迁移：它们是本次新增的运行期资源。
 - **两个看起来像 bug、其实不是的形状，别顺手「修正」**：
   `AppConfig.logLevel` 是 `string` 而不是 `"debug"|"info"|"warn"|"error"` 联合（未知级别今天
   退化成 info，收紧成联合会让 `ATRI_LOG_LEVEL=verbose` 从「安静地跑」变成「启动失败」）；
@@ -439,6 +501,7 @@ WebSocket 描述不了，永远手写。
   封闭的类型会让下一次写入丢掉用户的配置。
 - **`atri.config.json` 已被 gitignore**，因为它含明文口令。自动生成的口令会写进它——
   绝不要把它加进版本控制，也不要贴进对话或日志。`apiKey` 现在住在 `data/providers.json`，
+  接入平台的 token 住在 `data/adapters.json`（同样由 `data/` 目录 0700 保护），
   它靠「`data/` 整目录被忽略 + 目录 0700」得到保护：**不要把运行期配置往仓库根放**，
   `.gitignore` 忽略的是**精确名** `atri.config.json`，根下的兄弟文件是「未跟踪但也不忽略」，
   一次 `git add -A` 就会把密钥提交进版本库。
