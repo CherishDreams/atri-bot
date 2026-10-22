@@ -26,6 +26,8 @@ import { AdapterConfigStore } from "./adapters/store.ts";
 import type { AdapterEntryConfig } from "./adapters/store.ts";
 import { JsonConversationSessions } from "./adapters/conversations.ts";
 import { NapCatAdapter } from "./adapters/napcat.ts";
+import { SnowLumaAdapter } from "./adapters/snowluma.ts";
+import { ADAPTER_TYPES } from "./adapters/templates.ts";
 import { createHttpServer } from "./api/server.ts";
 import type {
   ProfileBundle,
@@ -181,6 +183,33 @@ export async function createApp(config: AppConfig) {
   // 而那时 HTTP 服务还没构造。顺序反过来会丢掉启动日志，且没有任何报错。
   const logs = new LogStore();
   const logger = createLogger(config.logLevel, logs);
+
+  /**
+   * 适配器管理器晚于配置档装配：它需要 `resolveProfile`，而配置档在 `buildBundle`
+   * 时就要创建插件管理器。插件在 `setup()` 里调用 `ctx.adapters()` 时这里还是 null，
+   * 所以动作端口用**晚绑定**——运行期再读，不在装配时抓快照。
+   */
+  let adapterRuntime: AdapterManager | null = null;
+
+  function adapterActionsFor(profileId: string) {
+    return {
+      list: () =>
+        (adapterRuntime?.list() ?? [])
+          .filter((adapter) => adapter.profile === profileId)
+          .map((adapter) => ({
+            id: adapter.id,
+            name: adapter.name,
+            type: adapter.type,
+            running: adapter.running,
+          })),
+      call: async (adapterId: string, action: string, params: Record<string, unknown>) => {
+        if (adapterRuntime === null) throw new Error("适配器管理器尚未就绪");
+        const result = await adapterRuntime.callAction(adapterId, action, params, profileId);
+        if (!result.ok) throw new Error(result.error ?? "接入平台动作失败");
+        return result.data;
+      },
+    };
+  }
 
   const auth = new AuthManager(config, logger);
   // 必须早于 HTTP 服务启动：未配置口令时要先把随机口令写进配置文件。
@@ -424,22 +453,13 @@ export async function createApp(config: AppConfig) {
       // 原子写与 0600 的细节留在 `config/file.ts` 一处。
       readConfigFileAt,
       writeConfigFileAt,
+      // 按档过滤的动作端口：插件只能操作绑定到这份档的适配器。
+      adapterActions: adapterActionsFor(id),
     });
-    for (const tool of createBuiltinTools({
-      // **在装配处投影**，而不是把 `plugins.list()` 直接递过去：那份是 `PluginView`，
-      // 含插件所在目录与上一次加载的原文（第三方文本，可能带绝对路径），
-      // 而工具结果整段要发给第三方 provider。类型上 `listPlugins` 只声明读那几个键，
-      // 运行时交出去的现实却由那个对象决定 —— 「窄的类型标注不等于窄的现实」（AGENTS.md）。
-      listPlugins: () =>
-        plugins.list().map((p) => ({
-          id: p.id,
-          name: p.name,
-          enabled: p.enabled,
-          failed: p.error !== null,
-        })),
-    })) {
-      tools.register(tool);
-    }
+    for (const tool of createBuiltinTools()) tools.register(tool);
+    // 插件工具走动态来源：插件重载/禁用后下一轮请求立刻看到新清单，
+    // 不需要在每次启停时重建工具注册表。
+    tools.registerSource(() => plugins.tools());
     const engine = new AgentEngine({
       sessions,
       providers,
@@ -832,9 +852,6 @@ export async function createApp(config: AppConfig) {
    * 里面只有「外部会话 → 内部会话 id」，不含消息内容与凭证。
    */
   const createAdapter = (id: string, entry: AdapterEntryConfig): Adapter => {
-    if (entry.type !== "napcat") {
-      throw new Error(`未知适配器类型：${entry.type}`);
-    }
     const conversations = new JsonConversationSessions({
       filePath: join(config.dataDir, "adapters", id, "sessions.json"),
       sessions,
@@ -845,20 +862,34 @@ export async function createApp(config: AppConfig) {
         write: writeConfigFileAt,
       },
     });
-    return new NapCatAdapter({
+    const common = {
       id,
       profileId: entry.profile,
-      host: entry.settings.host ?? "",
-      port: entry.settings.port ?? "",
-      path: entry.settings.path ?? "",
-      token: entry.settings.token ?? "",
       logger,
       resolveTarget: resolveProfile,
       conversations,
       // 名单属于配置档，不属于平台实例：每收到一条消息现读绑定档的那一份，
       // 所以保存档里的 access 后下一条消息就生效，不必重启适配器。
       resolveAccess: () => profiles.get(entry.profile)?.access ?? emptyAccess(),
-    });
+    };
+    switch (entry.type) {
+      case ADAPTER_TYPES.napcat:
+        return new NapCatAdapter({
+          ...common,
+          host: entry.settings.host ?? "",
+          port: entry.settings.port ?? "",
+          path: entry.settings.path ?? "",
+          token: entry.settings.token ?? "",
+        });
+      case ADAPTER_TYPES.snowluma:
+        return new SnowLumaAdapter({
+          ...common,
+          url: entry.settings.url ?? "",
+          token: entry.settings.token ?? "",
+        });
+      default:
+        throw new Error(`未知适配器类型：${entry.type}`);
+    }
   };
   const adapters = new AdapterManager({
     store: adapterStore,
@@ -866,6 +897,7 @@ export async function createApp(config: AppConfig) {
     resolveProfile,
     createAdapter,
   });
+  adapterRuntime = adapters;
 
   const http = createHttpServer({
     config,

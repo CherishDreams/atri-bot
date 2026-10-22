@@ -102,10 +102,9 @@ const { declared, problems } = scanBuiltins();
 const { createBuiltinTools } = await import(
   new URL("apps/server/src/core/tool/builtins.ts", `file://${ROOT}/`).href
 );
-const registered = new Set(createBuiltinTools({ listPlugins: () => [] }).map((tool) => tool.id));
+const registered = new Set(createBuiltinTools().map((tool) => tool.id));
 
 // 防空跑：两边都空的时候下面的双向比对会一条 problem 都产生不了，于是「通过」是假的。
-// 今天至少有 `current_time` 与 `list_plugins` 两颗，所以这条永远不该在正常仓库里响。
 if (declared.size === 0 || registered.size === 0) {
   console.error(
     `内置工具检查扫到了空清单（文件 ${declared.size} 个、注册 ${registered.size} 颗）—— ` +

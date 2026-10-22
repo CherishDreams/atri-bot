@@ -4,10 +4,16 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PluginInfo, PluginStatus } from "@atri/shared";
 import type { Logger } from "#core/logger.ts";
+import type { ToolDefinition } from "#core/tool/types.ts";
 import type { AppConfig } from "#config/index.ts";
 import type { FileConfig } from "#config/file.ts";
 import { ApiError, errorMessage } from "#core/errors.ts";
-import { assertPluginDirName, PluginContext, type PluginContextConfig } from "./context.ts";
+import {
+  assertPluginDirName,
+  PluginContext,
+  type PluginAdapterActions,
+  type PluginContextConfig,
+} from "./context.ts";
 import {
   PLUGIN_CONFIG_FILE,
   PLUGIN_SCHEMA_FILE,
@@ -34,6 +40,12 @@ export interface PluginDefinition {
   description?: string;
   /** 与插件可见的运行期配置（`PluginRuntimeConfig`）合并后交给 `ctx.config`，插件的键优先。 */
   config?: PluginContextConfig;
+  /**
+   * 插件提供的工具。可以是静态数组，也可以拿着 `ctx` 现造（例如系统插件要读
+   * `ctx.plugins()`）。工具可以被标成 `internal`，那样只交给模型、不出现在用户的
+   * 工具开关里。
+   */
+  tools?: ToolDefinition[] | ((ctx: PluginContext) => ToolDefinition[]);
   setup?: (ctx: PluginContext) => void | Promise<void>;
   teardown?: () => void | Promise<void>;
 }
@@ -107,6 +119,11 @@ export interface PluginStorage {
   readConfigFileAt: (filePath: string) => FileConfig;
   /** 原子写一份 JSON（同目录 `.tmp` → 0600 → rename），同样由组合根注入。 */
   writeConfigFileAt: (filePath: string, config: FileConfig) => string;
+  /**
+   * 接入平台动作端口。由组合根注入并**按配置档过滤**——插件只能操作绑定到
+   * 自己这份档的适配器。缺省时插件仍能加载，只是 `ctx.adapters()` 为空。
+   */
+  adapterActions?: PluginAdapterActions;
 }
 
 /**
@@ -145,6 +162,8 @@ interface PluginRecord {
   plugin: PluginDefinition | null;
   /** 运行期上下文。失败记录一定是 `null`：要么没建，要么建了但在写记录之前已经 dispose。 */
   ctx: PluginContext | null;
+  /** 这颗插件提供的工具；只有 active 记录非空。 */
+  tools: ToolDefinition[];
   status: PluginStatus;
   /** 上一次加载失败的可读原因；正常为 `null`。只给操作者，见 `#peers()` 与 `list_plugins`。 */
   error: string | null;
@@ -169,6 +188,38 @@ interface PluginMeta {
   version: string;
   description?: string;
   dir: string;
+}
+
+/**
+ * 解析插件声明的工具，并在登记前挡住坏形状与同插件内重复。
+ *
+ * 工具 id 会进 provider 的 `function.name`、日志与插件页；只接受小写字母/数字开头的
+ * 安全字符，避免用换行伪造日志行。跨插件的同 id 冲突在 `load()` 里按 active 记录检查。
+ */
+function resolvePluginTools(
+  pluginId: string,
+  plugin: PluginDefinition,
+  ctx: PluginContext,
+): ToolDefinition[] {
+  const declared = typeof plugin.tools === "function" ? plugin.tools(ctx) : (plugin.tools ?? []);
+  const seen = new Set<string>();
+  for (const tool of declared) {
+    if (typeof tool?.id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(tool.id)) {
+      throw new ApiError(
+        `插件「${pluginId}」的工具 id「${String(tool?.id)}」不合法：` +
+          "只允许小写字母、数字与 . _ -，首字符必须是字母或数字，长度 1–64",
+        400,
+      );
+    }
+    if (typeof tool.run !== "function") {
+      throw new ApiError(`插件「${pluginId}」的工具「${tool.id}」缺少 run()`, 400);
+    }
+    if (seen.has(tool.id)) {
+      throw new ApiError(`插件「${pluginId}」重复声明了工具「${tool.id}」`, 400);
+    }
+    seen.add(tool.id);
+  }
+  return [...declared];
 }
 
 /**
@@ -378,7 +429,32 @@ export class PluginManager {
         // `dataDir` 本体（里面有 `sessions.sqlite`）始终不外传，理由见 `PluginRuntimeConfig`。
         dataRoot: this.#storage.dataRoot,
         ensurePrivateDir: this.#storage.ensurePrivateDir,
+        ...(this.#storage.adapterActions === undefined
+          ? {}
+          : { adapterActions: this.#storage.adapterActions }),
       });
+
+      // 工具在 setup 之前解析：工具工厂只该读 ctx 的静态能力（例如同伴列表），
+      // 不应依赖 setup 里的长驻副作用。这样工具形状/ id 冲突能在跑 `setup()` 之前被拒，
+      // 不会出现「插件已经起了监听，才因为工具 id 撞号被卸载」的半截状态。
+      let tools: ToolDefinition[];
+      try {
+        tools = resolvePluginTools(id, plugin, ctx);
+      } catch (err) {
+        await ctx.dispose();
+        throw err;
+      }
+      for (const other of this.#records.values()) {
+        if (other.status !== "active" || other.dir === dir) continue;
+        const toolClash = tools.find((tool) => other.tools.some((owned) => owned.id === tool.id));
+        if (toolClash) {
+          await ctx.dispose();
+          throw new ApiError(
+            `插件「${id}」的工具「${toolClash.id}」与插件「${other.meta.id}」冲突`,
+            400,
+          );
+        }
+      }
 
       try {
         await plugin.setup?.(ctx);
@@ -392,6 +468,7 @@ export class PluginManager {
         id,
         plugin,
         ctx,
+        tools,
         status: "active",
         error: null,
         settings,
@@ -431,6 +508,7 @@ export class PluginManager {
       id: declared?.id ?? null,
       plugin: null,
       ctx: null,
+      tools: [],
       status: "failed",
       error: reason,
       settings,
@@ -461,6 +539,7 @@ export class PluginManager {
       id: plugin.id,
       plugin: null,
       ctx: null,
+      tools: [],
       status: "disabled",
       error: null,
       settings,
@@ -605,6 +684,16 @@ export class PluginManager {
 
   list(): PluginView[] {
     return [...this.#records.values()].map((r) => this.#view(r));
+  }
+
+  /**
+   * 当前 active 插件提供的工具。`ToolRegistry` 把这个方法登记成动态来源，
+   * 每次 `list()` 现读，所以重载/禁用后下一轮请求立刻看不到旧工具。
+   */
+  tools(): ToolDefinition[] {
+    return [...this.#records.values()]
+      .filter((record) => record.status === "active")
+      .flatMap((record) => record.tools);
   }
 
   #view(rec: PluginRecord): PluginView {

@@ -45,7 +45,11 @@ async function start(t: TestContext, presetProfile?: Record<string, unknown>): P
   // 断言就成了在空输入上证明的一句空话），而「一颗起不来」那一支必须有对象才测得出来。
   const pluginsRoot = join(root, "plugins");
   const fixtures: [string, string][] = [
-    ["probe", "setup() {}"],
+    [
+      "probe",
+      'setup() {}, tools: [{ id: "probe_tool", description: "测试工具", ' +
+        'parameters: { type: "object", properties: {} }, run: async () => "ok" }]',
+    ],
     ["broken", 'setup() { throw new Error("按设计起不来"); }'],
   ];
   for (const [id, setup] of fixtures) {

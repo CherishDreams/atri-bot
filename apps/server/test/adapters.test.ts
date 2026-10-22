@@ -82,6 +82,10 @@ function setup(opts: {
       stop() {
         stopped.push(id);
       },
+      async callAction(action: string, params: Record<string, unknown>) {
+        if (action === "boom") throw new Error("上游拒绝");
+        return { action, params };
+      },
     }),
   });
   return { mgr, store, files, started, stopped, asked, lines };
@@ -115,6 +119,39 @@ test("startAll：只启动启用且绑定可用的，缺失与失败各自带原
   assert.equal(rowOf(rows, "off").enabled, false);
   assert.equal(rowOf(rows, "ok").running, true);
   // 没绑 profile / 已关掉的都不该去问解析器。
+});
+
+test("callAction：转发、失败包装、配置档边界与参数校验", async () => {
+  const h = setup({
+    configs: [
+      ["main", {}],
+      ["other", { profile: "other" }],
+      ["off", { enabled: false }],
+    ],
+    available: ["default", "other"],
+  });
+  await h.mgr.startAll();
+
+  const ok = await h.mgr.callAction("main", "get_group_list", { a: 1 });
+  assert.deepEqual(ok, {
+    adapterId: "main",
+    action: "get_group_list",
+    ok: true,
+    data: { action: "get_group_list", params: { a: 1 } },
+  });
+
+  const failed = await h.mgr.callAction("main", "boom", {});
+  assert.equal(failed.ok, false);
+  assert.match(failed.error ?? "", /上游拒绝/);
+
+  const off = await h.mgr.callAction("off", "x", {});
+  assert.equal(off.ok, false);
+  assert.match(off.error ?? "", /未运行/);
+
+  await assert.rejects(() => h.mgr.callAction("missing", "x", {}), /未知适配器/);
+  await assert.rejects(() => h.mgr.callAction("main", "x", {}, "other"), /不属于这份配置档/);
+  await assert.rejects(() => h.mgr.callAction("main", "", {}), /action 不能为空/);
+  await assert.rejects(() => h.mgr.callAction("main", "x", [] as unknown), /params 必须是一个对象/);
 });
 
 test("一个适配器启动失败只影响它自己", async () => {

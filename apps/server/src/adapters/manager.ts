@@ -2,6 +2,7 @@ import type { AdapterInfo } from "@atri/shared";
 import type { AgentEngine } from "#core/agent/engine.ts";
 import { ApiError, errorMessage } from "#core/errors.ts";
 import type { Logger } from "#core/logger.ts";
+import { ADAPTER_ACTION_LIMITS } from "./constants.ts";
 import type { AdapterConfigStore, AdapterEntryConfig } from "./store.ts";
 import {
   adapterTemplate,
@@ -15,6 +16,20 @@ export interface Adapter {
   name?: string;
   start(): Promise<void> | void;
   stop?(): Promise<void> | void;
+  /**
+   * 调用平台原始动作。没有包装成具体方法的平台能力（群列表、上传文件、拍一拍……）
+   * 都从这里走；不支持时可以不实现，管理器会回一条明确的「不支持」。
+   */
+  callAction?(action: string, params: Record<string, unknown>): Promise<unknown>;
+}
+
+/** `call_action` 的统一结果。上游/连接失败也走 200，让界面与插件读 `ok` 而不是猜状态码。 */
+export interface AdapterActionResult {
+  adapterId: string;
+  action: string;
+  ok: boolean;
+  data?: unknown;
+  error?: string | null;
 }
 
 /**
@@ -185,6 +200,71 @@ export class AdapterManager {
     if (enabled) await this.#start(id, record);
     else await this.#stop(id, record);
     return this.detail(id);
+  }
+
+  /**
+   * 调用平台原始动作（AstrBot 的 `call_action` 形状）。
+   *
+   * 不在管理器里维护动作白名单：OneBot 11 的扩展动作随实现版本变化，黑名单/白名单
+   * 都会过期。管理器只做三件事：目标存在、参数形状、结果/错误统一包装。
+   *
+   * `expectedProfile` 是插件入口用的：插件属于某一份配置档，只允许操作绑定到这份档的
+   * 适配器。管理员 HTTP 入口不传它，按实例 id 操作。
+   *
+   * 未运行 / 上游失败 / 平台不支持都返回 `ok: false` 的 200 结果，而不是抛 5xx：
+   * 这是一次「探测 + 执行」的开发者动作，界面与插件需要拿到原因本身。
+   */
+  async callAction(
+    id: string,
+    action: string,
+    params: unknown,
+    expectedProfile?: string,
+  ): Promise<AdapterActionResult> {
+    const record = this.#record(id);
+    if (expectedProfile !== undefined && record.config.profile !== expectedProfile) {
+      throw new ApiError(`适配器「${id}」不属于这份配置档`, 403);
+    }
+
+    const name = action.trim();
+    if (name === "") throw new ApiError("action 不能为空", 400);
+    if (name.length > ADAPTER_ACTION_LIMITS.maxNameLength) {
+      throw new ApiError(`action 太长（最多 ${ADAPTER_ACTION_LIMITS.maxNameLength} 字符）`, 400);
+    }
+    if (params === null || typeof params !== "object" || Array.isArray(params)) {
+      throw new ApiError("params 必须是一个对象", 400);
+    }
+    let paramsSize: number;
+    try {
+      const serialized = JSON.stringify(params);
+      if (serialized === undefined) throw new Error("结果不是可序列化的 JSON");
+      paramsSize = serialized.length;
+    } catch (err) {
+      throw new ApiError(`params 不能序列化为 JSON：${errorMessage(err)}`, 400);
+    }
+    if (paramsSize > ADAPTER_ACTION_LIMITS.maxParamsChars) {
+      throw new ApiError(
+        `params 太大（${paramsSize} 字符，上限 ${ADAPTER_ACTION_LIMITS.maxParamsChars}）`,
+        400,
+      );
+    }
+
+    if (!record.running || record.adapter === null) {
+      return { adapterId: id, action: name, ok: false, error: "适配器当前未运行" };
+    }
+    const call = record.adapter.callAction;
+    if (typeof call !== "function") {
+      return { adapterId: id, action: name, ok: false, error: "该适配器不支持原始动作" };
+    }
+
+    this.logger.info(`适配器原始动作: ${id} -> ${name}`);
+    try {
+      const data = await call.call(record.adapter, name, params as Record<string, unknown>);
+      return { adapterId: id, action: name, ok: true, data };
+    } catch (err) {
+      const message = errorMessage(err).slice(0, ADAPTER_ACTION_LIMITS.maxErrorChars);
+      this.logger.warn(`适配器原始动作失败: ${id} -> ${name}: ${message}`);
+      return { adapterId: id, action: name, ok: false, error: message };
+    }
   }
 
   async remove(id: string): Promise<void> {

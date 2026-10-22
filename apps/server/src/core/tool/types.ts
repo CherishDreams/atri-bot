@@ -32,6 +32,13 @@ export interface ToolDefinition {
   description: string;
   parameters: JsonSchema;
   /**
+   * 内部工具：始终交给模型，但**不进入用户的工具开关列表**。
+   *
+   * 系统内省（插件列表等）由内置插件提供，用户不需要理解也不该关掉它；
+   * 它仍然是一颗正常的工具调用，只是 `GET /tools` 与配置页不展示。
+   */
+  internal?: boolean;
+  /**
    * 返回**回喂给模型的文本**，不是对象：两家上游都把工具结果当字符串内容处理。
    * 抛错由注册表兜成 `isError` 结果（那是模型的一次可纠正回合），不会把整轮变成 500。
    */

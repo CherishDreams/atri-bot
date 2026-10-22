@@ -11,7 +11,8 @@ import { createApp } from "#app.ts";
 import type { Logger } from "#core/logger.ts";
 import type { AdapterTarget } from "#adapters/manager.ts";
 import type { ConversationSessions } from "#adapters/message.ts";
-import { NapCatAdapter, parseOneBotMessage } from "#adapters/napcat.ts";
+import { NapCatAdapter } from "#adapters/napcat.ts";
+import { parseOneBotMessage } from "#adapters/onebot11.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**

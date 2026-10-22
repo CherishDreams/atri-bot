@@ -26,8 +26,25 @@ export interface AdapterTemplate {
   type: string;
   name: string;
   description: string;
+  /**
+   * 是否在新增实例时自动生成一个 token。
+   *
+   * 这是模板属性而不是 UI 里的 `type === "napcat"` 分支：NapCat 需要我们生成一个
+   * token 给它的 WS 客户端填；SnowLuma 的 token 来自它自己的服务端，不能替它编。
+   */
+  generateToken?: boolean;
+  /** 给操作者的连接配置提示，显示在表单下方。 */
+  setupHint?: string;
   fields: AdapterSettingField[];
 }
+
+/** 适配器类型 id 的唯一定义处；应用层不要散写 `"napcat"` / `"snowluma"`。 */
+export const ADAPTER_TYPES = {
+  napcat: "napcat",
+  snowluma: "snowluma",
+} as const;
+
+export type AdapterType = (typeof ADAPTER_TYPES)[keyof typeof ADAPTER_TYPES];
 
 export type AdapterSettings = Record<string, string>;
 
@@ -35,9 +52,13 @@ export const ADAPTER_ID_PATTERN = "^[a-z0-9][a-z0-9._-]{0,63}$";
 
 export const ADAPTER_TEMPLATES: AdapterTemplate[] = [
   {
-    type: "napcat",
+    type: ADAPTER_TYPES.napcat,
     name: "NapCat",
     description: "通过 OneBot 11 反向 WebSocket 接入 QQ：atri-bot 监听，NapCat 连入。",
+    generateToken: true,
+    setupHint:
+      "在 NapCat WebUI 的「网络配置」里新建 WebSocket 客户端，URL 指向 " +
+      "ws://<监听地址>:<端口><路径>，Token 填这里生成的 Access Token。",
     fields: [
       {
         key: "host",
@@ -78,6 +99,35 @@ export const ADAPTER_TEMPLATES: AdapterTemplate[] = [
       },
     ],
   },
+  {
+    type: ADAPTER_TYPES.snowluma,
+    name: "SnowLuma",
+    description: "通过 OneBot 11 正向 WebSocket 接入 QQ：atri-bot 主动连接 SnowLuma。",
+    generateToken: false,
+    setupHint:
+      "在 SnowLuma 的配置里启用 OneBot 11 WebSocket 服务，把它的 ws:// 地址填到上面；" +
+      "如果服务端启用了 token，在这里填同一个 token（以 Authorization: Bearer 发送）。",
+    fields: [
+      {
+        key: "url",
+        label: "WebSocket 地址",
+        type: "text",
+        required: true,
+        default: "ws://127.0.0.1:3001/ws",
+        placeholder: "ws://127.0.0.1:3001/ws",
+        hint: "SnowLuma 暴露的 OneBot 11 WebSocket 服务地址。",
+        pattern: "^wss?://",
+      },
+      {
+        key: "token",
+        label: "Access Token",
+        type: "password",
+        required: false,
+        default: "",
+        hint: "可留空；服务端没有启用 token 时不用填。",
+      },
+    ],
+  },
 ];
 
 export function adapterTemplate(type: string): AdapterTemplate | null {
@@ -111,6 +161,25 @@ export function defaultSettings(template: AdapterTemplate): AdapterSettings {
  * 允许前端只发改过的项：缺省的必填项报错，缺省的可选项填默认值。
  * 未知键直接拒绝 —— 拼错的 `tokne` 若被静默丢掉，用户会以为保存成功了。
  */
+/**
+ * 平台特有的语义校验。字段级的 required / pattern 已经由模板统一处理；
+ * 这里只放模板表达不了的跨字段规则。
+ */
+const ADAPTER_VALIDATORS: Record<string, (values: AdapterSettings) => void> = {
+  [ADAPTER_TYPES.napcat]: (values) => {
+    const port = Number(values.port ?? "");
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new ApiError("监听端口必须是 1–65535 的整数", 400);
+    }
+    if (!(values.path ?? "").startsWith("/")) {
+      throw new ApiError("WebSocket 路径必须以 / 开头", 400);
+    }
+    if ((values.token ?? "").trim() === "") {
+      throw new ApiError("Access Token 不能为空", 400);
+    }
+  },
+};
+
 export function validateAdapterSettings(type: string, raw: unknown): AdapterSettings {
   const template = adapterTemplate(type);
   if (template === null) throw new ApiError(`不支持的适配器类型：${type}`, 400);
@@ -143,18 +212,7 @@ export function validateAdapterSettings(type: string, raw: unknown): AdapterSett
     values[field.key] = value;
   }
 
-  if (type === "napcat") {
-    const port = Number(values.port ?? "");
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new ApiError("监听端口必须是 1–65535 的整数", 400);
-    }
-    if (!(values.path ?? "").startsWith("/")) {
-      throw new ApiError("WebSocket 路径必须以 / 开头", 400);
-    }
-    if ((values.token ?? "").trim() === "") {
-      throw new ApiError("Access Token 不能为空", 400);
-    }
-  }
+  ADAPTER_VALIDATORS[type]?.(values);
   return values;
 }
 

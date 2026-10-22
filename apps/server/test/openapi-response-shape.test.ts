@@ -100,6 +100,7 @@ const ORDER = [
   "fetchProviderModels",
   "listProviders",
   "createProvider",
+  "probeProvider",
   "updateProvider",
   "setDefaultProvider",
   "createSession",
@@ -114,6 +115,7 @@ const ORDER = [
   "savePluginConfig",
   "listAdapterTemplates",
   "createAdapter",
+  "callAdapterAction",
   "getAdapter",
   "updateAdapter",
   "setAdapterEnabled",
@@ -757,6 +759,9 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       ids.providerId = "guard-provider";
       return r;
     }
+    case "probeProvider":
+      // 桩上游支持 /models；api 探针应当回 200 + ok:true。
+      return at("/providers/guard-provider/probe", { kind: "api" });
     case "updateProvider":
       return at(`/providers/${"{id}"}`, { name: "改名后的实例", default: true });
     case "setDefaultProvider":
@@ -810,6 +815,12 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
           { key: "path", value: "/ws" },
           { key: "token", value: "secret" },
         ],
+      });
+    case "callAdapterAction":
+      // 守卫适配器是禁用状态：动作不会真的执行，但会回 200 的 ok:false 形状。
+      return at("/adapters/guard-adapter/action", {
+        action: "get_login_info",
+        params: {},
       });
     case "getAdapter":
       return at("/adapters/guard-adapter");

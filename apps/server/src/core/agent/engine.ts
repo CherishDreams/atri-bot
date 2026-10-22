@@ -308,12 +308,18 @@ export class AgentEngine {
    * 会变成一次只能靠猜的排查（`ProviderInfo.loaded`/`error` 存在的理由是同一条）。
    */
   #declaredTools(): ChatTool[] {
-    const enabled = this.toolConfig.enabledIds();
-    const known = new Set(this.tools.list().map((tool) => tool.id));
-    for (const id of enabled) {
-      if (!known.has(id)) this.logger.warn(`配置里启用了未注册的工具「${id}」，本轮已忽略`);
+    const enabled = new Set(this.toolConfig.enabledIds());
+    const known = this.tools.list();
+    // 内部工具不进用户的开关配置，但始终交给模型：系统内省是程序自己的基础设施，
+    // 不是「用户可以选择关闭」的能力授予。
+    for (const tool of known) {
+      if (tool.internal === true) enabled.add(tool.id);
     }
-    return this.tools.pick(enabled).map(toChatTool);
+    const knownIds = new Set(known.map((tool) => tool.id));
+    for (const id of enabled) {
+      if (!knownIds.has(id)) this.logger.warn(`配置里启用了未注册的工具「${id}」，本轮已忽略`);
+    }
+    return this.tools.pick([...enabled]).map(toChatTool);
   }
 
   /**

@@ -323,7 +323,9 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
     "getAdapter",
     "updateAdapter",
     "setAdapterEnabled",
+    "callAdapterAction",
     "deleteAdapter",
+    "probeProvider",
     // 人格与计划任务都是部署级全局资源；任务自己保存所用的配置档 id。
     "listPersonas",
     "createPersona",

@@ -7,6 +7,12 @@ import type { WebSocket } from "ws";
 import type { ServerFrame, ToolInfo } from "@atri/shared";
 import { API_PREFIX, APP_NAME, WS_PATH } from "@atri/shared";
 import { createProviders } from "#core/provider/factory.ts";
+import {
+  PROVIDER_PROBE_KINDS,
+  probeProvider,
+  redactProbeResult,
+  type ProviderProbeKind,
+} from "#core/provider/probe.ts";
 import type { ProviderEntry } from "#core/provider/store.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
 import type { PageOptions } from "#core/session/manager.ts";
@@ -102,7 +108,11 @@ function profileConfigView(bundle: ProfileBundle) {
     personaId: bundle.personaId,
     // 夹取后的生效值，不是文件里的原值：见 `ProfileConfig.maxToolSteps` 的注释。
     maxToolSteps: bundle.toolConfig.maxSteps(),
-    tools: bundle.tools.list().map((tool) => viewTool(tool, bundle.toolConfig.isEnabled(tool.id))),
+    // 内部工具（系统插件提供）不进用户的工具开关；它们由引擎始终声明。
+    tools: bundle.tools
+      .list()
+      .filter((tool) => tool.internal !== true)
+      .map((tool) => viewTool(tool, bundle.toolConfig.isEnabled(tool.id))),
     plugins: bundle.plugins.list(),
     access: {
       whitelistEnabled: bundle.access.whitelistEnabled,
@@ -782,6 +792,43 @@ export function createHttpServer(deps: HttpDeps) {
     }
   });
 
+  /**
+   * Provider 可用性探针：`api` 测模型列表，`model` 测实例绑定的模型能否完成一次最小补全。
+   *
+   * 结果统一为 200 + `ok`：上游 401、超时、网关没有 `/models` 都是「这次测试不可用」，
+   * 不是服务端处理失败。错误文本会截断并抹掉源上的 apiKey。
+   */
+  router.post(`${API_PREFIX}/providers/:id/probe`, async (req, res, params) => {
+    const body = await readJson(req);
+    const kind = body.kind;
+    if (typeof kind !== "string" || !(PROVIDER_PROBE_KINDS as readonly string[]).includes(kind)) {
+      return sendError(res, 400, `kind 必须是 ${PROVIDER_PROBE_KINDS.join(" / ")}`);
+    }
+
+    const { config: providerStore } = providerSurface;
+    const entry = providerStore.getProvider(params.id);
+    if (!entry) return sendError(res, 404, `未找到 id 为「${params.id}」的 provider`);
+    const raw = providerStore.providerEntries()[params.id];
+    if (!raw) return sendError(res, 404, `未找到 id 为「${params.id}」的 provider`);
+
+    const { providers: built, errors } = createProviders(
+      { [params.id]: raw },
+      { sources: providerStore.sourceEntries() },
+    );
+    const probe = built[0];
+    if (!probe) {
+      return sendError(res, 400, errors[0]?.message ?? "provider 配置不合法或已禁用");
+    }
+
+    const result = await probeProvider(probe, kind as ProviderProbeKind);
+    const source = typeof entry.source === "string" ? providerStore.getSource(entry.source) : null;
+    const secrets = [
+      typeof source?.apiKey === "string" ? source.apiKey : "",
+      typeof entry.apiKey === "string" ? entry.apiKey : "",
+    ];
+    sendJson(res, 200, redactProbeResult(result, secrets));
+  });
+
   router.get(`${API_PREFIX}/plugins`, async (req, res) => {
     const bundle = scopedProfile(req, res);
     if (!bundle) return;
@@ -920,6 +967,27 @@ export function createHttpServer(deps: HttpDeps) {
     }
   });
 
+  /**
+   * 调用 OneBot 11 原始动作（AstrBot 的 `call_action`）。
+   *
+   * 这是给开发者与管理员的逃生口：框架没有包装的动作（群列表、文件上传、拍一拍……）
+   * 不必为每一个都改一次类型与 UI，先从 JSON 表单/插件入口调通，再决定要不要包装。
+   * 参数原样转发，不在此处做平台判断；结果统一为 `{ ok, data?, error? }`。
+   */
+  router.post(`${API_PREFIX}/adapters/:id/action`, async (req, res, params) => {
+    const body = await readJson(req);
+    try {
+      const result = await adapters.callAction(
+        params.id,
+        typeof body.action === "string" ? body.action : "",
+        body.params === undefined ? {} : body.params,
+      );
+      sendJson(res, 200, result);
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
   router.delete(`${API_PREFIX}/adapters/:id`, async (_req, res, params) => {
     try {
       await adapters.remove(params.id);
@@ -940,6 +1008,7 @@ export function createHttpServer(deps: HttpDeps) {
     sendJson(res, 200, {
       tools: bundle.tools
         .list()
+        .filter((tool) => tool.internal !== true)
         .map((tool) => viewTool(tool, bundle.toolConfig.isEnabled(tool.id))),
     });
   });
@@ -953,6 +1022,9 @@ export function createHttpServer(deps: HttpDeps) {
     try {
       const tool = bundle.tools.get(params.id);
       if (!tool) return sendError(res, 404, `未知工具: ${params.id}`);
+      if (tool.internal === true) {
+        return sendError(res, 400, `工具「${params.id}」是内部工具，不能在这里开关`);
+      }
       const { enabled } = bundle.toolConfig.setEnabled(params.id, body.enabled);
       sendJson(res, 200, { tool: viewTool(tool, enabled) });
     } catch (err) {

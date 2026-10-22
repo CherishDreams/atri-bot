@@ -11,6 +11,7 @@ import type { TestContext } from "node:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ToolInfo } from "@atri/shared";
 import { createApp } from "#app.ts";
 import { configFilePath } from "#config/file.ts";
@@ -18,13 +19,13 @@ import type { FileConfig } from "#config/file.ts";
 import { DEFAULT_PROFILE_ID, profileConfigPath, profilesRoot } from "#config/profiles.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
-async function startApp(t: TestContext, preset?: FileConfig) {
+async function startApp(t: TestContext, preset?: FileConfig, pluginDirs: string[] = []) {
   const root = mkdtempSync(join(tmpdir(), "atri-tool-routes-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   if (preset) writeFileSync(configFilePath(root), `${JSON.stringify(preset, null, 2)}\n`);
   // `dataDir` 写出来：下面要按它算配置档文件的路径，不能吃 helper 的默认值。
   const dataDir = join(root, "data");
-  const app = await createApp(makeTestConfig({ root, dataDir }));
+  const app = await createApp(makeTestConfig({ root, dataDir, pluginDirs }));
   await app.start();
   t.after(() => app.stop());
   return {
@@ -83,11 +84,11 @@ test("GET /tools 列出内置工具，且默认全部关闭", async (t) => {
   // 注册顺序就是 `createBuiltinTools()` 的数组顺序，所以下面两条 map 是成对的。
   assert.deepEqual(
     list.map((tool) => tool.id),
-    ["current_time", "list_plugins"],
+    ["current_time"],
   );
   assert.deepEqual(
     list.map((tool) => tool.enabled),
-    [false, false],
+    [false],
     "工具是能力授予，默认必须关闭",
   );
   const tool = list[0] as ToolInfo;
@@ -184,4 +185,34 @@ test("工具端点默认受保护", async (t) => {
     });
     assert.equal(res.status, 401, `${method} ${path} 匿名可访问`);
   }
+});
+
+test("系统插件的 internal 工具不出现在工具开关里", async (t) => {
+  // 加载仓库自带的插件目录：system 插件声明 list_plugins 为 internal。
+  const bundledPlugins = fileURLToPath(new URL("../plugins", import.meta.url));
+  const { origin } = await startApp(t, undefined, [bundledPlugins]);
+  const cookie = await login(origin);
+
+  const tools = await call(origin, cookie, "GET", "/tools");
+  assert.equal(tools.status, 200);
+  assert.deepEqual(
+    toolsOf(tools.json).map((tool) => tool.id),
+    ["current_time"],
+    "internal 工具必须从用户的工具列表里消失",
+  );
+
+  const config = await call(origin, cookie, "GET", "/profiles/default/config");
+  assert.equal(config.status, 200);
+  assert.deepEqual(
+    (config.json.tools as ToolInfo[]).map((tool) => tool.id),
+    ["current_time"],
+    "配置工作台也不该展示 internal 工具",
+  );
+
+  const plugins = await call(origin, cookie, "GET", "/plugins");
+  assert.equal(plugins.status, 200);
+  assert.ok(
+    (plugins.json.plugins as { id: string }[]).some((plugin) => plugin.id === "system"),
+    "系统插件本身仍应出现在插件页",
+  );
 });

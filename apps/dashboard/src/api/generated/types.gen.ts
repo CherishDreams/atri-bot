@@ -110,6 +110,29 @@ export type StreamChunk = {
     error?: string;
 };
 
+export type ProviderProbeKind = 'api' | 'model';
+
+export type ProviderProbeRequest = {
+    kind: ProviderProbeKind;
+};
+
+export type ProviderProbeResult = {
+    kind: ProviderProbeKind;
+    ok: boolean;
+    /**
+     * 从发起到拿到的毫秒数（包含失败那次）
+     */
+    latencyMs: number;
+    /**
+     * 成功时的中文摘要
+     */
+    detail: string | null;
+    /**
+     * 失败时的中文原因（已截断、已抹掉 apiKey）
+     */
+    error: string | null;
+};
+
 /**
  * 配置层的一个模型实例。`loaded` 说明它有没有真正注册进运行时。
  */
@@ -659,11 +682,51 @@ export type AdapterTemplate = {
     type: string;
     name: string;
     description: string;
+    /**
+     * 新增实例时是否自动生成 token（NapCat 需要，SnowLuma 的 token 来自它自己的服务端）。
+     */
+    generateToken?: boolean;
+    /**
+     * 给操作者的连接配置提示。
+     */
+    setupHint?: string;
     fields: Array<AdapterSettingField>;
 };
 
 export type AdapterTemplateList = {
     templates: Array<AdapterTemplate>;
+};
+
+export type AdapterActionRequest = {
+    /**
+     * 平台动作名，例如 get_group_list；最长 128 字符。
+     */
+    action: string;
+    /**
+     * 动作参数，原样转发；JSON 序列化后最长 64 KiB。
+     */
+    params?: {
+        [key: string]: unknown;
+    };
+};
+
+export type AdapterActionResult = {
+    adapterId: string;
+    action: string;
+    /**
+     * 动作是否成功。未运行、平台不支持或上游失败时为 false。
+     */
+    ok: boolean;
+    /**
+     * 平台返回的 data 原样透传。
+     */
+    data?: {
+        [key: string]: unknown;
+    };
+    /**
+     * 失败原因（已截断，不含请求参数）。
+     */
+    error?: string | null;
 };
 
 export type AdapterCreateRequest = {
@@ -672,7 +735,7 @@ export type AdapterCreateRequest = {
      */
     id: string;
     /**
-     * 适配器类型，目前只有 napcat。
+     * 适配器类型：napcat（反向 WS）或 snowluma（正向 WS）。
      */
     type: string;
     name?: string;
@@ -1662,6 +1725,41 @@ export type UpdateProviderResponses = {
 
 export type UpdateProviderResponse = UpdateProviderResponses[keyof UpdateProviderResponses];
 
+export type ProbeProviderData = {
+    body: ProviderProbeRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/providers/{id}/probe';
+};
+
+export type ProbeProviderErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type ProbeProviderError = ProbeProviderErrors[keyof ProbeProviderErrors];
+
+export type ProbeProviderResponses = {
+    /**
+     * 探针结果；ok 为 false 时 error 说明原因
+     */
+    200: ProviderProbeResult;
+};
+
+export type ProbeProviderResponse = ProbeProviderResponses[keyof ProbeProviderResponses];
+
 export type ListProviderSourcesData = {
     body?: never;
     path?: never;
@@ -2373,6 +2471,41 @@ export type SetAdapterEnabledResponses = {
 };
 
 export type SetAdapterEnabledResponse = SetAdapterEnabledResponses[keyof SetAdapterEnabledResponses];
+
+export type CallAdapterActionData = {
+    body: AdapterActionRequest;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/adapters/{id}/action';
+};
+
+export type CallAdapterActionErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type CallAdapterActionError = CallAdapterActionErrors[keyof CallAdapterActionErrors];
+
+export type CallAdapterActionResponses = {
+    /**
+     * 动作结果；ok 为 false 时 error 说明原因
+     */
+    200: AdapterActionResult;
+};
+
+export type CallAdapterActionResponse = CallAdapterActionResponses[keyof CallAdapterActionResponses];
 
 export type ListToolsData = {
     body?: never;

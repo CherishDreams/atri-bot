@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client/index.js';
-import type { AuthStatusData, AuthStatusResponses, CreateAdapterData, CreateAdapterErrors, CreateAdapterResponses, CreateCronJobData, CreateCronJobErrors, CreateCronJobResponses, CreatePersonaData, CreatePersonaErrors, CreatePersonaResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteAdapterData, DeleteAdapterErrors, DeleteAdapterResponses, DeleteCronJobData, DeleteCronJobErrors, DeleteCronJobResponses, DeletePersonaData, DeletePersonaErrors, DeletePersonaResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetAdapterData, GetAdapterErrors, GetAdapterResponses, GetPluginConfigData, GetPluginConfigErrors, GetPluginConfigResponses, GetProfileConfigData, GetProfileConfigErrors, GetProfileConfigResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListAdapterTemplatesData, ListAdapterTemplatesErrors, ListAdapterTemplatesResponses, ListCronJobsData, ListCronJobsErrors, ListCronJobsResponses, ListLogsData, ListLogsErrors, ListLogsResponses, ListPersonasData, ListPersonasErrors, ListPersonasResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, RunCronJobData, RunCronJobErrors, RunCronJobResponses, SavePluginConfigData, SavePluginConfigErrors, SavePluginConfigResponses, SaveProfileConfigData, SaveProfileConfigErrors, SaveProfileConfigResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetAdapterEnabledData, SetAdapterEnabledErrors, SetAdapterEnabledResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamLogsData, StreamLogsErrors, StreamLogsResponse, StreamLogsResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateAdapterData, UpdateAdapterErrors, UpdateAdapterResponses, UpdateCronJobData, UpdateCronJobErrors, UpdateCronJobResponses, UpdatePersonaData, UpdatePersonaErrors, UpdatePersonaResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
+import type { AuthStatusData, AuthStatusResponses, CallAdapterActionData, CallAdapterActionErrors, CallAdapterActionResponses, CreateAdapterData, CreateAdapterErrors, CreateAdapterResponses, CreateCronJobData, CreateCronJobErrors, CreateCronJobResponses, CreatePersonaData, CreatePersonaErrors, CreatePersonaResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteAdapterData, DeleteAdapterErrors, DeleteAdapterResponses, DeleteCronJobData, DeleteCronJobErrors, DeleteCronJobResponses, DeletePersonaData, DeletePersonaErrors, DeletePersonaResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetAdapterData, GetAdapterErrors, GetAdapterResponses, GetPluginConfigData, GetPluginConfigErrors, GetPluginConfigResponses, GetProfileConfigData, GetProfileConfigErrors, GetProfileConfigResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListAdapterTemplatesData, ListAdapterTemplatesErrors, ListAdapterTemplatesResponses, ListCronJobsData, ListCronJobsErrors, ListCronJobsResponses, ListLogsData, ListLogsErrors, ListLogsResponses, ListPersonasData, ListPersonasErrors, ListPersonasResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ProbeProviderData, ProbeProviderErrors, ProbeProviderResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, RunCronJobData, RunCronJobErrors, RunCronJobResponses, SavePluginConfigData, SavePluginConfigErrors, SavePluginConfigResponses, SaveProfileConfigData, SaveProfileConfigErrors, SaveProfileConfigResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetAdapterEnabledData, SetAdapterEnabledErrors, SetAdapterEnabledResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamLogsData, StreamLogsErrors, StreamLogsResponse, StreamLogsResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateAdapterData, UpdateAdapterErrors, UpdateAdapterResponses, UpdateCronJobData, UpdateCronJobErrors, UpdateCronJobResponses, UpdatePersonaData, UpdatePersonaErrors, UpdatePersonaResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -331,6 +331,21 @@ export const updateProvider = <ThrowOnError extends boolean = false>(options: Op
 });
 
 /**
+ * 测试 provider 的 API 或模型是否可用
+ *
+ * api：用已保存的源拉一次模型列表；model：用实例绑定的模型发一次最小补全。两种结果都是 200 + ok；错误文本已截断并抹掉 apiKey。
+ */
+export const probeProvider = <ThrowOnError extends boolean = false>(options: Options<ProbeProviderData, ThrowOnError>): RequestResult<ProbeProviderResponses, ProbeProviderErrors, ThrowOnError> => (options.client ?? client).post<ProbeProviderResponses, ProbeProviderErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/providers/{id}/probe',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * 列出供应商源
  *
  * **明文返回 `apiKey`**：配置页要能把原值填回输入框，这是有意的取舍。
@@ -526,6 +541,21 @@ export const updateAdapter = <ThrowOnError extends boolean = false>(options: Opt
 export const setAdapterEnabled = <ThrowOnError extends boolean = false>(options: Options<SetAdapterEnabledData, ThrowOnError>): RequestResult<SetAdapterEnabledResponses, SetAdapterEnabledErrors, ThrowOnError> => (options.client ?? client).post<SetAdapterEnabledResponses, SetAdapterEnabledErrors, ThrowOnError>({
     responseType: 'json',
     url: '/adapters/{id}/enable',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 调用接平台的原始动作
+ *
+ * 原样转发到 OneBot 11 等平台的 action；用于框架尚未包装的能力。未运行、平台不支持或上游失败都返回 200 + ok:false。
+ */
+export const callAdapterAction = <ThrowOnError extends boolean = false>(options: Options<CallAdapterActionData, ThrowOnError>): RequestResult<CallAdapterActionResponses, CallAdapterActionErrors, ThrowOnError> => (options.client ?? client).post<CallAdapterActionResponses, CallAdapterActionErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/adapters/{id}/action',
     ...options,
     headers: {
         'Content-Type': 'application/json',

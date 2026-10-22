@@ -20,6 +20,11 @@ const RESULT_LIMIT_CHARS = 8_000;
  */
 export class ToolRegistry {
   #tools = new Map<string, ToolDefinition>();
+  /**
+   * 运行期工具来源（插件工具）。每次 `list()` 现读，所以插件重载/禁用后
+   * 下一轮请求立刻看到新清单；快照会让已卸下的插件继续被模型调用。
+   */
+  #sources: (() => readonly ToolDefinition[])[] = [];
 
   register(tool: ToolDefinition): ToolDefinition {
     if (!tool?.id) throw new Error("工具必须带有 id");
@@ -30,13 +35,28 @@ export class ToolRegistry {
     return tool;
   }
 
-  get(id: string): ToolDefinition | null {
-    return this.#tools.get(id) ?? null;
+  /**
+   * 登记一个动态工具来源。静态注册的工具优先：插件不能覆盖内置工具。
+   * 同 id 的插件工具由 `PluginManager` 在加载时拒绝，不会走到这里的静默覆盖。
+   */
+  registerSource(source: () => readonly ToolDefinition[]): void {
+    this.#sources.push(source);
   }
 
-  /** 注册顺序，不是配置顺序：上游看到的工具顺序由此确定，与谁先写配置文件无关。 */
+  get(id: string): ToolDefinition | null {
+    return this.list().find((tool) => tool.id === id) ?? null;
+  }
+
+  /** 注册顺序 + 动态来源；静态工具在前，插件工具在后。 */
   list(): ToolDefinition[] {
-    return [...this.#tools.values()];
+    const merged = new Map<string, ToolDefinition>();
+    for (const tool of this.#tools.values()) merged.set(tool.id, tool);
+    for (const source of this.#sources) {
+      for (const tool of source()) {
+        if (!merged.has(tool.id)) merged.set(tool.id, tool);
+      }
+    }
+    return [...merged.values()];
   }
 
   /**
@@ -56,7 +76,7 @@ export class ToolRegistry {
    * 而回喂一条 `isError` 才是可纠正的一回合。**provider 层错误不经过这里**，照旧抛。
    */
   async run(call: ToolCall, limitChars = RESULT_LIMIT_CHARS): Promise<ToolResult> {
-    const tool = this.#tools.get(call.name);
+    const tool = this.get(call.name);
     if (!tool) {
       return this.#failure(call, `没有名为「${call.name}」的工具`);
     }

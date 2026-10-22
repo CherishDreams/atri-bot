@@ -16,7 +16,6 @@ import type { ToolCall } from "@atri/shared";
 import { ToolRegistry } from "#core/tool/registry.ts";
 import { DEFAULT_MAX_TOOL_STEPS, ToolConfigStore } from "#core/tool/store.ts";
 import { createBuiltinTools } from "#core/tool/builtins.ts";
-import type { PluginSummary } from "#core/tool/builtins/listPlugins.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
 import { ApiError } from "#core/errors.ts";
 import { configFilePath } from "#config/file.ts";
@@ -113,23 +112,13 @@ test("空参数串按无参数处理，结果超长会截断并注明原长", as
   assert.match(long.content, /结果已截断，原长 500 字符/);
 });
 
-/**
- * 插件的清单项。注意它**不是** `plugins.list()` 的那个形状（`PluginView`）——
- * 装配处会把后者投影成这样一份（`app.ts`），而 `core/` 不 import `plugins/`，
- * 所以这里用结构赋值造出来。清单项里没有 `error` 文本，只有 `failed`：
- * 失败原因不该出现在发给第三方 provider 的工具结果里。
- */
-function plugin(id: string, enabled: boolean, failed = false): PluginSummary {
-  return { id, name: `${id} 插件`, enabled, failed };
-}
-
 test("内置 current_time 能跑，非法时区兜成 isError 而不是抛出", async () => {
   const reg = new ToolRegistry();
-  for (const tool of createBuiltinTools({ listPlugins: () => [] })) reg.register(tool);
+  for (const tool of createBuiltinTools()) reg.register(tool);
 
   assert.deepEqual(
     reg.list().map((t) => t.id),
-    ["current_time", "list_plugins"],
+    ["current_time"],
   );
 
   const ok = await reg.run(call("current_time", '{"timezone":"Asia/Shanghai"}'));
@@ -145,39 +134,33 @@ test("内置 current_time 能跑，非法时区兜成 isError 而不是抛出", 
   assert.equal(scalar.isError, true);
 });
 
-test("list_plugins 逐个报告启用状态，且不把失败原因原文外传给模型", async () => {
+test("动态来源：插件工具能运行，重载后清单随之变化", async () => {
   const reg = new ToolRegistry();
-  for (const tool of createBuiltinTools({
-    listPlugins: () => [plugin("ok", true), plugin("off", false), plugin("bad", false, true)],
-  })) {
-    reg.register(tool);
-  }
+  let dynamic: ToolDefinition[] = [];
+  reg.registerSource(() => dynamic);
 
-  const out = await reg.run(call("list_plugins", "{}"));
+  assert.equal((await reg.run(call("probe", "{}"))).isError, true, "来源为空时应回 isError");
+
+  dynamic = [probeTool(async () => "来自插件")];
+  const out = await reg.run(call("probe", "{}"));
   assert.equal(out.isError, undefined);
-  assert.match(out.content, /ok 插件（id: ok）：运行中/);
-  assert.match(out.content, /off 插件（id: off）：已禁用/);
-  // `error` 先判，所以失败的那条说「上次加载失败」而不是「已禁用」——
-  // 后者会把「它坏了」说成「操作者关掉了它」，模型据此会建议用户去开一个根本起不来的插件。
-  assert.match(out.content, /bad 插件（id: bad）：上次加载失败/);
-  // 失败原因原文里带着绝对路径，而工具结果会整段发给第三方 provider。模型只需要
-  // 「别声称这个插件的能力可用」，原因是给操作者看的（`GET /plugins` 那侧）。
-  assert.doesNotMatch(out.content, /\/home\/atri/);
+  assert.equal(out.content, "来自插件");
+  assert.deepEqual(
+    reg.list().map((t) => t.id),
+    ["probe"],
+  );
+
+  dynamic = [];
+  assert.equal((await reg.run(call("probe", "{}"))).isError, true, "来源撤销后旧工具仍在被调用");
 });
 
-test("list_plugins 每次调用现读：注册时还没有插件，装完之后照样报得出", async () => {
+test("静态工具优先于同 id 的动态工具", () => {
   const reg = new ToolRegistry();
-  const installed: PluginSummary[] = [];
-  for (const tool of createBuiltinTools({ listPlugins: () => installed })) reg.register(tool);
-
-  const empty = await reg.run(call("list_plugins", "{}"));
-  assert.match(empty.content, /当前没有安装任何插件/);
-
-  // `app.ts` 恰恰是在 `plugins.loadAll()` 之前注册工具的：这条断言证的就是
-  // 「传 getter 而不是快照」不是多余的形式主义 —— 快照在这里会永远报「没有插件」。
-  installed.push(plugin("late", true));
-  const after = await reg.run(call("list_plugins", "{}"));
-  assert.match(after.content, /late 插件（id: late）：运行中/);
+  const staticTool = probeTool(async () => "静态");
+  reg.register(staticTool);
+  reg.registerSource(() => [{ ...staticTool, run: async () => "动态" }]);
+  assert.equal(reg.list().length, 1);
+  assert.equal(reg.list()[0]?.run, staticTool.run);
 });
 
 // --- 开关存储 ---------------------------------------------------------------

@@ -2,6 +2,7 @@ import { API_PREFIX, WS_PATH } from "@atri/shared";
 import type { ServerFrame } from "@atri/shared";
 import {
   authStatus as authStatusOp,
+  callAdapterAction as callAdapterActionOp,
   createAdapter as createAdapterOp,
   createCronJob as createCronJobOp,
   createPersona as createPersonaOp,
@@ -35,6 +36,7 @@ import {
   listSessions as listSessionsOp,
   listTools as listToolsOp,
   login as loginOp,
+  probeProvider as probeProviderOp,
   logout as logoutOp,
   me as meOp,
   setAdapterEnabled as setAdapterEnabledOp,
@@ -52,6 +54,7 @@ import {
   updateProviderSource as updateProviderSourceOp,
 } from "./generated/index.js";
 import type {
+  AdapterActionResult,
   AdapterCreateRequest,
   AdapterDetail,
   AdapterTemplate,
@@ -64,6 +67,8 @@ import type {
   PersonaUpdateRequest,
   LogEntry,
   ProviderInput,
+  ProviderProbeKind,
+  ProviderProbeResult,
   ProviderSourceInput,
   ProviderSourceUpdate,
   ProviderUpdate,
@@ -488,6 +493,7 @@ export function connect(
 
 export type {
   AdapterAccessControl,
+  AdapterActionResult,
   AdapterDetail,
   AdapterInfo,
   AdapterTemplate,
@@ -497,6 +503,8 @@ export type {
   ProfileConfig,
   ProfileConfigPatch,
   ProviderInfo,
+  ProviderProbeKind,
+  ProviderProbeResult,
   ProviderSource,
   ProviderSourceInput,
   ProviderSourceUpdate,
@@ -537,6 +545,23 @@ export async function setAdapterEnabled(id: string, enabled: boolean): Promise<A
 
 export async function deleteAdapter(id: string): Promise<{ id: string; removed: boolean }> {
   return body(await deleteAdapterOp({ path: { id } }));
+}
+
+/** 测试 provider 的 API（模型列表）或模型（最小补全）；上游失败也是 200 + ok:false。 */
+export async function probeProvider(
+  id: string,
+  kind: ProviderProbeKind,
+): Promise<ProviderProbeResult> {
+  return body(await probeProviderOp({ path: { id }, body: { kind } }));
+}
+
+/** 调用平台原始动作；未运行/上游失败也是 200 + ok:false，不抛异常。 */
+export async function callAdapterAction(
+  id: string,
+  action: string,
+  params: Record<string, unknown>,
+): Promise<AdapterActionResult> {
+  return body(await callAdapterActionOp({ path: { id }, body: { action, params } }));
 }
 
 // --- 人格 -------------------------------------------------------------------

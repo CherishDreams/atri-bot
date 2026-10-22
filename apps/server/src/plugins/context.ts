@@ -19,6 +19,26 @@ export interface Subscribable {
   off?: (event: string, handler: (...args: unknown[]) => void) => void;
 }
 
+/** 插件可见的接入平台摘要：只给调用需要的坐标，不给目录、凭证或错误原文。 */
+export interface PluginAdapterSummary {
+  id: string;
+  name: string;
+  type: string;
+  running: boolean;
+}
+
+/**
+ * 插件调用接入平台动作的端口。
+ *
+ * 与 `plugins()` 同一条注入理由：`plugins/` 不认识适配器层，能力由组合根注入。
+ * 实现方必须校验「适配器绑定的配置档 == 当前插件所属配置档」，不能只凭 id 操作
+ * 别的档。
+ */
+export interface PluginAdapterActions {
+  list(): PluginAdapterSummary[];
+  call(adapterId: string, action: string, params: Record<string, unknown>): Promise<unknown>;
+}
+
 export interface PluginContextDeps {
   id: string;
   logger: Logger;
@@ -52,6 +72,8 @@ export interface PluginContextDeps {
    * 「只依赖注入给它的 ctx」—— 同层的 `persistEnabled` 早就按这条办了，这里不该是例外。
    */
   ensurePrivateDir: (dir: string) => void;
+  /** 接入平台动作端口；缺省时 `ctx.adapters()` 为空、`ctx.callAction()` 抛错。 */
+  adapterActions?: PluginAdapterActions;
 }
 
 /**
@@ -107,6 +129,7 @@ export class PluginContext {
   #peers: () => PluginInfo[];
   #dataRoot: string;
   #ensurePrivateDir: (dir: string) => void;
+  #adapterActions?: PluginAdapterActions;
   #dataDir?: string;
 
   id: string;
@@ -123,6 +146,7 @@ export class PluginContext {
     plugins,
     dataRoot,
     ensurePrivateDir,
+    adapterActions,
   }: PluginContextDeps) {
     this.id = id;
     this.logger = logger;
@@ -131,6 +155,7 @@ export class PluginContext {
     this.#peers = plugins;
     this.#dataRoot = dataRoot;
     this.#ensurePrivateDir = ensurePrivateDir;
+    this.#adapterActions = adapterActions;
   }
 
   /** 是否已卸载。卸载后调用 effect 会直接报错，避免泄漏。 */
@@ -186,6 +211,34 @@ export class PluginContext {
    */
   plugins(): PluginInfo[] {
     return this.#peers();
+  }
+
+  /**
+   * 当前配置档绑定的接入平台。只给 id / name / type / running —— 插件要调用动作时
+   * 需要的是坐标，不是目录、token 或错误原文。
+   *
+   * 运行期现读：适配器可能在插件 `setup()` 之后才装配完成（组合根先建配置档、
+   * 后建适配器管理器），所以不要在 `setup()` 里把返回值缓存下来。
+   */
+  adapters(): PluginAdapterSummary[] {
+    return this.#adapterActions?.list() ?? [];
+  }
+
+  /**
+   * 调用接入平台原始动作（AstrBot 的 `call_action`）。
+   *
+   * 只允许操作绑定到本插件所属配置档的适配器；由注入的实现校验，插件层不重复判断。
+   * 动作失败抛错，插件可以 catch 后降级。
+   */
+  async callAction(
+    adapterId: string,
+    action: string,
+    params: Record<string, unknown> = {},
+  ): Promise<unknown> {
+    if (this.#adapterActions === undefined) {
+      throw new Error("当前插件没有接入平台动作能力");
+    }
+    return this.#adapterActions.call(adapterId, action, params);
   }
 
   /**

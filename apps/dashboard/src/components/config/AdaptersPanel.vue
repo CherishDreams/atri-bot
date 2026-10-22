@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import type { AdapterInfo, AdapterTemplate } from "@/api/client.js";
+import type { AdapterActionResult, AdapterInfo, AdapterTemplate } from "@/api/client.js";
 import * as api from "@/api/client.js";
+import { icon } from "@/components/shared/icons";
 import { useProfilesStore } from "@/stores/profiles";
 
 /**
@@ -33,6 +34,17 @@ const form = reactive({
 
 const ADAPTER_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
+const actionOpen = ref(false);
+const actionAdapter = ref<AdapterInfo | null>(null);
+const actionName = ref("");
+const actionParams = ref("{}");
+const actionResult = ref<AdapterActionResult | null>(null);
+const actionRunning = ref(false);
+const actionError = ref<string | null>(null);
+const TerminalIcon = icon("terminal");
+const EditIcon = icon("edit");
+const TrashIcon = icon("trash");
+
 const currentTemplate = computed<AdapterTemplate | null>(
   () => templates.value.find((template) => template.type === form.type) ?? null,
 );
@@ -57,6 +69,18 @@ function randomToken(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * 只有模板声明了 `generateToken` 才替用户生成 token。
+ * SnowLuma 的 token 来自它自己的服务端，页面不能替它编一个。
+ */
+function defaultsWithToken(template: AdapterTemplate | null): Record<string, string> {
+  const settings = defaultsOf(template);
+  if (template?.generateToken === true && settings.token !== undefined && settings.token === "") {
+    settings.token = randomToken();
+  }
+  return settings;
 }
 
 async function refresh(): Promise<void> {
@@ -92,9 +116,7 @@ function openAdd(): void {
   form.name = template?.name ?? "";
   form.profile = profiles.usable[0]?.id ?? "";
   form.enabled = true;
-  const settings = defaultsOf(template);
-  if (settings.token !== undefined && settings.token === "") settings.token = randomToken();
-  form.settings = settings;
+  form.settings = defaultsWithToken(template);
   formError.value = null;
   modalOpen.value = true;
 }
@@ -129,7 +151,7 @@ function onTypeChange(type: string): void {
   form.type = type;
   form.id = type;
   form.name = template?.name ?? "";
-  form.settings = defaultsOf(template);
+  form.settings = defaultsWithToken(template);
 }
 
 function settingsEntries(): { key: string; value: string }[] {
@@ -207,6 +229,60 @@ async function remove(adapter: AdapterInfo): Promise<void> {
     pageError.value = (err as Error).message;
   } finally {
     busyId.value = null;
+  }
+}
+
+function openAction(adapter: AdapterInfo): void {
+  actionAdapter.value = adapter;
+  actionName.value = "";
+  actionParams.value = "{}";
+  actionResult.value = null;
+  actionError.value = null;
+  actionOpen.value = true;
+}
+
+async function runAction(): Promise<void> {
+  const adapter = actionAdapter.value;
+  if (adapter === null) return;
+  const name = actionName.value.trim();
+  if (name === "") {
+    actionError.value = "请填写 action";
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(actionParams.value.trim() === "" ? "{}" : actionParams.value);
+  } catch (err) {
+    actionError.value = `params 不是合法 JSON：${(err as Error).message}`;
+    return;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    actionError.value = "params 必须是一个 JSON 对象";
+    return;
+  }
+
+  actionRunning.value = true;
+  actionError.value = null;
+  actionResult.value = null;
+  try {
+    actionResult.value = await api.callAdapterAction(
+      adapter.id,
+      name,
+      parsed as Record<string, unknown>,
+    );
+  } catch (err) {
+    actionError.value = (err as Error).message;
+  } finally {
+    actionRunning.value = false;
+  }
+}
+
+function actionDataText(result: AdapterActionResult): string {
+  if (result.data === undefined) return "（无 data）";
+  try {
+    return JSON.stringify(result.data, null, 2);
+  } catch {
+    return String(result.data);
   }
 }
 
@@ -326,8 +402,24 @@ function profileLabel(id: string | null): string {
             >
               {{ adapter.enabled ? "禁用" : "启用" }}
             </n-button>
-            <n-button size="small" :disabled="busyId !== null" @click="openEdit(adapter)">
-              编辑
+            <n-button
+              size="small"
+              quaternary
+              :aria-label="`调试 ${adapter.name} 的原始动作`"
+              :title="`调试 ${adapter.name} 的原始动作`"
+              @click="openAction(adapter)"
+            >
+              <template #icon><component :is="TerminalIcon" /></template>
+            </n-button>
+            <n-button
+              size="small"
+              quaternary
+              :disabled="busyId !== null"
+              :aria-label="`编辑 ${adapter.name}`"
+              :title="`编辑 ${adapter.name}`"
+              @click="openEdit(adapter)"
+            >
+              <template #icon><component :is="EditIcon" /></template>
             </n-button>
             <n-popconfirm
               positive-text="删除"
@@ -335,8 +427,15 @@ function profileLabel(id: string | null): string {
               @positive-click="remove(adapter)"
             >
               <template #trigger>
-                <n-button size="small" type="error" quaternary :disabled="busyId !== null">
-                  删除
+                <n-button
+                  size="small"
+                  type="error"
+                  quaternary
+                  :disabled="busyId !== null"
+                  :aria-label="`删除 ${adapter.name}`"
+                  :title="`删除 ${adapter.name}`"
+                >
+                  <template #icon><component :is="TrashIcon" /></template>
                 </n-button>
               </template>
               删除后这个平台的配置会从 data/adapters.json 移除；QQ
@@ -349,11 +448,56 @@ function profileLabel(id: string | null): string {
 
     <p class="mt-4 mb-0 text-xs leading-relaxed text-ink-faint">
       实例配置保存在 <code class="text-xs">data/adapters.json</code>，每个实例的会话映射在
-      <code class="text-xs">data/adapters/&lt;id&gt;/</code>。NapCat 侧要在「网络配置」里新建
-      <b>WebSocket 客户端</b>，URL 指向
-      <code class="text-xs">ws://&lt;监听地址&gt;:&lt;端口&gt;&lt;路径&gt;</code>， token
-      填表单里生成的那一个。
+      <code class="text-xs">data/adapters/&lt;id&gt;/</code>。不同平台的连接方向与 token
+      来源不同，添加或编辑时看表单下方的提示。
     </p>
+
+    <n-modal
+      v-model:show="actionOpen"
+      preset="card"
+      :title="actionAdapter ? `调试动作 · ${actionAdapter.name}` : '调试动作'"
+      class="w-[min(720px,94vw)]"
+    >
+      <div class="flex flex-col gap-3">
+        <n-alert type="warning" :show-icon="false">
+          动作名与参数会原样转发到接入平台，可能改变账号或群状态；框架不校验参数含义。
+        </n-alert>
+        <n-form-item label="action" :show-feedback="false">
+          <n-input
+            v-model:value="actionName"
+            placeholder="例如 get_group_list、get_friend_list、delete_msg"
+          />
+        </n-form-item>
+        <n-form-item label="params（JSON 对象）" :show-feedback="false">
+          <n-input
+            v-model:value="actionParams"
+            type="textarea"
+            :autosize="{ minRows: 4, maxRows: 12 }"
+            placeholder="{}"
+          />
+        </n-form-item>
+        <n-alert v-if="actionError" type="error" :show-icon="false">{{ actionError }}</n-alert>
+        <div v-if="actionResult" class="rounded-lg border-1 border-line bg-raised p-3">
+          <div class="mb-2 flex items-center gap-2 text-xs">
+            <n-tag :type="actionResult.ok ? 'success' : 'error'" size="tiny">
+              {{ actionResult.ok ? "成功" : "失败" }}
+            </n-tag>
+            <span class="text-ink-faint">{{ actionResult.action }}</span>
+          </div>
+          <p v-if="actionResult.error" class="m-0 text-xs text-danger">{{ actionResult.error }}</p>
+          <pre
+            v-else
+            class="m-0 max-h-[16rem] overflow-auto text-xs leading-relaxed whitespace-pre-wrap text-ink-muted"
+            >{{ actionDataText(actionResult) }}</pre>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <n-button @click="actionOpen = false">关闭</n-button>
+          <n-button type="primary" :loading="actionRunning" @click="runAction">执行</n-button>
+        </div>
+      </template>
+    </n-modal>
 
     <n-modal
       v-model:show="modalOpen"
@@ -418,6 +562,14 @@ function profileLabel(id: string | null): string {
             <span v-if="field.hint" class="text-xs text-ink-faint">{{ field.hint }}</span>
           </template>
         </n-form-item>
+        <n-alert
+          v-if="currentTemplate?.setupHint"
+          type="info"
+          :show-icon="false"
+          class="mb-2 text-xs"
+        >
+          {{ currentTemplate.setupHint }}
+        </n-alert>
       </n-form>
 
       <n-alert v-if="formError" type="error" :show-icon="false" class="mt-2">

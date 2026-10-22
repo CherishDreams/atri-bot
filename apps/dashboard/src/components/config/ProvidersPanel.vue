@@ -45,11 +45,12 @@
               -->
           <button
             type="button"
-            class="absolute right-2 top-2 cursor-pointer rounded px-1 text-xs text-ink-faint hover:bg-tint hover:text-danger focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+            class="absolute right-2 top-2 grid h-6 w-6 cursor-pointer place-items-center rounded text-ink-faint hover:bg-tint hover:text-danger focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
             :aria-label="`删除 ${source.id}`"
+            :title="`删除 ${source.id}`"
             @click.stop="askRemoveSource(source.id)"
           >
-            删除
+            <component :is="TrashIcon" />
           </button>
         </div>
 
@@ -226,7 +227,34 @@
                 <div v-if="entry.error" class="mt-1 text-xs text-danger">
                   {{ entry.error }}
                 </div>
+                <div
+                  v-if="probeResults[entry.id]"
+                  class="mt-1 flex flex-wrap items-center gap-1.5 text-xs"
+                >
+                  <n-tag :type="probeResults[entry.id]?.ok ? 'success' : 'error'" size="tiny">
+                    {{ probeResults[entry.id]?.ok ? "可用" : "不可用" }}
+                  </n-tag>
+                  <span class="text-ink-faint">{{ probeResults[entry.id]?.latencyMs }}ms</span>
+                  <span :class="probeResults[entry.id]?.ok ? 'text-ink-muted' : 'text-danger'">
+                    {{ probeResults[entry.id]?.detail ?? probeResults[entry.id]?.error }}
+                  </span>
+                </div>
               </div>
+              <n-dropdown
+                trigger="click"
+                :options="probeOptions"
+                @select="(key: string | number) => onProbeSelect(entry.id, key)"
+              >
+                <n-button
+                  text
+                  size="small"
+                  :loading="probeLoading[entry.id] === true"
+                  :aria-label="`测试模型 ${entry.id}`"
+                  :title="`测试模型 ${entry.id} 的 API 或模型`"
+                >
+                  <template #icon><component :is="TestIcon" /></template>
+                </n-button>
+              </n-dropdown>
               <n-button
                 v-if="!entry.default"
                 text
@@ -235,7 +263,16 @@
               >
                 设为全局默认
               </n-button>
-              <n-button text size="small" @click="providers.removeModel(entry.id)">删除</n-button>
+              <n-button
+                text
+                size="small"
+                type="error"
+                :aria-label="`删除模型 ${entry.id}`"
+                :title="`删除模型 ${entry.id}`"
+                @click="providers.removeModel(entry.id)"
+              >
+                <template #icon><component :is="TrashIcon" /></template>
+              </n-button>
             </div>
           </div>
         </n-card>
@@ -305,6 +342,8 @@
 
 <script setup lang="ts">
 import ProviderCard from "@/components/provider/ProviderCard.vue";
+import type { ProviderProbeKind, ProviderProbeResult } from "@/api/client.js";
+import * as api from "@/api/client.js";
 import {
   MAX_TIMEOUT_MS,
   MIN_TIMEOUT_MS,
@@ -312,8 +351,44 @@ import {
   useProvidersStore,
 } from "@/stores/providers";
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { icon } from "@/components/shared/icons";
 
 const providers = useProvidersStore();
+const TrashIcon = icon("trash");
+const TestIcon = icon("terminal");
+
+const probeResults = ref<Record<string, ProviderProbeResult | null>>({});
+const probeLoading = ref<Record<string, boolean>>({});
+const probeOptions = [
+  { label: "测试 API（模型列表）", key: "api" },
+  { label: "测试模型（最小补全）", key: "model" },
+];
+
+async function runProbe(id: string, kind: ProviderProbeKind): Promise<void> {
+  probeLoading.value = { ...probeLoading.value, [id]: true };
+  try {
+    const result = await api.probeProvider(id, kind);
+    probeResults.value = { ...probeResults.value, [id]: result };
+  } catch (err) {
+    probeResults.value = {
+      ...probeResults.value,
+      [id]: {
+        kind,
+        ok: false,
+        latencyMs: 0,
+        detail: null,
+        error: (err as Error).message,
+      },
+    };
+  } finally {
+    probeLoading.value = { ...probeLoading.value, [id]: false };
+  }
+}
+
+function onProbeSelect(id: string, key: string | number): void {
+  const kind = String(key);
+  if (kind === "api" || kind === "model") void runProbe(id, kind);
+}
 
 const typeOptions = PROVIDER_TYPES.map((t) => ({ label: t.label, value: t.value }));
 

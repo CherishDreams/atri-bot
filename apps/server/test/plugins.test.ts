@@ -47,6 +47,13 @@ declare global {
   var __iso_evals: number | undefined;
   /** 启用清单那条用例：`setup()` 被跑过的次数（被禁用的那颗必须是 0 次）。 */
   var __p10_setups: number | undefined;
+  /** 插件动作端口用例：把 ctx.adapters / ctx.callAction 交给用例。 */
+  var __p_action:
+    | {
+        adapters: () => { id: string; name: string; type: string; running: boolean }[];
+        call: (id: string, action: string, params: Record<string, unknown>) => Promise<unknown>;
+      }
+    | undefined;
 }
 
 /**
@@ -930,4 +937,106 @@ test("ctx.dataDir 的目录是 0700，宽松的旧目录也会被收紧", async 
   );
   assert.equal(readFileSync(join(own, "token.txt"), "utf8"), "t", "收紧权限不许动内容");
   await mgr.unloadAll();
+});
+
+test("插件工具：动态清单、internal 标记与跨插件冲突", async (t) => {
+  const dirA = await makePlugin(
+    t,
+    `
+    export default {
+      id: "tool-a",
+      tools(ctx) {
+        return [{
+          id: "list_plugins",
+          internal: true,
+          description: "列出插件",
+          parameters: { type: "object", properties: {} },
+          async run() { return ctx.plugins().map((p) => p.id).join(","); },
+        }];
+      },
+    };
+  `,
+  );
+  const mgr = makeManager(t);
+  await mgr.load(dirA);
+
+  assert.deepEqual(
+    mgr.tools().map((tool) => tool.id),
+    ["list_plugins"],
+  );
+  assert.equal(mgr.tools()[0]?.internal, true);
+  assert.match(String(await mgr.tools()[0]?.run({})), /tool-a/);
+
+  // 禁用后动态来源立刻变空；再启用恢复。快照式注册会在这里失败。
+  await mgr.setEnabled("tool-a", false);
+  assert.deepEqual(mgr.tools(), []);
+  await mgr.setEnabled("tool-a", true);
+  assert.deepEqual(
+    mgr.tools().map((tool) => tool.id),
+    ["list_plugins"],
+  );
+
+  const dirB = await makePlugin(
+    t,
+    `
+    export default {
+      id: "tool-b",
+      tools: [{
+        id: "list_plugins",
+        description: "撞号",
+        parameters: { type: "object", properties: {} },
+        async run() { return "b"; },
+      }],
+    };
+  `,
+  );
+  await assert.rejects(() => mgr.load(dirB), /冲突/);
+  assert.equal(
+    mgr.list().find((plugin) => plugin.id === "tool-b")?.status,
+    "failed",
+    "撞号的插件要留下 failed 记录，而不是静默覆盖前一个",
+  );
+});
+
+test("ctx.adapters / ctx.callAction 走注入的适配器端口", async (t) => {
+  t.after(() => {
+    delete globalThis.__p_action;
+  });
+  const calls: string[] = [];
+  const dir = await makePlugin(
+    t,
+    `
+    export default {
+      id: "action-plugin",
+      setup(ctx) {
+        globalThis.__p_action = {
+          adapters: () => ctx.adapters(),
+          call: (id, action, params) => ctx.callAction(id, action, params),
+        };
+      },
+    };
+  `,
+  );
+  const mgr = new PluginManager({ pluginDirs: [dir] }, silentLogger(), {
+    dataRoot: useDataRoot(t),
+    ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
+    adapterActions: {
+      list: () => [{ id: "napcat", name: "NapCat", type: "napcat", running: true }],
+      call: async (id, action, params) => {
+        calls.push(`${id}:${action}:${JSON.stringify(params)}`);
+        return { ok: 1 };
+      },
+    },
+  });
+  await mgr.load(dir);
+
+  const probe = globalThis.__p_action;
+  assert.ok(probe);
+  assert.deepEqual(probe.adapters(), [
+    { id: "napcat", name: "NapCat", type: "napcat", running: true },
+  ]);
+  assert.deepEqual(await probe.call("napcat", "get_group_list", { a: 1 }), { ok: 1 });
+  assert.deepEqual(calls, ['napcat:get_group_list:{"a":1}']);
 });
