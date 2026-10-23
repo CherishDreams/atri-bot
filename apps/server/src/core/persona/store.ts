@@ -107,8 +107,11 @@ export class PersonaStore {
     if (this.#personas.has(id)) throw new ApiError(`人格「${id}」已经存在`, 409);
     const fields = validateInput(input);
     const persona: PersonaInfo = { id, ...fields };
-    this.#personas.set(id, persona);
-    this.#persist();
+    const next = new Map(this.#personas);
+    next.set(id, persona);
+    // 先落盘、再换内存：失败时 GET /personas 不能出现一条从未保存成功的人格。
+    this.#persistPersonas(next);
+    this.#personas = next;
     return { ...persona };
   }
 
@@ -117,14 +120,19 @@ export class PersonaStore {
     if (current === undefined) throw new ApiError(`未知人格: ${id}`, 404);
     const fields = validateInput(input);
     const persona: PersonaInfo = { id, ...fields };
-    this.#personas.set(id, persona);
-    this.#persist();
+    const next = new Map(this.#personas);
+    next.set(id, persona);
+    this.#persistPersonas(next);
+    this.#personas = next;
     return { ...persona };
   }
 
   remove(id: string): boolean {
-    if (!this.#personas.delete(id)) return false;
-    this.#persist();
+    if (!this.#personas.has(id)) return false;
+    const next = new Map(this.#personas);
+    next.delete(id);
+    this.#persistPersonas(next);
+    this.#personas = next;
     return true;
   }
 
@@ -144,7 +152,7 @@ export class PersonaStore {
       // 第一次启动：给一个可编辑的默认人格，而不是让页面空白。
       this.#personas.set(DEFAULT_PERSONA.id, { ...DEFAULT_PERSONA });
       try {
-        this.#persist();
+        this.#persistPersonas(this.#personas);
       } catch (err) {
         this.#logger.warn(`初始化人格库失败（本次仍按内存中的默认人格运行）：${errorMessage(err)}`);
       }
@@ -166,13 +174,13 @@ export class PersonaStore {
     }
   }
 
-  #persist(): void {
+  #persistPersonas(personas: Map<string, PersonaInfo>): void {
     if (this.#broken) {
       throw new ApiError("人格库文件读取失败，修好它之前不能写入", 500);
     }
     try {
       writeConfigFileAt(this.#filePath, {
-        personas: this.list(),
+        personas: [...personas.values()].toSorted((a, b) => a.id.localeCompare(b.id)),
       } as PersonasFile);
     } catch (err) {
       this.#logger.error(`写入人格库失败: ${errorMessage(err)}`);

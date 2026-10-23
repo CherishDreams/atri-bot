@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { useProfile } from "@/composables/useProfile";
 import { useProfileConfigStore } from "@/stores/profileConfig";
 import { useProfilesStore } from "@/stores/profiles";
@@ -102,6 +102,7 @@ watch(
   profile,
   (pid) => {
     if (pid !== null) void draft.load(pid);
+    else draft.clear();
   },
   { immediate: true },
 );
@@ -178,6 +179,21 @@ onBeforeRouteLeave((to) => {
   unsavedOpen.value = true;
   return false;
 });
+
+/**
+ * `?profile=` 变化仍是**同一条 route record**，`onBeforeRouteLeave` 不会跑。
+ * 「管理配置」弹窗里的「切到这里」、路由守卫补档与浏览器前进后退都会走这里；
+ * 少了这条，脏草稿会被静默换掉（更早的版本正是这么丢的）。
+ *
+ * `?cat=` 变化放行：切分类不离开这一页，草稿还在。
+ */
+onBeforeRouteUpdate((to, from) => {
+  if (to.query.profile === from.query.profile) return true;
+  if (!draft.dirty) return true;
+  pendingTarget.value = to.fullPath;
+  unsavedOpen.value = true;
+  return false;
+});
 </script>
 
 <template>
@@ -223,7 +239,9 @@ onBeforeRouteLeave((to) => {
                 v-if="!draft.loading && !draft.loaded"
                 description="这一份配置当前不可用，原因见「管理配置」里的那一行"
               />
-              <component :is="panel" v-else :keyword="keyword" />
+              <!-- 加载中、或加载失败时都不能渲染面板：面板读的是 draft.draft，
+                   拿上一份档的草稿去填新档的 panel 会让人以为它已经切换成功。 -->
+              <component :is="panel" v-else-if="draft.loaded" :keyword="keyword" />
             </n-spin>
           </div>
         </div>

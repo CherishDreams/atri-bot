@@ -4,7 +4,11 @@ import { useSessionsStore } from "../stores/sessions.js";
 const sessions = useSessionsStore();
 
 async function onNew(): Promise<void> {
-  await sessions.create();
+  try {
+    await sessions.create();
+  } catch (err) {
+    sessions.error = err instanceof Error ? err.message : "新建会话失败";
+  }
 }
 
 /**

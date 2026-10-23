@@ -50,6 +50,11 @@ export interface AdapterManagerDeps {
   logger: Logger;
   resolveProfile: (profileId: string) => AdapterTarget | null;
   createAdapter: AdapterFactory;
+  /**
+   * 删除适配器时清掉它的会话映射目录。由组合根注入（适配器层不拼 dataDir）：
+   * 不清的话，重建同名适配器会接上旧的外部会话映射，用户看到的是一段莫名其妙的旧上下文。
+   */
+  removeAdapterState?: (id: string) => void;
 }
 
 export interface AdapterCreateInput {
@@ -103,12 +108,20 @@ export class AdapterManager {
   logger: Logger;
   resolveProfile: (profileId: string) => AdapterTarget | null;
   #createAdapter: AdapterFactory;
+  #removeAdapterState: ((id: string) => void) | undefined;
 
-  constructor({ store, logger, resolveProfile, createAdapter }: AdapterManagerDeps) {
+  constructor({
+    store,
+    logger,
+    resolveProfile,
+    createAdapter,
+    removeAdapterState,
+  }: AdapterManagerDeps) {
     this.#store = store;
     this.logger = logger;
     this.resolveProfile = resolveProfile;
     this.#createAdapter = createAdapter;
+    this.#removeAdapterState = removeAdapterState;
   }
 
   async startAll(): Promise<void> {
@@ -185,10 +198,12 @@ export class AdapterManager {
     }
     if (next.name === undefined) delete next.name;
 
-    await this.#stop(id, record);
+    // 先落盘再停旧实例：写盘失败时那一侧必须什么都没发生（旧适配器继续跑、内存配置不变）。
+    // 反过来会留下「文件没改成、实例却已经被停掉」的半截状态。
     this.#store.replace(id, next);
     record.config = next;
     record.error = null;
+    await this.#stop(id, record);
     if (next.enabled) await this.#start(id, record);
     return this.detail(id);
   }
@@ -272,6 +287,13 @@ export class AdapterManager {
     await this.#stop(id, record);
     this.#store.remove(id);
     this.#records.delete(id);
+    // 配置已经删掉之后才清数据：如果 store.remove 失败，请求回 5xx 时旧映射
+    // 必须还在，否则下一次启动会拿一个不存在的配置去接旧会话。
+    try {
+      this.#removeAdapterState?.(id);
+    } catch (err) {
+      this.logger.warn(`清理适配器「${id}」的会话映射失败: ${errorMessage(err)}`);
+    }
   }
 
   #record(id: string): ManagedAdapter {

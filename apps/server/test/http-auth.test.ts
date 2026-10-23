@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { createApp } from "#app.ts";
@@ -233,6 +233,16 @@ test("登录后 provider 配置接口可达（证明上一条测的是这些路�
   assert.deepEqual(listed.body, { sources: [] });
 });
 
+test("API 响应带 no-store 与基本安全头", async (t) => {
+  const { origin } = await startServer(t);
+  const res = await fetch(`${origin}${API_PREFIX}/health`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("cache-control"), "no-store");
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(res.headers.get("x-frame-options"), "DENY");
+  assert.match(res.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+});
+
 test("公开接口无需登录即可访问", async (t) => {
   const { base } = await startServer(t);
 
@@ -263,6 +273,22 @@ test("登录失败一律 401，且不区分用户名错与口令错", async (t) 
   // 两条消息必须完全一致，否则等于把「用户名是否存在」告诉了攻击者。
   assert.equal(wrongPass.body.error, wrongUser.body.error);
   assert.equal(wrongPass.setCookie.length, 0, "登录失败不得下发 Cookie");
+});
+
+test("同一来源登录失败超过阈值后回 429，而不是无限爆破", async (t) => {
+  const { base } = await startServer(t);
+  for (let i = 0; i < 5; i += 1) {
+    const failed = await call(base, "/auth/login", {
+      method: "POST",
+      body: { username: "admin", password: "wrong" },
+    });
+    assert.equal(failed.status, 401);
+  }
+  // 即使这次口令是对的，窗口内也先拒绝；管理员没有把锁绑在某个用户名上。
+  const blocked = await call(base, "/auth/login", { method: "POST", body: CREDS });
+  assert.equal(blocked.status, 429);
+  assert.match(String(blocked.body.error), /过于频繁/);
+  assert.equal(blocked.setCookie.length, 0);
 });
 
 test("缺少字段返回 400（而不是 401）", async (t) => {
@@ -419,6 +445,26 @@ test("静态资源可匿名获取，SPA 深链接回退到 index.html", async (t
   // 不存在的 API 路径不能被 SPA 回退吞掉，也不能靠 401/404 的差异泄露端点是否存在。
   const api = await fetch(`${origin}${API_PREFIX}/nope`);
   assert.equal(api.status, 401, "未知 API 路径先过鉴权闸门，未登录应当 401");
+});
+
+test("静态托管不能把配置文件或数据目录匿名发出去（含 symlink）", async (t) => {
+  const { origin, config, staticDir } = await startServer(t);
+  writeFileSync(configFilePath(config.root), JSON.stringify({ secret: "不该被看到" }), "utf8");
+  symlinkSync(configFilePath(config.root), join(staticDir, "leak.json"));
+
+  const direct = await call(origin, "/atri.config.json");
+  assert.equal(direct.status, 404, "静态目录是 dist，根目录文件本来就不在映射里");
+
+  const leaked = await call(origin, "/leak.json");
+  assert.equal(leaked.status, 403, "dist 里的 symlink 指向配置文件时也必须拒绝");
+  assert.equal(JSON.stringify(leaked.body).includes("不该被看到"), false);
+
+  const dataFile = join(config.dataDir, "providers.json");
+  mkdirSync(config.dataDir, { recursive: true });
+  writeFileSync(dataFile, JSON.stringify({ apiKey: "secret" }), "utf8");
+  symlinkSync(dataFile, join(staticDir, "leak-providers.json"));
+  const dataLeak = await call(origin, "/leak-providers.json");
+  assert.equal(dataLeak.status, 403);
 });
 
 test("登录后未知 API 路径才回 404，避免靠状态码枚举端点", async (t) => {

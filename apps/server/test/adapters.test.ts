@@ -64,6 +64,7 @@ function setup(opts: {
   const started: string[] = [];
   const stopped: string[] = [];
   const asked: string[] = [];
+  const removedStates: string[] = [];
   const available = new Set(opts.available ?? ["default"]);
   const fail = new Set(opts.fail ?? []);
   const mgr = new AdapterManager({
@@ -73,6 +74,7 @@ function setup(opts: {
       asked.push(id);
       return available.has(id) ? ({ engine: {} } as unknown as AdapterTarget) : null;
     },
+    removeAdapterState: (id) => removedStates.push(id),
     createAdapter: (id) => ({
       name: id,
       start() {
@@ -88,7 +90,7 @@ function setup(opts: {
       },
     }),
   });
-  return { mgr, store, files, started, stopped, asked, lines };
+  return { mgr, store, files, started, stopped, asked, removedStates, lines };
 }
 
 function rowOf(rows: AdapterInfo[], id: string): AdapterInfo {
@@ -119,6 +121,15 @@ test("startAll：只启动启用且绑定可用的，缺失与失败各自带原
   assert.equal(rowOf(rows, "off").enabled, false);
   assert.equal(rowOf(rows, "ok").running, true);
   // 没绑 profile / 已关掉的都不该去问解析器。
+});
+
+test("删除适配器会清掉它的会话映射目录", async () => {
+  const h = setup({ configs: [["state", {}]], available: ["default"] });
+  await h.mgr.startAll();
+  await h.mgr.remove("state");
+  assert.deepEqual(h.removedStates, ["state"]);
+  assert.deepEqual(h.store.list(), []);
+  assert.deepEqual(h.stopped, ["state"]);
 });
 
 test("callAction：转发、失败包装、配置档边界与参数校验", async () => {
@@ -392,4 +403,33 @@ test("坏文件从空表开始并记 error，不阻止服务启动", () => {
   });
   assert.equal(store.list().length, 0);
   assert.match(lines.join("\n"), /读取适配器配置失败/);
+});
+
+test("写盘失败时内存表不变：create / setEnabled / remove 都要先落盘", () => {
+  const files: Files = { value: {} };
+  let fail = false;
+  const store = new AdapterConfigStore({
+    filePath: "/tmp/atri-adapters-write-fail.json",
+    seed: {},
+    logger: silentLogger(),
+    io: {
+      exists: () => false,
+      ensureDir() {},
+      read: () => files.value,
+      write(_file, value) {
+        if (fail) throw new Error("磁盘满");
+        files.value = value;
+      },
+    },
+  });
+  store.create("a", config());
+  assert.equal(store.get("a")?.enabled, true);
+
+  fail = true;
+  assert.throws(() => store.create("b", config()), /磁盘满/);
+  assert.equal(store.has("b"), false, "写失败的 create 不得留下内存条目");
+  assert.throws(() => store.setEnabled("a", false), /磁盘满/);
+  assert.equal(store.get("a")?.enabled, true, "写失败的 setEnabled 不得改内存值");
+  assert.throws(() => store.remove("a"), /磁盘满/);
+  assert.equal(store.has("a"), true, "写失败的 remove 不得从内存删掉");
 });

@@ -383,14 +383,20 @@ test("端点：不接受请求体里的 baseUrl / apiKey（否则成了任意地
   t.after(() => app.stop());
 
   const cookie = await login(app.origin);
-  await postJson(app.origin, cookie, "/provider-sources", { id: "s3", type: "openai" });
+  await postJson(app.origin, cookie, "/provider-sources", {
+    id: "s3",
+    type: "openai",
+    // 固定到本机不可达端口：空 baseUrl 现在会真的回退到 OpenAI 默认地址，
+    // 测试不能依赖外网（也不该真去打官方接口）。
+    baseUrl: "http://127.0.0.1:9/v1",
+  });
 
   const { body } = await postJson(app.origin, cookie, "/provider-sources/s3/models", {
     baseUrl: evil.baseUrl,
     apiKey: "偷来的",
   });
-  // 请求体被完全忽略：打的是源上保存的空 baseUrl（实现类默认地址），
-  // 因此拿不到 evil 那份列表，也说明它没有成为转发器。
+  // 请求体被完全忽略：打的是源上保存的地址，而不是 evil；因此拿不到 evil 的列表，
+  // 也说明它没有成为转发器。
   assert.notDeepEqual(body.models, ["被偷的模型"]);
   assert.equal(evil.seen.length, 0, "不该向上游发出任何请求");
 });

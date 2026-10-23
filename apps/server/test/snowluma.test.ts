@@ -35,6 +35,38 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void
   }
 }
 
+test("SnowLuma 日志不输出 URL 里的 token", async () => {
+  const lines: string[] = [];
+  const logger: Logger = {
+    debug() {},
+    info: (line) => lines.push(line),
+    warn: (line) => lines.push(line),
+    error: (line) => lines.push(line),
+  };
+  const adapter = new SnowLumaAdapter({
+    id: "snowluma-secret",
+    profileId: "default",
+    url: "ws://127.0.0.1:1/ws?access_token=super-secret",
+    token: "",
+    logger,
+    resolveTarget: () => null,
+    conversations: { getOrCreate: (key) => `session-${key}` } satisfies ConversationSessions,
+    actionTimeoutMs: 100,
+  });
+  await adapter.start();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await adapter.stop();
+  assert.ok(
+    lines.some((line) => line.includes("127.0.0.1:1/ws")),
+    "日志仍要说连哪里",
+  );
+  assert.equal(
+    lines.some((line) => line.includes("super-secret")),
+    false,
+    "URL query 里的 token 不得进日志",
+  );
+});
+
 interface Frame {
   action: string;
   params: Record<string, unknown>;

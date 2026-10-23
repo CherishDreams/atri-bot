@@ -12,6 +12,15 @@ import type { ToolDefinition } from "./types.ts";
 const RESULT_LIMIT_CHARS = 8_000;
 
 /**
+ * 单次工具执行的默认上限。
+ *
+ * 本仓自选值：30 秒足够一次正常网络查询/命令，又不至于让一条 SSE 或适配器队列
+ * 被一颗永远不返回的插件工具永久堵住。工具可以声明自己的 `timeoutMs`；超时只放弃
+ * 等待，JS 无法强行终止第三方代码。
+ */
+export const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
+
+/**
  * 工具注册表：只管存、取、执行转发。
  *
  * 与 `core/provider/registry.ts` 同一层规矩 —— **不 import 任何具体工具实现，也不读配置**。
@@ -74,8 +83,14 @@ export class ToolRegistry {
    * 「模型幻觉出一个工具名」与「参数不是合法 JSON」是 function calling 的常态，
    * 把它们抛出去会让整轮变成 400/500（见 `api/server.ts` 的错误分派），
    * 而回喂一条 `isError` 才是可纠正的一回合。**provider 层错误不经过这里**，照旧抛。
+   *
+   * 与取消信号/超时竞速：工具不遵守 signal 时，框架至少不会把会话锁与适配器队列
+   * 一起拖住；那颗工具的副作用可能仍在后台跑，这是 JS 无法强行终止的现实。
    */
-  async run(call: ToolCall, limitChars = RESULT_LIMIT_CHARS): Promise<ToolResult> {
+  async run(
+    call: ToolCall,
+    { limitChars = RESULT_LIMIT_CHARS, signal }: { limitChars?: number; signal?: AbortSignal } = {},
+  ): Promise<ToolResult> {
     const tool = this.get(call.name);
     if (!tool) {
       return this.#failure(call, `没有名为「${call.name}」的工具`);
@@ -87,15 +102,45 @@ export class ToolRegistry {
     } catch (err) {
       return this.#failure(call, `参数不是合法的 JSON 对象：${errorMessage(err)}`);
     }
+    // 已经取消就别启动工具：竞速只能放弃等待，挡不住工具在取消之后才开始副作用。
+    if (signal?.aborted) return this.#failure(call, "工具执行已取消");
+
+    const timeoutMs = validTimeout(tool.timeoutMs);
+    const timeoutController = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      timeoutController.abort();
+    }, timeoutMs);
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, timeoutController.signal])
+      : timeoutController.signal;
 
     let text: string;
     try {
-      text = await tool.run(args);
+      // `Promise.resolve` 是运行时边界：插件可能忽略类型、返回同步值；直接对返回值
+      // 调 `.then` 会把一个正常的同步工具误判成执行失败。
+      text = await raceWithAbort(
+        Promise.resolve(tool.run(args, { signal: combinedSignal })),
+        combinedSignal,
+      );
     } catch (err) {
+      // 调用方主动取消优先：此时不该让模型看到一条「工具超时」的假原因。
+      if (signal?.aborted) return this.#failure(call, "工具执行已取消");
+      if (timedOut) {
+        return this.#failure(call, `工具「${call.name}」执行超时（${timeoutMs}ms）`);
+      }
       // 只把 `errorMessage` 给模型，绝不给堆栈：工具内部错误可能带着路径或上游响应体。
       return this.#failure(call, `工具「${call.name}」执行失败：${errorMessage(err)}`);
+    } finally {
+      clearTimeout(timer);
     }
 
+    if (typeof text !== "string") {
+      // 插件是用户手写的 JS，类型标注管不到运行时；不挡住这里会让下面的 `.length`
+      // 抛 TypeError 并穿过「run 从不抛错」的契约。
+      return this.#failure(call, `工具「${call.name}」返回值不是字符串`);
+    }
     const content =
       text.length > limitChars
         ? `${text.slice(0, limitChars)}\n…（结果已截断，原长 ${text.length} 字符）`
@@ -122,4 +167,33 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
     throw new Error(`期望对象，实际是 ${Array.isArray(parsed) ? "array" : typeof parsed}`);
   }
   return parsed as Record<string, unknown>;
+}
+
+/** 工具声明的超时不可信：非正数会立刻中断，过大则把会话拖到天荒地老。 */
+const MAX_TOOL_TIMEOUT_MS = 10 * 60 * 1000;
+
+function validTimeout(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_TOOL_TIMEOUT_MS;
+  }
+  return Math.min(value, MAX_TOOL_TIMEOUT_MS);
+}
+
+/** 让一个可能永不 resolve 的 Promise 与取消信号竞速。 */
+function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("已取消"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason ?? new Error("已取消"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
 }

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PersonaInfo, ProfileConfig } from "@atri/shared";
 import { createApp } from "#app.ts";
+import type { Logger } from "#core/logger.ts";
+import { PersonaStore } from "#core/persona/store.ts";
 import { profileConfigPath, profilesRoot } from "#config/profiles.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
@@ -56,6 +58,28 @@ async function start(t: TestContext): Promise<Harness> {
     personasFile: join(dataDir, "personas.json"),
   };
 }
+
+test("PersonaStore：坏文件时拒绝写入，内存表也不能被污染", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atri-personas-broken-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const file = join(root, "personas.json");
+  writeFileSync(file, "{ 不是合法 JSON", "utf8");
+  const lines: string[] = [];
+  const logger: Logger = {
+    debug() {},
+    info() {},
+    warn: (line) => lines.push(line),
+    error: (line) => lines.push(line),
+  };
+  const store = new PersonaStore({ filePath: file, logger });
+
+  assert.equal(store.list().length, 0);
+  assert.throws(
+    () => store.create({ id: "ghost", name: "不该出现的人格", systemPrompt: "不会生效" }),
+    /不能写入/,
+  );
+  assert.equal(store.list().length, 0, "写失败后 GET /personas 不能凭空多出一条人格");
+});
 
 test("人格：默认人格、CRUD、配置档引用与删除保护", async (t) => {
   const h = await start(t);

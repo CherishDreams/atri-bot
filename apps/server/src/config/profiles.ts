@@ -122,14 +122,38 @@ function normalizeAccessIds(value: unknown): string[] {
   return ids;
 }
 
-/** 读盘时的宽松归一：手改坏的 access 段只退化成全部放行，不让服务起不来。 */
-export function normalizeAccess(raw: unknown): AdapterAccessControl {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return emptyAccess();
+/**
+ * 读盘时的归一：**形状坏掉时 fail-closed**。
+ *
+ * 以前这里把坏形状退化成「白名单关闭」，于是一个 `"whitelistEnabled": "true"` 的
+ * 手写笔误就把机器人对所有人开放，而且没有任何提示。现在缺少 `access` 键仍表示
+ * 「没配过、默认放行」，但只要键存在而形状不对，就只保留可解析的管理员 id、
+ * 其余一律拒绝，由调用方记一条 warn；操作者修好文件（或重新保存一次）即可恢复。
+ */
+export function normalizeAccess(raw: unknown, onMalformed?: () => void): AdapterAccessControl {
+  if (raw === undefined) return emptyAccess();
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    onMalformed?.();
+    return { whitelistEnabled: true, allowedIds: [], adminIds: [] };
+  }
   const record = raw as Record<string, unknown>;
+  const adminIds = normalizeAccessIds(record.adminIds);
+  const allowedIds = normalizeAccessIds(record.allowedIds);
+  const whitelistEnabled = record.whitelistEnabled === true;
+  const valid =
+    typeof record.whitelistEnabled === "boolean" &&
+    Array.isArray(record.allowedIds) &&
+    Array.isArray(record.adminIds) &&
+    record.allowedIds.every((item) => typeof item === "string") &&
+    record.adminIds.every((item) => typeof item === "string");
+  if (!valid) {
+    onMalformed?.();
+    return { whitelistEnabled: true, allowedIds: [], adminIds };
+  }
   return {
-    whitelistEnabled: record.whitelistEnabled === true,
-    allowedIds: normalizeAccessIds(record.allowedIds),
-    adminIds: normalizeAccessIds(record.adminIds),
+    whitelistEnabled,
+    allowedIds,
+    adminIds,
   };
 }
 
@@ -219,6 +243,8 @@ export function migrateProvidersToGlobal(
   const providers: Record<string, unknown> = {};
   const dropped: string[] = [];
   const leftovers: string[] = [];
+  /** 有档**写过**这两段即为真源，即使值是空对象；是否非空由后面的 from 判据区分。 */
+  let sawProviderShape = false;
 
   for (const id of listProfileDirs(profilesDir)) {
     let profile: ProfileFileConfig;
@@ -230,7 +256,10 @@ export function migrateProvidersToGlobal(
       dropped.push(`${id} → 文件读不出（${err instanceof Error ? err.message : String(err)}）`);
       continue;
     }
-    if (providerShapeKeysIn(profile).length > 0) leftovers.push(id);
+    if (providerShapeKeysIn(profile).length > 0) {
+      leftovers.push(id);
+      sawProviderShape = true;
+    }
 
     for (const [key, value] of Object.entries(profile.providerSources ?? {})) {
       if (key in sources) {
@@ -250,10 +279,10 @@ export function migrateProvidersToGlobal(
   }
 
   let from: ProvidersMigration["from"] = "profiles";
-  if (Object.keys(sources).length === 0 && Object.keys(providers).length === 0) {
-    // 各档里什么都没有：那是**最初的安装**，bootstrap 才是唯一写过这两段的地方。
-    // 判据用「都没有」而不是「比 bootstrap 少」—— 只要任何一档里出现过其中一段，
-    // 那些档就是更近的一份真源，bootstrap 里的那一段是上一版留下的死键，不许复活。
+  if (!sawProviderShape) {
+    // **所有档都没有出现过这两段**：那是最初的安装，bootstrap 才是唯一写过它们的地方。
+    // 判据是「有没有出现过键」而不是「合并结果是否非空」—— 一份写着 `"providers": {}`
+    // 的档是操作者明确清空过的真源，不能因为它是空对象就从 bootstrap 把死键复活回来。
     from = "bootstrap";
     Object.assign(sources, bootstrap.providerSources ?? {});
     Object.assign(providers, bootstrap.providers ?? {});

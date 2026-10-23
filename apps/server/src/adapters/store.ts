@@ -81,7 +81,7 @@ export class AdapterConfigStore {
       this.#source = this.#entries.size > 0 ? "seed" : "empty";
       if (this.#entries.size > 0) {
         try {
-          this.#persist();
+          this.#persistEntries(this.#entries);
         } catch (err) {
           this.#logger.error(
             `迁移适配器配置失败（本次仍按内存中的配置运行）：${errorMessage(err)}`,
@@ -116,26 +116,37 @@ export class AdapterConfigStore {
   create(id: string, config: AdapterEntryConfig): void {
     assertAdapterId(id);
     if (this.#entries.has(id)) throw new ApiError(`适配器「${id}」已经存在`, 409);
-    this.#entries.set(id, clone(config));
-    this.#persist();
+    const next = new Map(this.#entries);
+    next.set(id, clone(config));
+    // 先落盘、再换内存：写失败时 API 会回 5xx，而 `list()` 必须仍然说旧话，
+    // 否则后续请求会看见一条从未成功保存过的适配器。
+    this.#persistEntries(next);
+    this.#entries = next;
   }
 
   replace(id: string, config: AdapterEntryConfig): void {
     if (!this.#entries.has(id)) throw new ApiError(`未知适配器: ${id}`, 404);
-    this.#entries.set(id, clone(config));
-    this.#persist();
+    const next = new Map(this.#entries);
+    next.set(id, clone(config));
+    this.#persistEntries(next);
+    this.#entries = next;
   }
 
   remove(id: string): void {
-    if (!this.#entries.delete(id)) throw new ApiError(`未知适配器: ${id}`, 404);
-    this.#persist();
+    if (!this.#entries.has(id)) throw new ApiError(`未知适配器: ${id}`, 404);
+    const next = new Map(this.#entries);
+    next.delete(id);
+    this.#persistEntries(next);
+    this.#entries = next;
   }
 
   setEnabled(id: string, enabled: boolean): void {
     const found = this.#entries.get(id);
     if (found === undefined) throw new ApiError(`未知适配器: ${id}`, 404);
-    found.enabled = enabled;
-    this.#persist();
+    const next = new Map(this.#entries);
+    next.set(id, { ...found, enabled });
+    this.#persistEntries(next);
+    this.#entries = next;
   }
 
   #load(): void {
@@ -205,8 +216,8 @@ export class AdapterConfigStore {
     }
   }
 
-  #persist(): void {
+  #persistEntries(entries: Map<string, AdapterEntryConfig>): void {
     this.#io.ensureDir(dirname(this.#filePath));
-    this.#io.write(this.#filePath, { adapters: Object.fromEntries(this.#entries) });
+    this.#io.write(this.#filePath, { adapters: Object.fromEntries(entries) });
   }
 }

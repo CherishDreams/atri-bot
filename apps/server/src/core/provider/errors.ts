@@ -112,6 +112,41 @@ export async function toProviderError(
   });
 }
 
+/**
+ * 成功响应体是 JSON 时的统一读取口。
+ *
+ * `response.json()` 的失败是 SyntaxError：baseUrl 配错时网关常常回一张 200 的 HTML
+ * 登录页，原样抛出去只会让用户看到一句英文的 `Unexpected token '<'`，而且流式路径
+ * 会在没有帧时静默返回空回复。这里把原文截断后包进 ProviderError，并保持中文文案。
+ */
+export async function readProviderJson<T>(
+  response: Response,
+  { provider, model }: ProviderLabel = {},
+): Promise<T> {
+  const text = await response.text();
+  if (text.trim() === "") {
+    const label = model
+      ? `provider「${provider}」调用模型 ${model} 失败`
+      : `provider「${provider}」调用失败`;
+    throw new ProviderError(`${label}：上游返回了空响应体`, {
+      provider,
+      status: response.status,
+    });
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (err) {
+    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 200);
+    const label = model
+      ? `provider「${provider}」调用模型 ${model} 失败`
+      : `provider「${provider}」调用失败`;
+    throw new ProviderError(
+      `${label}：上游返回的不是合法 JSON${snippet === "" ? "" : `（${snippet}）`}`,
+      { provider, status: response.status, detail: snippet, cause: err },
+    );
+  }
+}
+
 /** 网络层失败（DNS、连接被拒、超时、被 abort）也统一成 ProviderError。 */
 export function toNetworkError(
   err: unknown,

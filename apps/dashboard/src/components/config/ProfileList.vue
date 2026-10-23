@@ -2,11 +2,12 @@
 import type { ProfileRecord } from "@atri/shared";
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useProfileConfigStore } from "@/stores/profileConfig";
 import { useProfilesStore } from "@/stores/profiles";
 import { useProfile } from "@/composables/useProfile";
 
 /**
- * 配置的列表与其管理动作（新建 / 切到这里 / 删除）。
+ * 配置的列表与其管理动作（新建 / 切到这里 / 重载 / 删除）。
  *
  * 它现在只挂在「配置文件」页左上角切换器的「管理配置」弹窗里（`ManageProfilesModal`）——
  * 配置的增删不单独占一页。
@@ -22,6 +23,7 @@ import { useProfile } from "@/composables/useProfile";
  * 都已删除 —— 一个「只改显示名」的动作在这里换不来什么，却让「id 与名字不一致」多一种来源。
  */
 const store = useProfilesStore();
+const draft = useProfileConfigStore();
 const { profile: current } = useProfile();
 const route = useRoute();
 const router = useRouter();
@@ -29,6 +31,7 @@ const router = useRouter();
 const createVisible = ref(false);
 const newId = ref("");
 const newName = ref("");
+const reloadingId = ref<string | null>(null);
 
 onMounted(() => {
   void store.refresh();
@@ -53,10 +56,19 @@ function openCreate(): void {
   createVisible.value = true;
 }
 
+async function onReload(row: ProfileRecord): Promise<void> {
+  reloadingId.value = row.id;
+  const ok = await store.reload(row.id);
+  reloadingId.value = null;
+  // 当前正在编辑的档重载后，工作台的草稿也必须重新读，否则还停在旧的 failed/旧配置。
+  if (ok && current.value === row.id) void draft.load(row.id);
+}
+
 async function onRemove(row: ProfileRecord): Promise<void> {
   if (!(await store.remove(row.id))) return;
   // 删掉的正是当前选中的那一份：留着这个 query 会让接下来的每个作用域请求拿到 404。
   if (current.value === row.id) {
+    draft.clear();
     const rest = { ...route.query };
     delete rest.profile;
     void router.replace({ query: rest });
@@ -106,7 +118,20 @@ function tagType(row: ProfileRecord): "success" | "error" {
         <span v-else class="min-w-0 flex-1"></span>
         <n-button
           size="small"
+          :loading="reloadingId === row.id"
+          :disabled="reloadingId !== null"
+          :title="
+            row.status === 'failed' ? '修好文件后重新加载，不用重启服务' : '重新读取文件并重载插件'
+          "
+          @click="onReload(row)"
+        >
+          重载
+        </n-button>
+        <n-button
+          size="small"
           :type="current === row.id ? 'primary' : 'default'"
+          :disabled="row.status !== 'ready'"
+          :title="row.status === 'ready' ? undefined : '加载失败的配置不可切换'"
           @click="router.replace({ query: { ...route.query, profile: row.id } })"
         >
           {{ current === row.id ? "当前使用" : "切到这里" }}

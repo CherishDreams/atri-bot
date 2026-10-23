@@ -163,6 +163,19 @@ test("每个令牌都不同，revokeAll 一次清空全部登录态", async (t) 
   assert.equal(auth.getByToken(b.token), null);
 });
 
+test("peekByToken 不滑动空闲计时：WS 广播不能替偷来的连接续期", async (t) => {
+  const { auth, clock } = await makeAuth(t);
+  const login = auth.login("admin", "secret-pw");
+  assert.ok(login, "口令正确时必须签发令牌");
+
+  clock.advance(IDLE_TTL_MS - 60_000);
+  assert.ok(auth.peekByToken(login.token), "未过期时 peek 应有效");
+  // peek 不算一次活动：再走两分钟就超过原来的空闲窗口，必须失效。
+  clock.advance(120_000);
+  assert.equal(auth.peekByToken(login.token), null);
+  assert.equal(auth.stats.activeSessions, 0);
+});
+
 test("活跃请求把空闲计时重新推后（滑动续期）", async (t) => {
   const { auth, clock } = await makeAuth(t);
   const login = auth.login("admin", "secret-pw");

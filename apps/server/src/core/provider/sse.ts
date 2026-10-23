@@ -31,12 +31,16 @@ export async function* parseSse(body: ReadableStream<Uint8Array>) {
 
   for await (const chunk of body) {
     buffer += decoder.decode(chunk, { stream: true });
-    // 规范允许 CRLF / CR / LF 三种换行，先归一化再切帧。
-    buffer = buffer.replace(/\r\n?/g, "\n");
 
+    // 规范允许 CRLF / CR / LF 三种换行。**结尾单独的 `\r` 必须先扣住**再归一化：
+    // 它可能只是下一块开头 `\n` 的另一半，提前换成 `\n` 会凭空造出一个空行，
+    // 把同一帧的 `event:` 和 `data:` 切成两帧（Anthropic 的帧完全靠 event 分派，
+    // 丢了 event 的 data 会静默消失）。这一条只在 chunk 边界落在 CRLF 中间时发生。
+    const heldCR = buffer.endsWith("\r") ? "\r" : "";
+    const safe = heldCR === "" ? buffer : buffer.slice(0, -1);
+    const frames = safe.replace(/\r\n?/g, "\n").split("\n\n");
     // 事件之间以空行分隔。最后一段可能被 chunk 截断，留在 buffer 里等下一块。
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
+    buffer = (frames.pop() ?? "") + heldCR;
 
     for (const frame of frames) {
       const parsed = parseFrame(frame);
@@ -46,7 +50,7 @@ export async function* parseSse(body: ReadableStream<Uint8Array>) {
 
   // 上游没补最后一个空行时，收尾的残帧仍然是有效数据，不能丢。
   buffer += decoder.decode();
-  const tail = parseFrame(buffer);
+  const tail = parseFrame(buffer.replace(/\r\n?/g, "\n"));
   if (tail) yield tail;
 }
 

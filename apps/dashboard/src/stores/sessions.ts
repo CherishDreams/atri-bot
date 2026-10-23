@@ -76,6 +76,12 @@ function insertBeforeDraft(log: Message[], draftId: string, message: Message): v
   log.splice(i, 0, message);
 }
 
+/**
+ * 会话详情请求的代际。`epoch` 管的是分页拼接，这里管的是「打开会话」本身：
+ * 快速 A→B 切换时，A 的响应晚到不能把 `active/log` 改回 A。
+ */
+let openSeq = 0;
+
 /** 移除仍未确认的乐观占位；已被服务端回显替换过则什么都不做。 */
 function dropPending(log: Message[], id: string): void {
   const i = log.findIndex((m) => m.id === id);
@@ -163,6 +169,8 @@ export const useSessionsStore = defineStore("sessions", {
      * 回来的页面被再读一次，于是把已经发出去的首句又发一遍。
      */
     pendingFirst: null as StagedMessage | null,
+    /** 会话打不开时，把这句带进创建页的输入框（不丢用户刚打的字）。 */
+    newSessionDraft: null as string | null,
   }),
 
   getters: {
@@ -239,6 +247,17 @@ export const useSessionsStore = defineStore("sessions", {
      * 的另一个会话时，那份草稿属于原来那个 id —— 不比对就会把 A 的第一句发进 B 里，
      * 而这正是最不该出错的两种情形（发到错的会话、发两遍）。
      */
+    /** 会话页把「打开失败」的首句交给创建页；创建页取走即清空。 */
+    stageNewSessionDraft(text: string): void {
+      this.newSessionDraft = text;
+    },
+
+    takeNewSessionDraft(): string {
+      const text = this.newSessionDraft ?? "";
+      this.newSessionDraft = null;
+      return text;
+    },
+
     takeFirstMessage(sessionId: string): string | null {
       const staged = this.pendingFirst;
       if (staged === null) return null;
@@ -256,6 +275,7 @@ export const useSessionsStore = defineStore("sessions", {
       // 不取消就会把 A 的回复接到 B 的对话里 —— 与 `epoch` 挡的是同一类错，
       // 只是这一条挡在写入之前而不是拼接之后。
       this.abortStream();
+      const seq = ++openSeq;
       this.loading = true;
       this.error = null;
       // 作废一切在途的分页请求（见 state 的 `epoch`）：切会话之后，上一条消息流上还没回来的
@@ -267,6 +287,9 @@ export const useSessionsStore = defineStore("sessions", {
       this.cursor = null;
       try {
         const { session, nextCursor } = await api.getSession(id);
+        // 快速切换时，晚到的旧响应不能覆盖新会话。`null` 让调用方的本地
+        // `status` 也保持不动（组件层同样有 sessionId 的校验）。
+        if (seq !== openSeq) return null;
         const { messages, ...meta } = session;
         this.active = meta;
         this.log = messages;
@@ -276,12 +299,14 @@ export const useSessionsStore = defineStore("sessions", {
         if (i !== -1) this.sessions[i] = meta;
         return meta;
       } catch (err) {
+        if (seq !== openSeq) return null;
         this.active = null;
         this.log = [];
         this.error = err instanceof Error ? err.message : "会话加载失败";
         return null;
       } finally {
-        this.loading = false;
+        // 旧请求不能关掉新请求的 loading。
+        if (seq === openSeq) this.loading = false;
       }
     },
 
@@ -375,7 +400,14 @@ export const useSessionsStore = defineStore("sessions", {
      * `model` 为 provider **实例 id**；留空则让服务端按自己的三级选路挑一个。
      */
     async send(profile: string, text: string, model?: string): Promise<void> {
-      await this.ensureActive();
+      // `ensureActive()` 会在没有会话时创建并刷新列表；那两条请求失败必须落成
+      // `sessions.error` 而不是抛到调用方（调用方已经清空输入框了）。
+      try {
+        await this.ensureActive();
+      } catch (err) {
+        this.error = err instanceof Error ? err.message : "会话创建失败";
+        return;
+      }
       const active = this.active;
       if (!active) return;
 

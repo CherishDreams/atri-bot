@@ -244,8 +244,8 @@ test("被上游拒绝的一轮：用户那条原样留着，重启后仍是一�
   const cookie = await login(first.origin);
   const session = await createSession(first.origin, cookie, "半截");
   const failed = await send(first.origin, cookie, session.id, "问一半");
-  // 非流式路径把上游报错折算成一个 4xx —— 但用户那句在问上游之前就已经落库了。
-  assert.equal(failed.status, 400);
+  // 非流式路径把上游报错折算成 502（请求没错，错在后端）；用户那句在问上游之前已落库。
+  assert.equal(failed.status, 502);
   await failed.body?.cancel();
   await first.stop();
 

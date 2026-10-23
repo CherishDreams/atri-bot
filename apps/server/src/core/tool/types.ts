@@ -18,6 +18,11 @@ export interface JsonSchema {
   [key: string]: unknown;
 }
 
+/** 工具执行时框架交给它的取消信号。插件工具应当把它继续传给自己的网络请求。 */
+export interface ToolRunOptions {
+  signal?: AbortSignal;
+}
+
 /**
  * 一颗工具。契约是「模型请求、本地执行、结果回喂」的**每调用一次性**：
  * 既不是 adapter 的长驻 `start()`/`stop()`，也不是 provider 的每请求 `chat()`，
@@ -39,8 +44,17 @@ export interface ToolDefinition {
    */
   internal?: boolean;
   /**
+   * 单次执行上限（毫秒）。缺省由 `ToolRegistry` 给一个保守值；插件可以在自己的
+   * `index.js` 里声明。超时后框架会放弃等待并把结果作为 `isError` 回喂模型，
+   * 但**无法强行终止**不遵守 signal 的代码，所以工具实现仍应使用传入的 signal。
+   */
+  timeoutMs?: number;
+  /**
    * 返回**回喂给模型的文本**，不是对象：两家上游都把工具结果当字符串内容处理。
    * 抛错由注册表兜成 `isError` 结果（那是模型的一次可纠正回合），不会把整轮变成 500。
+   *
+   * `options.signal` 在客户端断开或整轮超时/取消时会触发；不遵守它也不会让会话锁
+   * 永远占住（注册表会竞速并放弃等待），但工具自己的网络请求会继续跑到自然结束。
    */
-  run(args: Record<string, unknown>): Promise<string>;
+  run(args: Record<string, unknown>, options?: ToolRunOptions): Promise<string>;
 }

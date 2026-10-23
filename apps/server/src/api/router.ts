@@ -91,13 +91,22 @@ export class Router {
       const m = r.regex.exec(pathname);
       if (!m) continue;
       const params: Record<string, string> = {};
-      r.keys.forEach((key, i) => {
+      let malformed = false;
+      for (const [i, key] of r.keys.entries()) {
         const raw = m[i + 1];
         // 每个捕获组都是 ([^/]+)，不可能不命中；undefined 只存在于类型层面，
         // 但 noUncheckedIndexedAccess 不认识这个事实，所以显式跳过而不是写 `!`。
-        if (raw === undefined) return;
-        params[key] = decodeURIComponent(raw);
-      });
+        if (raw === undefined) continue;
+        try {
+          params[key] = decodeURIComponent(raw);
+        } catch {
+          // 非法百分号编码（例如 `%E0%A4%A`）是**客户端输入错误**，不是服务端故障；
+          // 不能让 URIError 穿过这里变成 500 和一条没有意义的堆栈。
+          malformed = true;
+          break;
+        }
+      }
+      if (malformed) return null;
       // 键来自模式里的 `:name`，与 `RouteParams` 的键一一对应（见该类型的注释）。
       return { handler: r.handler, params: params as RouteParams };
     }

@@ -1,5 +1,5 @@
 /**
- * openapi.json 的**响应形状**守卫：真实驱动全部 27 个端点，把真实响应体与规格声明逐个对。
+ * openapi.json 的**响应形状**守卫：真实驱动全部端点，把真实响应体与规格声明逐个对。
  *
  * ## 为什么需要它
  * `openapi.json` 是手写的，而它是前端类型化 SDK 的唯一源头。已有的 `openapi.test.ts`
@@ -85,6 +85,7 @@ const ORDER = [
   "createProfile",
   "getProfileConfig",
   "saveProfileConfig",
+  "reloadProfile",
   "listPersonas",
   "createPersona",
   "updatePersona",
@@ -553,7 +554,7 @@ interface Ids {
   providerId: string;
   sessionId: string;
   streamSessionId: string;
-  /** 驱动自己 `createProfile` 出来的那份档，供 rename / reload 用（绝不碰 `default`）。 */
+  /** 驱动自己 `createProfile` 出来的那份档，供 reload 等用例用（绝不碰 `default`）。 */
   profileId: string;
   cronId: string;
 }
@@ -644,6 +645,9 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
         },
       });
     }
+    case "reloadProfile":
+      return call("POST", `/profiles/${ids.profileId}/reload`);
+
     case "deleteProfile": {
       // 自带受害者（与 `deleteSession` 同一处置）：删掉别人还要读的那份档，
       // 会让后面每条作用域化用例都拿到 404，而红因写在那条用例上。

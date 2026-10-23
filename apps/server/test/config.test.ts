@@ -76,6 +76,19 @@ test("不是合法 JSON 的配置文件：启动即失败，并带上原因", (t
   assert.throws(() => loadConfig(), /不是合法 JSON/);
 });
 
+test("端口与目录形状在启动时校验，错误必须是中文", (t) => {
+  const envRoot = withRoot(t, JSON.stringify({ port: 70000 }));
+  assert.throws(() => loadConfig(), /端口必须是 0–65535 的整数/);
+  assert.equal(envRoot.length > 0, true);
+
+  const root = withRoot(t, JSON.stringify({ pluginDirs: "apps/server/plugins" }));
+  assert.throws(() => loadConfig(), /pluginDirs 必须是字符串数组/);
+  assert.equal(root.length > 0, true);
+
+  withRoot(t, JSON.stringify({ host: 127 }));
+  assert.throws(() => loadConfig(), /host\/ATRI_HOST 必须是非空字符串/);
+});
+
 test("合法配置文件照常解析", (t) => {
   // 反面守卫：前两条把坏文件钉成硬失败，很容易顺手把读取改成「一律抛」而全绿。
   const root = withRoot(t, JSON.stringify({ port: 6185, logLevel: "warn" }));

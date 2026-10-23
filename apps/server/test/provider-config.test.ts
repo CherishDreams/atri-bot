@@ -231,6 +231,11 @@ test("语义：新建 provider 默认启用", async () => {
     // 就是选不到」这种状态很难自查。
     assert.equal(store.createProvider({ id: "p", source: "s", model: "m" }).enabled, true);
     assert.equal(store.getProvider("p").enabled, true);
+    assert.throws(
+      () => store.createProvider({ id: "bad", source: "s", model: "m", enabled: "false" }),
+      /enabled 必须是布尔值/,
+      'Boolean("false") 是 true，必须显式拒绝',
+    );
   });
 });
 

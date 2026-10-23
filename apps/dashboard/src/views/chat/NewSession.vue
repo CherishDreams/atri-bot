@@ -14,7 +14,8 @@ const sessions = useSessionsStore();
 /** 本页只在配置档闸门之内渲染（`ChatLayout` 的 `ProfileGate`），所以这里读到的一定是真值。 */
 const { profile } = useProfile();
 
-const content = ref("");
+// 从「会话打不开」的页面带过来的那句话；取走即清空，刷新不会重复出现。
+const content = ref(sessions.takeNewSessionDraft());
 const creating = ref(false);
 const error = ref<string | null>(null);
 const attachHint = ref(false);

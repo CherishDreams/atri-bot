@@ -221,8 +221,13 @@
                   <n-tag v-if="entry.default" class="ml-2" size="tiny" type="success"
                     >全局默认</n-tag
                   >
-                  <n-tag v-if="entry.loaded === false" class="ml-2" size="tiny" type="error">
-                    加载失败
+                  <n-tag
+                    v-if="entry.loaded === false"
+                    class="ml-2"
+                    size="tiny"
+                    :type="entry.enabled === false ? 'default' : 'error'"
+                  >
+                    {{ entry.enabled === false ? "已禁用" : "加载失败" }}
                   </n-tag>
                 </div>
                 <div class="truncate text-xs text-ink-muted">{{ entry.id }}</div>
@@ -262,6 +267,12 @@
                 v-if="!entry.default"
                 text
                 size="small"
+                :disabled="entry.enabled === false || entry.loaded === false"
+                :title="
+                  entry.enabled === false || entry.loaded === false
+                    ? '已禁用或未加载成功的模型不能设为默认'
+                    : undefined
+                "
                 @click="providers.setDefaultModel(entry.id)"
               >
                 设为全局默认

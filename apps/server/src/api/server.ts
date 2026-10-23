@@ -1,4 +1,4 @@
-import { createReadStream, statSync } from "node:fs";
+import { createReadStream, realpathSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
@@ -29,10 +29,13 @@ import {
 } from "./http.ts";
 import { parseCookies, clearSessionCookie, requireAuth, setSessionCookie } from "./auth.ts";
 import { errorMessage, errorStack, statusForError, ApiError } from "#core/errors.ts";
+import { ProviderError } from "#core/provider/errors.ts";
 import { LOG_BUFFER_CAPACITY, LOG_DEFAULT_LIMIT } from "#core/logger.ts";
 import { SESSION_BUSY_MESSAGE, SESSION_BUSY_DELETE_MESSAGE } from "#core/session/lock.ts";
 import type { AdapterUpdateInput } from "#adapters/manager.ts";
 import { ADAPTER_TEMPLATES } from "#adapters/templates.ts";
+import { configFilePath } from "#config/file.ts";
+import type { AppConfig } from "#config/index.ts";
 
 /**
  * provider 实例在 `GET /providers` 里的元素：磁盘条目 + 这一条路由额外补上的运行时标注。
@@ -129,6 +132,17 @@ function profileConfigView(bundle: ProfileBundle) {
 const MODEL_LIST_PROBE = "__model_list_probe__";
 
 /**
+ * 浏览器只向这个 WebSocket 发 `ping`（帧只有几十字节），所以入站上限刻意很小。
+ *
+ * 这个值不是协议要求，是**防止单连接把进程打死的保护**：`ws` 在超过 `maxPayload` 时会在
+ * 连接的 `Receiver` 上 `emit("error")`，没有 error 监听器时 EventEmitter 会抛未捕获异常。
+ * 64 KiB 足够任何正常的客户端帧，同时让一次畸形/超大帧只影响它自己。
+ */
+const WS_MAX_PAYLOAD_BYTES = 64 * 1024;
+/** 一个慢客户端允许积压的出站字节数；超过就断开，避免服务端内存被一条连接拖爆。 */
+const WS_MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+
+/**
  * 无需登录即可访问的路径。`/auth/status` 必须公开——否则前端在渲染登录页之前
  * 无法得知「要不要登录」。
  */
@@ -138,6 +152,37 @@ const PUBLIC_PATHS = new Set([
   `${API_PREFIX}/auth/logout`,
   `${API_PREFIX}/auth/status`,
 ]);
+
+/**
+ * 统一安全头。CSP 放行内联样式是 naive-ui 的运行时 `--n-*` 需要；图片允许 data:
+ * （消息里的 base64）与 https（Markdown 里的外链图，保持既有行为）。
+ */
+const SECURITY_HEADERS: Record<string, string> = {
+  "content-security-policy":
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss:; " +
+    "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+};
+
+function applySecurityHeaders(res: ServerResponse): void {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+}
+
+/** 登录失败窗口：同一个来源地址 15 分钟内失败 5 次后拒绝继续尝试。本仓自选值。 */
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+interface LoginFailure {
+  count: number;
+  resetAt: number;
+}
+
+function loginKeyOf(req: IncomingMessage): string {
+  return req.socket.remoteAddress ?? "unknown";
+}
 
 /**
  * 用 `Record<string, string>` 而不是 `keyof typeof`：扩展名键集天然开放，
@@ -189,6 +234,8 @@ export function createHttpServer(deps: HttpDeps) {
 
   const cookieName = auth.cookieName;
   const router = new Router();
+  /** 按 TCP 来源地址限速，不把攻击者与管理员绑在同一条全局锁上。 */
+  const loginFailures = new Map<string, LoginFailure>();
 
   /**
    * 从查询串里选出**这次请求要用哪一份配置档**，并把不可用的那些直接回掉。
@@ -219,7 +266,7 @@ export function createHttpServer(deps: HttpDeps) {
    * 按**路径里的档 id** 取那一份对象图，不可用的直接回掉。
    *
    * 三条判据与 `scopedProfile` 完全同一条（400 缺参数 / 404 没这东西 / 503 你配坏了），
-   * 差别只在 id 从哪来：`/profiles/{id}/…` 那一族（rename / reload / default-provider /
+   * 差别只在 id 从哪来：`/profiles/{id}/…` 那一族（reload / default-provider /
    * config）的档 id 本来就在路径上，再要求一份 query 参数就是同一个值写两遍 ——
    * 而两处不一致时听谁的，是一件没有答案的事。
    *
@@ -358,6 +405,18 @@ export function createHttpServer(deps: HttpDeps) {
 
   // --- 鉴权 ---------------------------------------------------------------
   router.post(`${API_PREFIX}/auth/login`, async (req, res) => {
+    const now = Date.now();
+    // 顺手清掉过期窗口，Map 不会因为长期运行而无界增长。
+    for (const [key, failure] of loginFailures) {
+      if (failure.resetAt <= now) loginFailures.delete(key);
+    }
+    const loginKey = loginKeyOf(req);
+    const failure = loginFailures.get(loginKey);
+    if (failure && failure.count >= LOGIN_MAX_FAILURES) {
+      res.setHeader("retry-after", String(Math.ceil((failure.resetAt - now) / 1000)));
+      return sendError(res, 429, "登录尝试过于频繁，请稍后再试");
+    }
+
     let body;
     try {
       body = await readJson(req);
@@ -372,8 +431,15 @@ export function createHttpServer(deps: HttpDeps) {
 
     const result = auth.login(username, password);
     // 用户名错误与口令错误返回同一句话，避免枚举出账号是否存在。
-    if (!result) return sendError(res, 401, "账号或密码错误");
+    if (!result) {
+      const next = failure
+        ? { count: failure.count + 1, resetAt: now + LOGIN_FAILURE_WINDOW_MS }
+        : { count: 1, resetAt: now + LOGIN_FAILURE_WINDOW_MS };
+      loginFailures.set(loginKey, next);
+      return sendError(res, 401, "账号或密码错误");
+    }
 
+    loginFailures.delete(loginKey);
     setSessionCookie(res, cookieName, result.token, { secure: auth.cookieSecure });
     logger.info(`登录成功: ${result.user.username}`);
     sendJson(res, 200, { user: result.user, expiresAt: result.expiresAt });
@@ -545,6 +611,13 @@ export function createHttpServer(deps: HttpDeps) {
         logger.debug(`客户端断开，已中断回复: ${params.id}`);
         return;
       }
+      // 上游模型故障是 502，不是 400：请求本身没错，错的是被调用的后端。
+      // 按本仓的 5xx 固定文案纪律，细节只进日志；流式端点仍会把原因放进 error 帧。
+      if (err instanceof ProviderError) {
+        logger.error(`模型调用失败: ${errorStack(err)}`);
+        sendError(res, 502, "模型调用失败，详情见服务端日志");
+        return;
+      }
       // 带 status 的错误自己说话 —— 409「这个会话有一次对话还没结束」就是新加的那一种。
       // 不直接套 `statusForError`：那会把「已达单轮工具调用步数上限」（引擎在步数耗尽时
       // 抛的那条普通 Error）从 400 升成 500，那是明显的行为退化。
@@ -669,7 +742,13 @@ export function createHttpServer(deps: HttpDeps) {
         // 否则用户看到的是一个说不通的「没加载」。
         ...(loaded
           ? {}
-          : { error: reason ?? "该 provider 未加载成功，请检查它引用的 provider source 是否存在" }),
+          : {
+              error:
+                reason ??
+                (entry.enabled === false
+                  ? "该 provider 已禁用，启用后才会加载"
+                  : "该 provider 未加载成功，请检查它引用的 provider source 是否存在"),
+            }),
       };
     });
     sendJson(res, 200, { providers: list, error });
@@ -690,6 +769,11 @@ export function createHttpServer(deps: HttpDeps) {
 
   router.post(`${API_PREFIX}/providers/:id`, async (req, res, params) => {
     const body = await readJson(req);
+    // `default: true` 不能落在一个当前未加载/已禁用的实例上：保存成功、下一条消息
+    // 却回退到别的模型，是比一句 400 难得多的排查现场。
+    if (body.default === true && providerSurface.registry.get(params.id) === null) {
+      return sendError(res, 400, `provider「${params.id}」未加载成功或已禁用，不能设为全局默认`);
+    }
     try {
       const provider = providerSurface.config.updateProvider(params.id, body);
       providerSurface.rebuild();
@@ -704,6 +788,14 @@ export function createHttpServer(deps: HttpDeps) {
   router.delete(`${API_PREFIX}/providers/:id`, async (_req, res, params) => {
     try {
       const result = providerSurface.config.deleteProvider(params.id);
+      // 档文件里的 defaultProvider 是**另一份**引用；不一起清就会留下一个永远
+      // 解析不到的 id，下一条消息静默落到别的模型上。
+      const cleared = profiles.clearDefaultProviders([params.id]);
+      if (cleared.length > 0) {
+        logger.warn(
+          `已删除 provider「${params.id}」，并清除了配置档 ${cleared.join(" / ")} 中对它的默认引用`,
+        );
+      }
       providerSurface.rebuild();
       sendJson(res, 200, result);
     } catch (err) {
@@ -748,6 +840,14 @@ export function createHttpServer(deps: HttpDeps) {
     const isCascade = cascade === "1" || cascade === "true";
     try {
       const result = providerSurface.config.deleteSource(params.id, { cascade: isCascade });
+      // 源被级联删除时，它下面的 provider 也在 deleted 里；档默认若指向其中任何一个，
+      // 同样要清掉。source id 不是档默认的合法目标，传进去不会误伤。
+      const cleared = profiles.clearDefaultProviders(result.deleted);
+      if (cleared.length > 0) {
+        logger.warn(
+          `已删除供应商源「${params.id}」，并清除了配置档 ${cleared.join(" / ")} 中指向其模型的默认引用`,
+        );
+      }
       providerSurface.rebuild();
       sendJson(res, 200, result);
     } catch (err) {
@@ -777,6 +877,8 @@ export function createHttpServer(deps: HttpDeps) {
     );
     const probe = built[0];
     if (!probe) return sendError(res, 400, `provider source「${params.id}」的配置不合法`);
+    // 实际生效的密钥可能来自环境变量；错误正文偶尔会回显它，能拿到就一起脱敏。
+    const effectiveKey = probeApiKey(probe);
 
     try {
       // `listModels` 在 ProviderImpl 里是可选的（有的接入方式确实不需要它），
@@ -788,7 +890,12 @@ export function createHttpServer(deps: HttpDeps) {
     } catch (err) {
       // 这里刻意回 400 而不是 502：绝大多数情况是 baseUrl 打错、密钥不对、
       // 或该网关根本没有 /models，都是**用户可修**的配置问题。
-      sendError(res, 400, errorMessage(err));
+      // 上游偶尔会把 authorization 头回显在错误里；与 probe 那条走同一个脱敏口径。
+      let detail = errorMessage(err);
+      for (const secret of [typeof source.apiKey === "string" ? source.apiKey : "", effectiveKey]) {
+        if (secret !== "") detail = detail.split(secret).join("***");
+      }
+      sendError(res, 400, detail);
     }
   });
 
@@ -822,9 +929,11 @@ export function createHttpServer(deps: HttpDeps) {
 
     const result = await probeProvider(probe, kind as ProviderProbeKind);
     const source = typeof entry.source === "string" ? providerStore.getSource(entry.source) : null;
+    const effectiveKey = probeApiKey(probe);
     const secrets = [
       typeof source?.apiKey === "string" ? source.apiKey : "",
       typeof entry.apiKey === "string" ? entry.apiKey : "",
+      effectiveKey,
     ];
     sendJson(res, 200, redactProbeResult(result, secrets));
   });
@@ -1117,6 +1226,19 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   /**
+   * 重新读盘并重建这一档。failed 的档修好文件后用它恢复，不必重启整个服务；
+   * 正在被会话使用（`lock.isInUse`）时拒绝，避免把在途那一轮的引擎换掉。
+   */
+  router.post(`${API_PREFIX}/profiles/:id/reload`, async (_req, res, params) => {
+    try {
+      const profile = await profiles.reload(params.id);
+      sendJson(res, 200, { profile });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /**
    * 删除一份配置档：先从服务里摘掉，再删掉它的整个目录（`config.json` 与插件数据）。
    *
    * 顺序不可反：摘除可能失败（还被一次对话占着、插件卸载抛错），那时磁盘必须原封不动；
@@ -1126,6 +1248,27 @@ export function createHttpServer(deps: HttpDeps) {
     try {
       if (profiles.status(params.id) === null) {
         return sendError(res, 404, `没有这份配置: ${params.id}`);
+      }
+      // 适配器与计划任务各自保存着 profile 引用；直接删档会让它们静默失效，
+      // 用户只会在下一次收消息/到点时看到失败。先点名，和人格删除的保护同一条原则。
+      const boundAdapters = adapters
+        .list()
+        .filter((adapter) => adapter.profile === params.id)
+        .map((adapter) => adapter.id);
+      const boundCron = scheduler
+        .list()
+        .filter((job) => job.profile === params.id)
+        .map((job) => job.name);
+      if (boundAdapters.length > 0 || boundCron.length > 0) {
+        const parts = [
+          ...(boundAdapters.length > 0 ? [`接入平台「${boundAdapters.join("、")}」`] : []),
+          ...(boundCron.length > 0 ? [`计划任务「${boundCron.join("、")}」`] : []),
+        ];
+        return sendError(
+          res,
+          409,
+          `配置「${params.id}」仍被${parts.join("、")}使用；请先解绑/删除这些引用再删档`,
+        );
       }
       const removed = await profiles.remove(params.id);
       if (!removed) {
@@ -1138,8 +1281,9 @@ export function createHttpServer(deps: HttpDeps) {
   });
 
   const server = createServer(async (req, res) => {
+    applySecurityHeaders(res);
     try {
-      const { pathname } = new URL(requestUrl(req), baseUrlOf(req));
+      const { pathname } = requestUrlObject(req);
       // 判据是「路径是否在 API 前缀下」，而不是「有没有命中路由」。
       // 否则未知 API 路径会先回 404，匿名调用者就能靠 401/404 的差异
       // 枚举出哪些端点是存在的。放在路由匹配之前，新增路由也默认受保护（fail closed）。
@@ -1173,6 +1317,9 @@ export function createHttpServer(deps: HttpDeps) {
     const staticDir = config.auth.staticDir;
     const filePath = resolveStaticPath(staticDir, pathname);
     if (filePath === null) return sendError(res, 403, "非法路径");
+    // `staticDir` 是部署配置：如果它被指到仓库根（或目录里有一条指向配置/数据的
+    // symlink），静态托管会把明文口令与 API key 匿名发出去。这里按**真实路径**挡一次。
+    if (isSensitiveStaticPath(filePath, config)) return sendError(res, 403, "非法路径");
 
     const file = statFile(filePath) ? filePath : null;
     if (file) return sendFile(req, res, file);
@@ -1190,6 +1337,7 @@ export function createHttpServer(deps: HttpDeps) {
   const wss = new WebSocketServer({
     server,
     path: WS_PATH,
+    maxPayload: WS_MAX_PAYLOAD_BYTES,
     verifyClient: ({ req }: { req: IncomingMessage }) => {
       const token = parseCookies(req)[cookieName];
       return Boolean(token && auth.getByToken(token));
@@ -1223,6 +1371,15 @@ export function createHttpServer(deps: HttpDeps) {
   wss.on("connection", (ws, req) => {
     const token = parseCookies(req)[cookieName] ?? "";
     clients.set(ws, token);
+    /**
+     * **每一条连接都必须自己接 `error`**。`wss.on("error")` 只接服务端级错误；
+     * 协议错误、超过 `maxPayload`、receiver/sender 故障都会在连接对象上 `emit("error")`，
+     * 而 EventEmitter 对「没人听的 error」的规矩是抛出去 —— 那是未捕获异常，进程当场退出，
+     * `app.stop()` 一步都不跑。这里只记录：`ws` 自己会收尾这条连接，发送侧不需要替它关。
+     */
+    ws.on("error", (err) => {
+      logger.warn(`WebSocket 连接出错: ${errorMessage(err)}`);
+    });
     ws.on("message", (raw) => {
       let frame: unknown;
       try {
@@ -1244,7 +1401,26 @@ export function createHttpServer(deps: HttpDeps) {
 
   const broadcast = (frame: ServerFrame) => {
     const data = JSON.stringify(frame);
-    for (const ws of clients.keys()) {
+    for (const [ws, token] of clients) {
+      // WS 握手之后不再走 HTTP 中间件，所以这里必须自己校验一次；`peekByToken`
+      // 不滑动 lastSeen，空闲连接不能靠「服务端在推消息」无限续命。
+      if (!auth.peekByToken(token)) {
+        if (ws.readyState === ws.OPEN) {
+          ws.send(
+            JSON.stringify({ type: "unauthorized", reason: "登录态已过期" } satisfies ServerFrame),
+          );
+        }
+        ws.close();
+        clients.delete(ws);
+        continue;
+      }
+      // 慢客户端积压到上限后直接掐掉这条连接；`ws.send` 是同步排队，不处理会一直吃内存。
+      if (ws.bufferedAmount > WS_MAX_BUFFERED_BYTES) {
+        logger.warn("WebSocket 客户端积压过多，已断开");
+        ws.terminate();
+        clients.delete(ws);
+        continue;
+      }
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
   };
@@ -1362,13 +1538,18 @@ function requestUrl(req: IncomingMessage): string {
   return req.url ?? "/";
 }
 
-function baseUrlOf(req: IncomingMessage): string {
-  return `http://${req.headers.host ?? ""}`;
+/**
+ * 解析请求 URL。**刻意不用 Host 头拼 base**：`Host: [` 这类畸形值会让 `new URL`
+ * 抛错，匿名请求就能把每条请求变成 500 + 一条 error 堆栈；路由只看 pathname/search，
+ * 固定一个合法 base 就够了。绝对形式的请求目标仍会覆盖 base。
+ */
+function requestUrlObject(req: IncomingMessage): URL {
+  return new URL(requestUrl(req), "http://localhost");
 }
 
 /** 从查询串里取 `cascade` 之类的开关。 */
 function searchOf(req: IncomingMessage): URLSearchParams {
-  return new URL(requestUrl(req), baseUrlOf(req)).searchParams;
+  return requestUrlObject(req).searchParams;
 }
 
 /**
@@ -1395,6 +1576,38 @@ function pageOptions(search: URLSearchParams): PageOptions {
  */
 function readModel(body: Record<string, unknown>): string | undefined {
   return typeof body.model === "string" ? body.model : undefined;
+}
+
+/** 实现类上的实际密钥；`ProviderImpl` 不声明它，所以这里按运行时形状收窄。 */
+function probeApiKey(provider: unknown): string {
+  const value =
+    provider !== null && typeof provider === "object"
+      ? (provider as { apiKey?: unknown }).apiKey
+      : undefined;
+  return typeof value === "string" ? value : "";
+}
+
+/** 真实路径（不存在或是断链时退回规范化路径），用于识别 symlink 指向的敏感文件。 */
+function realPath(filePath: string): string {
+  try {
+    return realpathSync(filePath);
+  } catch {
+    return resolve(filePath);
+  }
+}
+
+/**
+ * 静态托管不得返回的路径：`atri.config.json`（明文管理员口令）、`data/` 下的
+ * 供应商密钥/适配器 token/会话库，以及 `.env`。默认 `staticDir` 是 dist，本函数
+ * 没有副作用；它兜的是「把 staticDir 误指到仓库根」和「dist 里有恶意/误建 symlink」。
+ */
+function isSensitiveStaticPath(filePath: string, config: AppConfig): boolean {
+  const target = realPath(filePath);
+  const dataDir = realPath(config.dataDir);
+  if (target === dataDir || target.startsWith(`${dataDir}${sep}`)) return true;
+  if (target === realPath(configFilePath(config.root))) return true;
+  if (target === realPath(resolve(config.root, ".env"))) return true;
+  return false;
 }
 
 /**

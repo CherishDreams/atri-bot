@@ -155,6 +155,14 @@ interface PluginRecord {
   /** 插件自报的 id；在拿到它之前就失败时为 `null`。对外的键是 `meta.id`。 */
   id: string | null;
   /**
+   * 这条记录是否**占用**它的 id。
+   *
+   * 冲突被拒的那一条也带着自报 id（让操作者看得见「是谁想用这个名字」），但它没有拿到
+   * `<dataRoot>/<id>` 的钥匙：占用者仍是先登记的那一条。`#find()` 与冲突判据都只看占用者；
+   * 否则一个 failed 的落选者会永久挡住赢家的 reload。
+   */
+  ownsId: boolean;
+  /**
    * 实例化成功后的定义。**失败记录一定是 `null`** —— 于是 `#teardown()` 绝不会把一个
    * 从没构造完的实例的 `teardown()` 调出去：插件作者有理由假设它至多跑一次、且只在成功
    * `setup()` 之后跑。
@@ -213,6 +221,19 @@ function resolvePluginTools(
     }
     if (typeof tool.run !== "function") {
       throw new ApiError(`插件「${pluginId}」的工具「${tool.id}」缺少 run()`, 400);
+    }
+    if (typeof tool.description !== "string" || tool.description.trim() === "") {
+      throw new ApiError(`插件「${pluginId}」的工具「${tool.id}」缺少 description`, 400);
+    }
+    if (
+      tool.parameters === null ||
+      typeof tool.parameters !== "object" ||
+      Array.isArray(tool.parameters)
+    ) {
+      throw new ApiError(`插件「${pluginId}」的工具「${tool.id}」缺少 parameters 对象`, 400);
+    }
+    if (tool.name !== undefined && typeof tool.name !== "string") {
+      throw new ApiError(`插件「${pluginId}」的工具「${tool.id}」的 name 必须是字符串`, 400);
     }
     if (seen.has(tool.id)) {
       throw new ApiError(`插件「${pluginId}」重复声明了工具「${tool.id}」`, 400);
@@ -303,7 +324,9 @@ export class PluginManager {
   async #scanDir(dir: string): Promise<void> {
     let entries;
     try {
-      entries = await readdir(dir);
+      // 排序不是审美：同 id 冲突时「先到先得」的赢家必须跨机器、跨文件系统一致，
+      // 而 readdir 的顺序只保证是目录序，不保证稳定。
+      entries = (await readdir(dir)).toSorted();
     } catch {
       return; // 插件目录不存在是可以接受的
     }
@@ -344,6 +367,8 @@ export class PluginManager {
     // 只在我们真的拿到过一个定义之后才填它：失败记录要靠它维持对外的 id 与名字，
     // 而「导出没有 id」那种失败本来就没有 id 可维持，退回目录名才是对的。
     let declared: PluginDefinition | null = null;
+    // 一旦 id 通过校验就默认占用；只有「撞上另一个占用者」的失败要把它退回 false。
+    let ownsId = false;
     try {
       const module = await this.#importFresh(join(dir, "index.js"));
       // 插件是用户手写的 JS，模块形状只能在运行时收窄：默认导出优先，
@@ -354,8 +379,11 @@ export class PluginManager {
       ) as PluginDefinition;
       // 消息用目录名而不是 `resolve()` 之后的绝对路径：操作者按目录名辨认插件
       // （`meta.dir` 就是它，控制台已经在显示），绝对路径在容器里只是一串没人抄的字符。
-      if (!plugin?.id) {
-        throw new ApiError(`插件缺少 id：目录「${basename(dir)}」下的 index.js 没有导出 id`, 400);
+      if (typeof plugin?.id !== "string" || plugin.id.length === 0) {
+        throw new ApiError(
+          `插件缺少 id：目录「${basename(dir)}」下的 index.js 没有导出字符串 id`,
+          400,
+        );
       }
       const id = plugin.id;
       // id 会进日志、进 `list_plugins` 的模型可见文本、进 `ctx.dataDir` 的路径组件，
@@ -365,16 +393,21 @@ export class PluginManager {
       // 从这一行起，失败记录可以沿用插件自报的 id 与名字（被冲突拒掉的那一条也要让操作者
       // 看得见「是谁、声明了哪个 id」）。上面那道校验已经保证这个 id 拿得出手。
       declared = plugin;
+      ownsId = true;
 
       // **另一个目录**声明了同一个 id 就拒绝。id 是 `ctx.dataDir` 的唯一坐标（目录键只用来
       // 定位槽位），所以两条同 id 的记录会拿到同一个数据目录 —— 后加载的那个因此经框架之手
       // 读到前一个插件存的 token 与用户数据。这不是沙箱能补救的事，只能不让它发生。
       // 判据含失败与被禁用的记录（不只是 active）：先到先得是确定的规则，
-      // 「谁活着谁优先」会让同一对插件在重启后互换。
+      // 「谁活着谁优先」会让同一对插件在重启后互换。failed 也必须算冲突：它的 setup()
+      // 可能已经碰过 <dataRoot>/<id>，把它让给另一个目录就是主动交出那份数据。
+      // 但**被冲突拒掉的失败记录不是占用者**（ownsId=false），否则它会反过来挡住
+      // 赢家的 reload。`r.dir !== dir` 那一条让同一目录的重载不受影响。
       const clash = [...this.#records.values()].find(
-        (r) => r.id === id && r.dir !== dir && r.status !== "failed",
+        (r) => r.ownsId && r.id === id && r.dir !== dir,
       );
       if (clash) {
+        ownsId = false;
         throw new ApiError(
           `插件 id "${id}" 与已加载的插件冲突（目录「${basename(clash.dir)}」已经声明了它）`,
           400,
@@ -466,6 +499,7 @@ export class PluginManager {
       const record: PluginRecord = {
         dir,
         id,
+        ownsId: true,
         plugin,
         ctx,
         tools,
@@ -486,7 +520,10 @@ export class PluginManager {
       // 而这里注定存在，握着引用比再查一次更清楚。
       return this.#view(record);
     } catch (err) {
-      this.#records.set(dir, this.#failedRecord(dir, errorMessage(err), declared, settings));
+      this.#records.set(
+        dir,
+        this.#failedRecord(dir, errorMessage(err), declared, settings, ownsId),
+      );
       throw err;
     }
   }
@@ -500,12 +537,14 @@ export class PluginManager {
     reason: string,
     declared: PluginDefinition | null,
     settings: PluginSettingsSchema,
+    ownsId: boolean,
   ): PluginRecord {
     const name = basename(dir);
     const id = declared?.id || name;
     return {
       dir,
       id: declared?.id ?? null,
+      ownsId,
       plugin: null,
       ctx: null,
       tools: [],
@@ -537,6 +576,7 @@ export class PluginManager {
     return {
       dir,
       id: plugin.id,
+      ownsId: true,
       plugin: null,
       ctx: null,
       tools: [],
@@ -667,14 +707,19 @@ export class PluginManager {
    * 而这一层没有按 id 高频读的路径（`list()` 才是主用途）。
    *
    * 两条记录可以共有同一个 `meta.id`：被冲突拒绝的那一条也带着它自报的 id（这样操作者才看得懂
-   * 失败原因）。那种情况下这里返回**先登记**的那一条 —— 按 id 的 reload/unload/enable 因此都
-   * 落在赢家身上，输家那条 `failed` 记录要等操作者先处理掉赢家才会重新可达。
+   * 失败原因）。那种情况下这里优先返回 `ownsId` 的那一条 —— 按 id 的 reload/unload/enable
+   * 因此都落在赢家身上；赢家被卸载后才退回落选者，方便操作者把它清理掉。
    */
   #find(id: string): PluginRecord | null {
+    // 先找真正占用这个 id 的记录；冲突落选者只作为兜底（例如赢家已经被卸载，
+    // 而操作者还要按控制台显示的那个 id 把它清理掉）。
+    let fallback: PluginRecord | null = null;
     for (const rec of this.#records.values()) {
-      if (rec.meta.id === id) return rec;
+      if (rec.meta.id !== id) continue;
+      if (rec.ownsId) return rec;
+      fallback ??= rec;
     }
-    return null;
+    return fallback;
   }
 
   get(id: string): PluginView | null {

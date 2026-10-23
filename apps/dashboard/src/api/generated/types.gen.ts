@@ -178,10 +178,9 @@ export type ProviderInput = {
     source?: string;
     name?: string;
     /**
-     * 缺省为 true
+     * 缺省为 true。非布尔值会被 400 拒绝。
      */
     enabled?: boolean;
-    default?: boolean;
 };
 
 /**
@@ -1217,6 +1216,10 @@ export type LoginErrors = {
      * 请求体超过 1 MB 上限
      */
     413: ApiError;
+    /**
+     * 请求过于频繁（登录失败次数超过窗口上限时返回）。`Retry-After` 头给出建议等待秒数。
+     */
+    429: ApiError;
 };
 
 export type LoginError = LoginErrors[keyof LoginErrors];
@@ -1502,6 +1505,10 @@ export type SendMessageErrors = {
      * 请求体超过 1 MB 上限
      */
     413: ApiError;
+    /**
+     * 上游模型调用失败（网络、鉴权、限流、上游 5xx 等）。按 5xx 固定文案纪律，客户端只收到一句通用说明，详情在服务端日志。
+     */
+    502: ApiError;
     /**
      * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
      */
@@ -2849,3 +2856,43 @@ export type SetDefaultProviderResponses = {
 };
 
 export type SetDefaultProviderResponse = SetDefaultProviderResponses[keyof SetDefaultProviderResponses];
+
+export type ReloadProfileData = {
+    body?: never;
+    path: {
+        /**
+         * 配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/profiles/{id}/reload';
+};
+
+export type ReloadProfileErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+    /**
+     * 冲突。两个判据、三个出口共用这一个状态码，因为判据是同一条「现在不能动」：① 该会话有一次对话正在进行，此时**再发下一条**（`POST /sessions/{id}/messages` 与 `…/messages/stream`）会被拒；② 同一个判据下**删除该会话**也会被拒（`DELETE /sessions/{id}`）—— 那一轮之后的每次落库都会落到「会话不存在」，而已经生成的半轮无处可查；③ 要删除的配置还占着某个会话，等那轮对话结束后再来。锁在 `core/session/lock.ts` 的 `SessionLock`，由组合根构造并注入每个引擎，**不属于任何一份配置档**。
+     */
+    409: ApiError;
+};
+
+export type ReloadProfileError = ReloadProfileErrors[keyof ReloadProfileErrors];
+
+export type ReloadProfileResponses = {
+    /**
+     * 已重新读取；失败时 profile.status 为 failed 并带错误原因
+     */
+    200: {
+        profile: ProfileRecord;
+    };
+};
+
+export type ReloadProfileResponse = ReloadProfileResponses[keyof ReloadProfileResponses];

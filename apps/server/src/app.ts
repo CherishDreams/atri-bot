@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLogger, LogStore } from "./core/logger.ts";
@@ -422,7 +422,12 @@ export async function createApp(config: AppConfig) {
         : null;
     const personaId =
       typeof profile.personaId === "string" && profile.personaId ? profile.personaId : null;
-    const access = normalizeAccess(profile.access);
+    const access = normalizeAccess(profile.access, () => {
+      logger.warn(
+        `配置档「${id}」的 access 段格式不正确，已按「白名单拒绝、仅管理员放行」处理；` +
+          `修好 ${path} 或重新保存一次配置即可恢复`,
+      );
+    });
     if (personaId !== null && personas.get(personaId) === null) {
       logger.warn(`配置档「${id}」引用的人格「${personaId}」不存在，本轮起不注入人格提示`);
     }
@@ -581,9 +586,11 @@ export async function createApp(config: AppConfig) {
     async setDefaultProvider(id, providerId) {
       assertProfileId(id);
       if (!states.has(id)) throw new ApiError(`没有这份配置: ${id}`, 404);
-      if (providerId !== null && providerConfig.getProvider(providerId) === null) {
+      // 用**注册表**而不是配置文件判：配置里写着但没加载成功/已禁用的实例，选它只会让
+      // 每条消息静默回退到别的 provider。界面必须立刻拿到 400。
+      if (providerId !== null && providers.get(providerId) === null) {
         throw new ApiError(
-          `全局供应商清单里没有 provider「${providerId}」，不能把它设成这份配置的默认`,
+          `全局供应商清单里没有 provider「${providerId}」，或它未加载成功/已禁用，不能把它设成这份配置的默认`,
           400,
         );
       }
@@ -661,11 +668,11 @@ export async function createApp(config: AppConfig) {
         if (typeof value !== "string" && value !== null) {
           throw new ApiError("`defaultProvider` 必须是字符串或 null", 400);
         }
-        if (value !== null && providerConfig.getProvider(value) === null) {
-          // 与 `setDefaultProvider` 同一句判据：让它指着一个不存在的实例，症状不是报错而是
-          // 每条消息静默落到注册表的回退上 —— 界面显示你选了 A，回的却是全局默认那个。
+        if (value !== null && providers.get(value) === null) {
+          // 与 `setDefaultProvider` 同一句判据：让它指着一个不存在、未加载或已禁用的实例，
+          // 症状不是报错而是每条消息静默落到注册表的回退上 —— 界面显示你选了 A，回的却是别的。
           throw new ApiError(
-            `全局供应商清单里没有 provider「${value}」，不能把它设成这份配置的默认`,
+            `全局供应商清单里没有 provider「${value}」，或它未加载成功/已禁用，不能把它设成这份配置的默认`,
             400,
           );
         }
@@ -689,7 +696,11 @@ export async function createApp(config: AppConfig) {
         nextSteps = value;
       }
 
-      const tools = asToggles(body.tools, "tools", "工具", (tid) => bundle.tools.get(tid) !== null);
+      const tools = asToggles(body.tools, "tools", "工具", (tid) => {
+        const tool = bundle.tools.get(tid);
+        // 内部工具由引擎无条件声明，不进入用户开关；允许写进来只会制造一个永远不会生效的键。
+        return tool !== null && tool.internal !== true;
+      });
       const plugins = asToggles(
         body.plugins,
         "plugins",
@@ -758,6 +769,19 @@ export async function createApp(config: AppConfig) {
       }
       return { failed };
     },
+    async reload(id) {
+      assertProfileId(id);
+      if (!states.has(id)) throw new ApiError(`没有这份配置: ${id}`, 404);
+      if (lock.isInUse(id)) {
+        throw new ApiError("这份配置正被会话使用，等那一轮对话结束后再重载", 409);
+      }
+      await closeProfile(id);
+      // `openProfile` 失败时会把这一档登记成 failed，返回的记录仍然要带上原因；
+      // 这一档的旧插件实例已经在 closeProfile 里卸掉，不能假装还能回滚。
+      await openProfile(id);
+      logger.info(`配置档已重载: ${id}`);
+      return recordOf(id);
+    },
     async remove(id) {
       assertProfileId(id);
       // 占用检查与摘除之间不能有 await：否则一次新对话可以恰好插进这两步之间，
@@ -770,6 +794,55 @@ export async function createApp(config: AppConfig) {
       // 它自己的目录（config.json + plugins 数据）才跟着消失。
       removeProfileDir(profilesDir, id);
       return true;
+    },
+    clearDefaultProviders(providerIds) {
+      const targets = new Set(providerIds);
+      const cleared: string[] = [];
+      for (const id of states.keys()) {
+        const path = profileConfigPath(profilesDir, id);
+        const bundle = bundles.get(id);
+        let fileRef: string | undefined;
+        try {
+          const file = readProfileConfig(path);
+          if (typeof file.defaultProvider === "string") fileRef = file.defaultProvider;
+        } catch {
+          // 坏文件已经没有可坚持的引用；运行态若是 ready 仍按 bundle 清。
+        }
+        const runtimeRef = bundle?.defaultProviderId ?? null;
+        const stateRef = states.get(id)?.defaultProviderId ?? null;
+        if (
+          (fileRef === undefined || !targets.has(fileRef)) &&
+          !targets.has(runtimeRef ?? "") &&
+          !targets.has(stateRef ?? "")
+        ) {
+          continue;
+        }
+        if (fileRef !== undefined && targets.has(fileRef)) {
+          try {
+            updateProfileConfig(path, (file) => {
+              if (typeof file.defaultProvider === "string" && targets.has(file.defaultProvider)) {
+                delete file.defaultProvider;
+              }
+            });
+          } catch (err) {
+            logger.error(`清除配置档「${id}」的 provider 默认引用失败: ${errorMessage(err)}`);
+            // 文件没改成，但运行态仍必须立刻停止使用一个已经被删掉的 provider；
+            // 文件里的旧引用只能等操作者修好写权限后再保存/手工清理。
+          }
+        }
+        if (bundle && runtimeRef !== null && targets.has(runtimeRef)) {
+          bundle.defaultProviderId = null;
+          // 引擎才是发消息时真正读的那一个；只改 bundle 会留下「界面没了默认、
+          // 下一条消息还打旧模型」的错位。
+          bundle.engine.defaultProviderId = null;
+        }
+        const state = states.get(id);
+        if (state && state.defaultProviderId !== null && targets.has(state.defaultProviderId)) {
+          states.set(id, { ...state, defaultProviderId: null });
+        }
+        cleared.push(id);
+      }
+      return cleared.toSorted();
     },
   };
 
@@ -896,6 +969,11 @@ export async function createApp(config: AppConfig) {
     logger,
     resolveProfile,
     createAdapter,
+    // 适配器的会话映射在 `data/adapters/<id>/sessions.json`；删除实例时连目录一起清。
+    // 已存在的内部会话本身留在全局 sqlite 里（它们可能还被控制台直接打开），只清映射。
+    removeAdapterState: (id) => {
+      rmSync(join(config.dataDir, "adapters", id), { recursive: true, force: true });
+    },
   });
   adapterRuntime = adapters;
 

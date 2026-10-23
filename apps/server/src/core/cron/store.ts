@@ -97,31 +97,42 @@ export class CronStore {
       lastStatus: null,
       lastError: null,
     };
-    this.#jobs.set(job.id, job);
-    this.#persist();
+    const next = new Map(this.#jobs);
+    next.set(job.id, job);
+    // 与 AdapterConfigStore 同一条：写盘成功之后才把新表交给读路径。
+    // 文件坏掉时 `#persistJobs` 会先抛，内存表保持原样。
+    this.#persistJobs(next);
+    this.#jobs = next;
     return { ...job };
   }
 
   update(id: string, fields: CronJobFields): CronJobRecord {
     const current = this.#jobs.get(id);
     if (current === undefined) throw new ApiError("没有这条计划任务", 404);
-    const next: CronJobRecord = { ...current, ...fields };
-    this.#jobs.set(id, next);
-    this.#persist();
-    return { ...next };
+    const nextRecord: CronJobRecord = { ...current, ...fields };
+    const next = new Map(this.#jobs);
+    next.set(id, nextRecord);
+    this.#persistJobs(next);
+    this.#jobs = next;
+    return { ...nextRecord };
   }
 
   remove(id: string): boolean {
-    if (!this.#jobs.delete(id)) return false;
-    this.#persist();
+    if (!this.#jobs.has(id)) return false;
+    const next = new Map(this.#jobs);
+    next.delete(id);
+    this.#persistJobs(next);
+    this.#jobs = next;
     return true;
   }
 
   setSession(id: string, sessionId: string): void {
     const job = this.#jobs.get(id);
     if (job === undefined) return;
-    job.sessionId = sessionId;
-    this.#persist();
+    const next = new Map(this.#jobs);
+    next.set(id, { ...job, sessionId });
+    this.#persistJobs(next);
+    this.#jobs = next;
   }
 
   recordRun(
@@ -130,10 +141,15 @@ export class CronStore {
   ): void {
     const job = this.#jobs.get(id);
     if (job === undefined) return;
-    job.lastRunAt = result.at;
-    job.lastStatus = result.status;
-    job.lastError = result.error;
-    this.#persist();
+    const next = new Map(this.#jobs);
+    next.set(id, {
+      ...job,
+      lastRunAt: result.at,
+      lastStatus: result.status,
+      lastError: result.error,
+    });
+    this.#persistJobs(next);
+    this.#jobs = next;
   }
 
   #load(): void {
@@ -163,12 +179,12 @@ export class CronStore {
     }
   }
 
-  #persist(): void {
+  #persistJobs(jobs: Map<string, CronJobRecord>): void {
     if (this.#broken) {
       throw new ApiError("计划任务文件读取失败，修好它之前不能写入", 500);
     }
     try {
-      writeConfigFileAt(this.#filePath, { jobs: this.list() });
+      writeConfigFileAt(this.#filePath, { jobs: [...jobs.values()].map((job) => ({ ...job })) });
     } catch (err) {
       this.#logger.error(`写入计划任务失败: ${errorMessage(err)}`);
       throw new ApiError("保存计划任务失败，详情见服务端日志", 500, { cause: err });

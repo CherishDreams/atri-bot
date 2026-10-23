@@ -107,9 +107,46 @@ test("空参数串按无参数处理，结果超长会截断并注明原长", as
   assert.deepEqual(seenArgs, {}, "空 arguments 应当收成 {}（不少网关在无参数时就这么发）");
   assert.equal(empty.isError, undefined);
 
-  const long = await reg.run(call("probe", "{}"), 100);
+  const long = await reg.run(call("probe", "{}"), { limitChars: 100 });
   assert.ok(long.content.startsWith("x".repeat(100)));
   assert.match(long.content, /结果已截断，原长 500 字符/);
+});
+
+test("工具超时、取消与非字符串返回值都变成 isError，而不是穿过 run 契约", async () => {
+  const reg = new ToolRegistry();
+  reg.register({
+    ...probeTool(() => new Promise<string>(() => {})),
+    timeoutMs: 20,
+  });
+  const timed = await reg.run(call("probe", "{}"));
+  assert.equal(timed.isError, true);
+  assert.match(timed.content, /执行超时（20ms）/);
+
+  reg.register({
+    ...probeTool(() => new Promise<string>(() => {})),
+    id: "wait",
+  });
+  const controller = new AbortController();
+  const pending = reg.run(call("wait", "{}"), { signal: controller.signal });
+  controller.abort();
+  const cancelled = await pending;
+  assert.equal(cancelled.isError, true);
+  assert.match(cancelled.content, /工具执行已取消/);
+
+  reg.register({
+    // 插件可能在运行时返回同步值；注册表不能对返回值直接调 `.then`。
+    ...probeTool((() => "同步结果") as unknown as ToolDefinition["run"]),
+    id: "sync",
+  });
+  assert.equal((await reg.run(call("sync", "{}"))).content, "同步结果");
+
+  reg.register({
+    ...probeTool(async () => 123 as unknown as string),
+    id: "bad-return",
+  });
+  const bad = await reg.run(call("bad-return", "{}"));
+  assert.equal(bad.isError, true, "插件返回非字符串时不能抛 TypeError");
+  assert.match(bad.content, /返回值不是字符串/);
 });
 
 test("内置 current_time 能跑，非法时区兜成 isError 而不是抛出", async () => {

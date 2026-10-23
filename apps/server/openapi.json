@@ -518,6 +518,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           }
         }
       }
@@ -819,6 +822,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamFailure"
           },
           "503": {
             "$ref": "#/components/responses/ProfileUnavailable"
@@ -2282,6 +2288,46 @@
           }
         }
       }
+    },
+    "/profiles/{id}/reload": {
+      "post": {
+        "operationId": "reloadProfile",
+        "summary": "重新读盘并重建一份配置档",
+        "description": "修好 failed 档的文件、或者想在不重启服务的情况下重新加载插件时用它。\n被会话占用时回 409（不替换在途那一轮的引擎）；重载失败不会删除文件，结果里的 `status: failed` 与 `error` 会如实返回。",
+        "tags": ["profiles"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProfileId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已重新读取；失败时 profile.status 为 failed 并带错误原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["profile"],
+                  "properties": {
+                    "profile": {
+                      "$ref": "#/components/schemas/ProfileRecord"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2424,6 +2470,26 @@
       },
       "ProfileUnavailable": {
         "description": "这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "请求过于频繁（登录失败次数超过窗口上限时返回）。`Retry-After` 头给出建议等待秒数。",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "UpstreamFailure": {
+        "description": "上游模型调用失败（网络、鉴权、限流、上游 5xx 等）。按 5xx 固定文案纪律，客户端只收到一句通用说明，详情在服务端日志。",
         "content": {
           "application/json": {
             "schema": {
@@ -2734,10 +2800,7 @@
           },
           "enabled": {
             "type": "boolean",
-            "description": "缺省为 true"
-          },
-          "default": {
-            "type": "boolean"
+            "description": "缺省为 true。非布尔值会被 400 拒绝。"
           }
         }
       },

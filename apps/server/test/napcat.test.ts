@@ -12,7 +12,7 @@ import type { Logger } from "#core/logger.ts";
 import type { AdapterTarget } from "#adapters/manager.ts";
 import type { ConversationSessions } from "#adapters/message.ts";
 import { NapCatAdapter } from "#adapters/napcat.ts";
-import { parseOneBotMessage } from "#adapters/onebot11.ts";
+import { downloadOneBotImage, parseOneBotMessage } from "#adapters/onebot11.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
 /**
@@ -69,6 +69,42 @@ test("parseOneBotMessage：文本、at、图片引用与无来源图片的占位
     text: "",
     images: [],
   });
+});
+
+test("downloadOneBotImage：超限响应在读取中途被掐断，元数据地址被拒绝", async (t) => {
+  const server = createServer((req, res) => {
+    res.on("error", () => {});
+    if (req.url === "/redirect") {
+      res.writeHead(302, { location: "http://169.254.169.254/latest/meta-data" });
+      res.end();
+      return;
+    }
+    // 故意不发 content-length：旧实现的 `arrayBuffer()` 会把整段都收进内存。
+    res.writeHead(200, { "content-type": "image/png" });
+    const chunk = Buffer.alloc(1024 * 1024, 0);
+    for (let i = 0; i < 5; i += 1) res.write(chunk);
+    res.end();
+  });
+  server.on("error", () => {});
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const port = (server.address() as AddressInfo).port;
+
+  await assert.rejects(
+    () => downloadOneBotImage(`http://127.0.0.1:${port}/big`),
+    /图片超过 4 MiB 上限/,
+    "没有 content-length 的超大响应也必须被中断",
+  );
+  await assert.rejects(
+    () => downloadOneBotImage(`http://127.0.0.1:${port}/redirect`),
+    /受限网络/,
+    "重定向到云元数据地址必须被拒",
+  );
+  await assert.rejects(
+    () => downloadOneBotImage("http://169.254.169.254/latest/meta-data"),
+    /受限网络/,
+    "直接指向 link-local 的地址必须被拒",
+  );
 });
 
 interface Action {

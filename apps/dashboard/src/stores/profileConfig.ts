@@ -95,6 +95,12 @@ function diffToggles(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/**
+ * 配置档草稿的请求代际。放在模块级而不是 state 里：它只用于丢弃过期响应，
+ * 不参与渲染；放进 Pinia state 反而会让它成为一份可被持久化/观察的第二状态。
+ */
+let loadSeq = 0;
+
 function patchOf(original: Draft, draft: Draft): ProfileConfigPatch {
   const patch: ProfileConfigPatch = {};
   if (original.defaultProviderId !== draft.defaultProviderId) {
@@ -159,21 +165,41 @@ export const useProfileConfigStore = defineStore("profileConfig", {
 
   actions: {
     async load(profileId: string): Promise<boolean> {
+      const seq = ++loadSeq;
+      // 先清掉旧档的 loaded/draft/original，再发请求：切档请求失败时页面必须显示
+      // 「这一档不可用」，不能把上一份档的 panel 留在屏幕上让用户对着它保存。
+      this.profileId = profileId;
+      this.loaded = null;
+      this.draft = null;
+      this.original = null;
       this.loading = true;
       this.error = null;
       try {
         const config = await api.getProfileConfig(profileId);
-        this.profileId = profileId;
+        if (seq !== loadSeq) return false;
         this.loaded = config;
         this.draft = draftOf(config);
         this.original = draftOf(config);
         return true;
       } catch (err) {
+        if (seq !== loadSeq) return false;
         this.error = (err as Error).message;
         return false;
       } finally {
-        this.loading = false;
+        // 旧请求晚到不能把新请求的 loading 关掉。
+        if (seq === loadSeq) this.loading = false;
       }
+    },
+
+    /** 没有当前档时清空草稿；也会作废任何在途的加载响应。 */
+    clear(): void {
+      loadSeq += 1;
+      this.profileId = null;
+      this.loaded = null;
+      this.draft = null;
+      this.original = null;
+      this.loading = false;
+      this.error = null;
     },
 
     setDefaultProvider(providerId: string | null): void {

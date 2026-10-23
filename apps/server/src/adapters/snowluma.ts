@@ -15,6 +15,19 @@ export const SNOWLUMA_TYPE = "snowluma";
 /** 连接断开后的重试间隔。固定值先够用；以后需要再按指数退避。 */
 export const SNOWLUMA_RECONNECT_MS = 3_000;
 
+/** 日志/错误里不展示 URL 的 query 与 userinfo：token 可能被用户塞在那里。 */
+function safeUrlForLog(value: string): string {
+  try {
+    const url = new URL(value);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    return url.toString();
+  } catch {
+    return "(无效 URL)";
+  }
+}
+
 export interface SnowLumaAdapterOptions extends Omit<OneBot11AdapterOptions, "platformName"> {
   /** SnowLuma 暴露的 WebSocket 地址，例如 ws://127.0.0.1:3001/ws。 */
   url: string;
@@ -63,7 +76,7 @@ export class SnowLumaAdapter extends OneBot11Adapter {
     try {
       parsed = new URL(this.#url);
     } catch (err) {
-      throw new Error(`SnowLuma WebSocket URL 无效：${this.#url}`, { cause: err });
+      throw new Error(`SnowLuma WebSocket URL 无效：${safeUrlForLog(this.#url)}`, { cause: err });
     }
     if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
       throw new Error("SnowLuma WebSocket URL 必须以 ws:// 或 wss:// 开头");
@@ -71,7 +84,7 @@ export class SnowLumaAdapter extends OneBot11Adapter {
 
     this.#running = true;
     this.#stopping = false;
-    this.logger.info(`SnowLuma 正在连接 ${this.#url}`);
+    this.logger.info(`SnowLuma 正在连接 ${safeUrlForLog(this.#url)}`);
     this.#connect();
   }
 

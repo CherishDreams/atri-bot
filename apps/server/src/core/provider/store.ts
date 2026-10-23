@@ -429,6 +429,9 @@ export class ProviderConfigStore {
         if (typeof edit.enabled !== "boolean") fail("enabled", "enabled 必须是布尔值");
         next.enabled = edit.enabled;
       }
+      if (edit.default !== undefined && typeof edit.default !== "boolean") {
+        fail("default", "default 必须是布尔值");
+      }
       if (next.source) this.#assertSourceExists(config, next.source);
 
       const nextProviders = { ...providers, [id]: next };
@@ -472,7 +475,11 @@ export class ProviderConfigStore {
     provider.name = typeof input.name === "string" && input.name ? input.name : id;
     // 默认启用：AstrBot 的默认是 false，但那样一来「配置里明明有、就是选不到」
     // 会变成一个很难自查的困惑，而这里的默认值不该继承那种历史包袱。
-    provider.enabled = input.enabled === undefined ? true : Boolean(input.enabled);
+    // `Boolean("false") === true`，所以这里必须显式拒绝非布尔值，而不是强转。
+    if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
+      fail("enabled", "enabled 必须是布尔值");
+    }
+    provider.enabled = input.enabled ?? true;
     return provider;
   }
 

@@ -18,6 +18,9 @@ async function onSend(): Promise<void> {
   if (!text) return;
   draft.value = "";
   await sessions.send(props.profile, text);
+  // 与 chat 会话页同一条兜底：pre-stream 失败（会话创建/列表刷新）不抛异常，
+  // 只把原因放在 sessions.error；输入框要把用户刚打的字还回去。
+  if (sessions.error && !draft.value) draft.value = text;
 }
 
 /**

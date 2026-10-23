@@ -42,6 +42,7 @@ import {
   setAdapterEnabled as setAdapterEnabledOp,
   setDefaultProvider as setDefaultProviderOp,
   reloadPlugin as reloadPluginOp,
+  reloadProfile as reloadProfileOp,
   runCronJob as runCronJobOp,
   setPluginEnabled as setPluginEnabledOp,
   setToolEnabled as setToolEnabledOp,
@@ -669,4 +670,9 @@ export async function saveProfileConfig(id: string, patch: ProfileConfigPatch) {
  */
 export async function deleteProfile(id: string) {
   return body(await deleteProfileOp({ path: { id } }));
+}
+
+/** 重新读盘并重建这一档（failed 档修好文件后用它恢复，不必重启服务）。 */
+export async function reloadProfile(id: string) {
+  return body(await reloadProfileOp({ path: { id } }));
 }

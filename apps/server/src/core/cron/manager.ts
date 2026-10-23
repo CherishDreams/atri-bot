@@ -38,6 +38,8 @@ export class CronScheduler {
   #timer: unknown = null;
   #scheduled = new Map<string, number>();
   #running = new Set<string>();
+  /** 关停后即使有已经开始的 `runDue()` 结束，也不能再装一个新定时器。 */
+  #stopped = false;
 
   constructor({
     store,
@@ -58,10 +60,12 @@ export class CronScheduler {
   }
 
   start(): void {
+    this.#stopped = false;
     this.#reschedule();
   }
 
   stop(): void {
+    this.#stopped = true;
     if (this.#timer !== null) {
       this.#clearTimer(this.#timer);
       this.#timer = null;
@@ -208,12 +212,15 @@ export class CronScheduler {
     if (name.length > 80) throw new ApiError("任务名称最多 80 个字符", 400);
 
     const rawCron = typeof pick("cron") === "string" ? (pick("cron") as string).trim() : "";
-    let cron: string;
+    let cron = rawCron;
     try {
       cron = parseCron(rawCron).expression;
+      // 语法正确不等于可执行（例如 2 月 31 日）。在写入时就问一次下一个触发点，
+      // 否则任务会安静地永远不跑，只在 GET /cron 的 nextRunAt 里显示 null。
+      nextCronTime(parseCron(cron), this.#now());
     } catch (err) {
       if (err instanceof ApiError) throw err;
-      throw new ApiError("cron 格式不正确", 400);
+      throw new ApiError(`cron「${cron}」在一年内没有可执行时刻`, 400);
     }
 
     const prompt = typeof pick("prompt") === "string" ? (pick("prompt") as string).trim() : "";
@@ -237,6 +244,7 @@ export class CronScheduler {
       this.#clearTimer(this.#timer);
       this.#timer = null;
     }
+    if (this.#stopped) return;
     const now = this.#now();
     this.#scheduled = new Map();
     for (const job of this.#store.list()) {

@@ -355,6 +355,39 @@ test("档级默认与全局默认之间那一档：保存 defaultProvider 会同
   assert.equal("defaultProvider" in JSON.parse(h.raw()), false);
 });
 
+test("未加载成功或已禁用的 provider 不能设为全局默认，也不能设成档默认", async (t) => {
+  const h = await start(t);
+  assert.equal(
+    (
+      await h.post("/provider-sources", {
+        id: "s",
+        type: "openai",
+        baseUrl: "https://example.invalid/v1",
+      })
+    ).status,
+    201,
+  );
+  assert.equal((await h.post("/providers", { id: "p", source: "s", model: "m" })).status, 201);
+  assert.equal((await h.post("/providers/p", { enabled: false })).status, 200);
+
+  const asGlobal = await h.post("/providers/p", { default: true });
+  assert.equal(asGlobal.status, 400);
+  assert.match(String(asGlobal.body.error), /未加载|已禁用/);
+
+  const asProfileDefault = await h.post("/profiles/default/config", { defaultProvider: "p" });
+  assert.equal(asProfileDefault.status, 400);
+  assert.match(String(asProfileDefault.body.error), /未加载|已禁用/);
+
+  const viaEndpoint = await h.post("/profiles/default/default-provider", { providerId: "p" });
+  assert.equal(viaEndpoint.status, 400);
+  assert.match(String(viaEndpoint.body.error), /未加载|已禁用/);
+
+  // 启用之后又可用：拒绝不是永久黑名单。
+  assert.equal((await h.post("/providers/p", { enabled: true })).status, 200);
+  assert.equal((await h.post("/providers/p", { default: true })).status, 200);
+  assert.equal((await h.post("/profiles/default/config", { defaultProvider: "p" })).status, 200);
+});
+
 test("一颗起不来的插件：同一批里其他改动照常生效，失败点名在 `failed` 里", async (t) => {
   const h = await start(t, { tools: {} });
   const res = await h.post("/profiles/default/config", {
@@ -376,41 +409,89 @@ test("一颗起不来的插件：同一批里其他改动照常生效，失败�
 });
 
 /**
- * 这一条测的是**引擎里那一根线**：保存档默认之后，`AgentEngine` 用的就是新值，
- * 而不是等一次重载。它便宜但很准 —— 把那个 provider 实例从全局清单里删掉，注册表就空了，
- * 于是回复走回声兜底，而回声那句会**把它当时以为的模型名打出来**：
- * 写着 `[回声:p]` 说明引擎确实拿到了档默认 `p`，写着 `[回声:默认]` 就说明
- * `bundle.engine.defaultProviderId` 那行赋值被漏掉了（那是一句「界面上改了、
- * 下一条消息还是老样子」的 bug，别处测不到）。
+ * 引擎里那一根线：保存档默认之后，下一条不带 model 的消息要打到它。
+ *
+ * 这里用两个 provider：全局默认 q 指向一个假上游，档默认 p 指向不可达端口。
+ * 如果引擎没拿到档默认，请求会落到 q 并成功；只有真的拿到 p 才会得到一条带
+ * `provider「p」` 的错误。随后删除 p，档里的默认引用必须一起消失（再发消息走 q）。
  */
-test("保存档默认之后，下一条不带 model 的消息用的就是它（不靠重载）", async (t) => {
+test("保存档默认之后，下一条消息用的就是它；删除 provider 会清掉档里的引用", async (t) => {
   const h = await start(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).startsWith("https://stub.example/")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "来自 q" } }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return originalFetch(input, init);
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
   assert.equal(
     (
       await h.post("/provider-sources", {
-        id: "s",
+        id: "q-source",
+        type: "openai",
+        baseUrl: "https://stub.example/v1",
+      })
+    ).status,
+    201,
+  );
+  assert.equal(
+    (await h.post("/providers", { id: "q", source: "q-source", model: "m-q" })).status,
+    201,
+  );
+  assert.equal((await h.post("/providers/q", { default: true })).status, 200);
+
+  assert.equal(
+    (
+      await h.post("/provider-sources", {
+        id: "p-source",
         type: "openai",
         baseUrl: "http://127.0.0.1:9/v1",
       })
     ).status,
     201,
   );
-  assert.equal((await h.post("/providers", { id: "p", source: "s", model: "m" })).status, 201);
+  assert.equal(
+    (await h.post("/providers", { id: "p", source: "p-source", model: "m-p" })).status,
+    201,
+  );
   assert.equal((await h.post("/profiles/default/config", { defaultProvider: "p" })).status, 200);
-  // 删掉那个实例：注册表空了，回声兜底会把「引擎以为的模型」打在回复里。
-  assert.equal((await h.post("/providers/p", { name: "改名" })).status, 200);
+
+  const created = await h.post("/sessions", { title: "档默认" });
+  const sessionId = (created.body as { session: { id: string } }).session.id;
+  const pickedP = await h.post(`/sessions/${sessionId}/messages?profile=default`, {
+    content: "用档默认",
+  });
+  assert.equal(pickedP.status, 502, "p 不可达，应当报上游故障而不是偷偷走 q");
+  assert.match(
+    String((pickedP.body as { error?: string }).error),
+    /模型调用失败/,
+    "5xx 使用固定文案，详情只进日志",
+  );
+  assert.equal(h.raw().includes('"defaultProvider": "p"'), true);
+
   const del = await fetch(`${h.origin}/api/v1/providers/p`, {
     method: "DELETE",
     headers: { cookie: h.cookie },
   });
   assert.equal(del.status, 200);
+  assert.equal(h.raw().includes("defaultProvider"), false, "删除 provider 后档里的引用必须被清掉");
+  const profiles = (await h.get("/profiles")).body as {
+    profiles: { id: string; defaultProviderId: string | null }[];
+  };
+  assert.equal(profiles.profiles.find((row) => row.id === "default")?.defaultProviderId, null);
 
-  const created = await h.post("/sessions", { title: "档默认" });
-  const sessionId = (created.body as { session: { id: string } }).session.id;
-  const reply = await h.post(`/sessions/${sessionId}/messages?profile=default`, {
-    content: "你好",
-  });
-  const content = (reply.body as { message: { content: string } }).message.content;
-  assert.equal(reply.status, 200, content);
-  assert.match(content, /\[回声:p\]/, `引擎没用上档默认，实际回复是「${content}」`);
+  const next = await h.post(`/sessions/${sessionId}/messages?profile=default`, { content: "再问" });
+  assert.equal(next.status, 200);
+  assert.equal(
+    (next.body as { message: { content: string } }).message.content,
+    "来自 q",
+    "没有档默认后应当走全局默认 q，而不是残留的 p",
+  );
 });

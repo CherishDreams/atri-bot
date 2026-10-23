@@ -458,7 +458,7 @@ apps/server/openapi.json  -->  pnpm codegen  -->  apps/dashboard/src/api/generat
 | 检查                                  | 守住的东西                                                                              | 漏掉它会怎样                           |
 | ------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------- |
 | `test/openapi.test.ts`                | 路径与方法：注册的路由 ↔ 规格里的 path                                                  | 加了端点忘写规格 → 前端 SDK 少一个方法 |
-| `test/openapi-response-shape.test.ts` | **响应体字段**：真实驱动 27 个端点，逐字段比 `type`/`required`/`enum`/状态码            | 字段改了路径没变 → 前端类型骗人        |
+| `test/openapi-response-shape.test.ts` | **响应体字段**：真实驱动全部端点，逐字段比 `type`/`required`/`enum`/状态码              | 字段改了路径没变 → 前端类型骗人        |
 | `test/openapi-request.test.ts`        | **请求侧与鉴权侧**：省略必填必须 400、畸形 JSON 必须 400、匿名访问与规格的 401 双向一致 | 运行时校验被删 / 新路由忘了声明 401    |
 
 红了统一按这句话办：**改 `openapi.json`，然后 `pnpm codegen` 并提交生成物；不要为了让检查变绿去改这三个测试。**

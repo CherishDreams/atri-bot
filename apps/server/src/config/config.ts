@@ -63,6 +63,27 @@ export interface AppConfig {
  */
 const DEFAULT_ROOT = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
 
+/** 端口是手写配置里最容易写坏的一项；NaN/越界必须在启动时变成一句中文，而不是 listen 的 RangeError。 */
+function parsePort(raw: unknown): number {
+  const value =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim() !== ""
+        ? Number(raw)
+        : Number.NaN;
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new Error(`端口必须是 0–65535 的整数（当前 ${String(raw)}）`);
+  }
+  return value;
+}
+
+function assertString(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${name} 必须是非空字符串（当前 ${String(value)}）`);
+  }
+  return value;
+}
+
 export function loadConfig(): AppConfig {
   const root = resolve(process.env.ATRI_ROOT ?? DEFAULT_ROOT);
   // 读法只有一处：`readConfigFile()`。以前这里自己 `existsSync` + 自己 `JSON.parse`，
@@ -72,19 +93,31 @@ export function loadConfig(): AppConfig {
   const fileConfig = readConfigFile(root);
 
   const env = process.env;
+  const host = assertString(
+    env.ATRI_HOST ?? fileConfig.host ?? DEFAULT_SERVER_HOST,
+    "host/ATRI_HOST",
+  );
+  const dataDirRaw = env.ATRI_DATA_DIR ?? fileConfig.dataDir ?? "data";
+  if (typeof dataDirRaw !== "string") throw new Error("dataDir/ATRI_DATA_DIR 必须是字符串");
+  const pluginDirsRaw = fileConfig.pluginDirs ?? ["apps/server/plugins"];
+  if (!Array.isArray(pluginDirsRaw) || pluginDirsRaw.some((dir) => typeof dir !== "string")) {
+    throw new Error("pluginDirs 必须是字符串数组");
+  }
+  const staticDirRaw = env.ATRI_STATIC_DIR ?? fileConfig.staticDir ?? "apps/dashboard/dist";
+  if (typeof staticDirRaw !== "string") throw new Error("staticDir/ATRI_STATIC_DIR 必须是字符串");
 
   return {
     root,
-    host: env.ATRI_HOST ?? fileConfig.host ?? DEFAULT_SERVER_HOST,
-    port: Number(env.ATRI_PORT ?? fileConfig.port ?? DEFAULT_SERVER_PORT),
+    host,
+    port: parsePort(env.ATRI_PORT ?? fileConfig.port ?? DEFAULT_SERVER_PORT),
     logLevel: env.ATRI_LOG_LEVEL ?? fileConfig.logLevel ?? "info",
-    dataDir: resolve(root, env.ATRI_DATA_DIR ?? fileConfig.dataDir ?? "data"),
+    dataDir: resolve(root, dataDirRaw),
     // 默认值都相对 root（= 仓库根）解析，所以这里写的是「仓库根到那个目录的路径」。
     // 从前它是 `"./plugins"`，只在 root 恰好是 `apps/server/` 时才指向 README 里那个
     // 可放插件的目录（`apps/server/plugins`）—— 那是上一个默认值留下的 cwd 拐杖，
     // root 归位到仓库根之后必须一起改，否则默认值指向一个不存在的 `<仓库根>/plugins`，
     // 症状是零配置启动时样例插件悄悄不加载。
-    pluginDirs: (fileConfig.pluginDirs ?? ["apps/server/plugins"]).map((p) => resolve(root, p)),
+    pluginDirs: pluginDirsRaw.map((dir) => resolve(root, dir)),
     // 适配器是可选启用的；纯 agent 部署一个都不开。
     adapters: fileConfig.adapters ?? {},
     auth: {
@@ -95,10 +128,7 @@ export function loadConfig(): AppConfig {
       // 默认关闭：本仓默认走明文 HTTP。前置 HTTPS 代理时用 ATRI_COOKIE_SECURE=1 打开。
       cookieSecure: env.ATRI_COOKIE_SECURE === "1" || fileConfig.auth?.cookieSecure === true,
       // 生产环境下由服务端托管控制台构建产物，并做 SPA 回退。
-      staticDir: resolve(
-        root,
-        env.ATRI_STATIC_DIR ?? fileConfig.staticDir ?? "apps/dashboard/dist",
-      ),
+      staticDir: resolve(root, staticDirRaw),
     },
   };
 }

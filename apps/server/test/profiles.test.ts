@@ -33,6 +33,7 @@ import {
   assertProfileId,
   listProfileDirs,
   migrateProvidersToGlobal,
+  normalizeAccess,
   profileConfigPath,
   profileDir,
   providerShapeKeysIn,
@@ -50,6 +51,36 @@ function tmpRoot(t: TestContext, prefix: string): string {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+test("access 段缺失才默认放行；存在但形状坏掉必须 fail-closed", () => {
+  assert.deepEqual(normalizeAccess(undefined), {
+    whitelistEnabled: false,
+    allowedIds: [],
+    adminIds: [],
+  });
+
+  for (const broken of [
+    null,
+    [],
+    "x",
+    { whitelistEnabled: "true", allowedIds: ["1"], adminIds: ["9"] },
+    { whitelistEnabled: true, allowedIds: "1", adminIds: ["9"] },
+    { whitelistEnabled: true, allowedIds: ["1"], adminIds: [9] },
+  ]) {
+    let warned = 0;
+    const access = normalizeAccess(broken, () => {
+      warned += 1;
+    });
+    assert.equal(access.whitelistEnabled, true, `${JSON.stringify(broken)} 应失败关闭`);
+    assert.deepEqual(access.allowedIds, [], "坏形状的白名单不能放行任何人");
+    assert.equal(warned, 1, "坏形状必须让调用方有机会告警");
+  }
+
+  assert.deepEqual(
+    normalizeAccess({ whitelistEnabled: true, allowedIds: ["1"], adminIds: ["9"] }),
+    { whitelistEnabled: true, allowedIds: ["1"], adminIds: ["9"] },
+  );
+});
 
 test("id 必须能当目录名用：穿越、大写、分隔符、超长都拒", () => {
   for (const bad of ["", "..", ".", "../evil", "a/b", "默认", "Work", "x".repeat(65)]) {
@@ -221,6 +252,19 @@ test("最初的安装（各档里什么都没有）从 bootstrap 取，各档里
   if (second === null) throw new Error("第二种情形也没做合并");
   assert.equal(second.from, "profiles");
   assert.deepEqual(second.providers, ["mine"], "bootstrap 里的死键被复活进了全局文件");
+});
+
+test("档里写过空的 providers 段也算真源：不能从 bootstrap 复活死键", (t) => {
+  const root = tmpRoot(t, "atri-provmrg-empty-");
+  const profiles = profilesRoot(root);
+  writeProfileConfig(profileConfigPath(profiles, "a"), { providers: {} });
+  const report = migrateProvidersToGlobal(profiles, join(root, "providers.json"), {
+    providers: { stale: { model: "s" } },
+  });
+  if (report === null) throw new Error("应当做一次合并");
+  assert.equal(report.from, "profiles");
+  assert.deepEqual(report.providers, []);
+  assert.deepEqual(report.leftovers, ["a"]);
 });
 
 test("读不出来的配置档不参与合并，也不让整次迁移失败", (t) => {
@@ -416,6 +460,125 @@ test("failed 的配置档能删掉：DELETE 之后它不再出现在列表里", 
   // 登记没了不等于盘上没了：整个目录（config.json 与插件数据）都要消失。
   // 只摘登记不清盘的话，同名的新档会继承上一个档的插件数据。
   assert.equal(existsSync(brokenDir), false, "DELETE 之后 profiles/<id>/ 整个目录必须被删掉");
+});
+
+/**
+ * 删除配置档前要检查**配置档之外的引用**：适配器绑定与计划任务都保存着 profile id。
+ * 直接删掉会让它们静默失效 —— 用户只会在线路不再收消息或任务到点时才发现。
+ */
+test("仍被适配器或计划任务引用的配置档不能删", async (t) => {
+  const root = tmpRoot(t, "atri-profiles-refs-");
+  const dataDir = join(root, "data");
+  const profiles = profilesRoot(dataDir);
+  writeProfileConfig(profileConfigPath(profiles, "victim"), { name: "被引用的档" });
+
+  const app = await createApp(makeTestConfig({ root, dataDir }));
+  await app.start();
+  t.after(() => app.stop());
+  const origin = `http://127.0.0.1:${app.address().port}`;
+  const login = await fetch(`${origin}${API_PREFIX}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "pw" }),
+  });
+  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  const call = async (method: string, path: string, body?: unknown) => {
+    const res = await fetch(`${origin}${API_PREFIX}${path}`, {
+      method,
+      headers: {
+        cookie,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return {
+      status: res.status,
+      body: (await res.json().catch(() => ({}))) as Record<string, unknown>,
+    };
+  };
+
+  const adapter = await call("POST", "/adapters", {
+    id: "hold",
+    type: "napcat",
+    profile: "victim",
+    enabled: false,
+    settings: [
+      { key: "host", value: "127.0.0.1" },
+      { key: "port", value: "65000" },
+      { key: "path", value: "/ws" },
+      { key: "token", value: "test-token" },
+    ],
+  });
+  assert.equal(adapter.status, 200);
+
+  const blockedByAdapter = await call("DELETE", "/profiles/victim");
+  assert.equal(blockedByAdapter.status, 409);
+  assert.match(String(blockedByAdapter.body.error), /接入平台「hold」/);
+
+  assert.equal((await call("DELETE", "/adapters/hold")).status, 200);
+  const job = await call("POST", "/cron", {
+    name: "引用这个档",
+    cron: "0 9 * * *",
+    prompt: "跑一下",
+    profile: "victim",
+    enabled: false,
+  });
+  assert.equal(job.status, 201);
+  const jobId = (job.body.job as { id: string }).id;
+
+  const blockedByCron = await call("DELETE", "/profiles/victim");
+  assert.equal(blockedByCron.status, 409);
+  assert.match(String(blockedByCron.body.error), /计划任务「引用这个档」/);
+
+  assert.equal((await call("DELETE", `/cron/${jobId}`)).status, 200);
+  assert.equal((await call("DELETE", "/profiles/victim")).status, 200);
+});
+
+test("修好 failed 档的文件后可以通过 reload 恢复，不必重启服务", async (t) => {
+  const root = tmpRoot(t, "atri-profiles-reload-");
+  const dataDir = join(root, "data");
+  writeFileSync(
+    configFilePath(root),
+    JSON.stringify({ logLevel: "error", auth: { adminUser: "admin", adminPassword: "pw" } }),
+    "utf8",
+  );
+  const profiles = profilesRoot(dataDir);
+  mkdirSync(profileDir(profiles, "recover"), { recursive: true });
+  writeFileSync(profileConfigPath(profiles, "recover"), "{ 坏 JSON", "utf8");
+
+  const app = await createApp(makeTestConfig({ root, dataDir }));
+  await app.start();
+  t.after(() => app.stop());
+  const origin = `http://127.0.0.1:${app.address().port}`;
+  const login = await fetch(`${origin}${API_PREFIX}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "pw" }),
+  });
+  const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  const call = async (method: string, path: string) => {
+    const res = await fetch(`${origin}${API_PREFIX}${path}`, { method, headers: { cookie } });
+    return {
+      status: res.status,
+      body: (await res.json().catch(() => ({}))) as Record<string, unknown>,
+    };
+  };
+
+  const before = await call("GET", "/profiles");
+  assert.equal(
+    (before.body.profiles as { id: string; status: string }[]).find((p) => p.id === "recover")
+      ?.status,
+    "failed",
+  );
+
+  writeProfileConfig(profileConfigPath(profiles, "recover"), { name: "修好了" });
+  const reloaded = await call("POST", "/profiles/recover/reload");
+  assert.equal(reloaded.status, 200);
+  assert.equal((reloaded.body.profile as { status: string }).status, "ready");
+  assert.equal((reloaded.body.profile as { name: string }).name, "修好了");
+
+  const after = await call("GET", "/profiles/recover/config");
+  assert.equal(after.status, 200, "重载后作用域端点必须立刻可用");
 });
 
 /** 进入即挂住的上游：让一轮对话一直占着会话锁。 */

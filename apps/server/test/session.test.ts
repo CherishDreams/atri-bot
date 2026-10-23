@@ -263,6 +263,34 @@ test("图片附件原样往返，纯文本消息不带 images 键", (t) => {
   assert.deepStrictEqual(second, plain);
 });
 
+test("详情页对图片有总预算，但数据库里的历史仍完整", (t) => {
+  const { open } = useStore(t);
+  const manager = open();
+  const s = manager.create();
+  const images = Array.from({ length: 12 }, () => ({
+    data: "A".repeat(1_000_000),
+    mediaType: "image/png",
+  }));
+  manager.appendMessage(s.id, {
+    id: "m-many-images",
+    sessionId: s.id,
+    role: "user",
+    content: "很多图",
+    images,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  const page = open().getDetail(s.id)?.detail.messages[0];
+  const pageImages = page?.images ?? [];
+  const bytes = pageImages.reduce((sum, image) => sum + Math.ceil((image.data.length * 3) / 4), 0);
+  assert.ok(pageImages.length < images.length, "详情页应当省略超出预算的旧图片");
+  assert.ok(bytes <= 8 * 1024 * 1024, `详情页图片总字节超出预算: ${bytes}`);
+  assert.match(page?.content ?? "", /图片已省略/);
+
+  const stored = open().getWithMessages(s.id)?.messages[0]?.images ?? [];
+  assert.equal(stored.length, images.length, "存储层不能被展示预算裁剪");
+});
+
 test("被中断的一轮原样留在库里：不清理、不标记", (t) => {
   const { open } = useStore(t);
   const manager = open();

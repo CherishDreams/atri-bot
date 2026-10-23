@@ -87,6 +87,11 @@ export const useProfilesStore = defineStore("profiles", {
       return this.run(() => api.deleteProfile(id));
     },
 
+    /** 重新读盘并重建这一档；failed 档修好文件后靠它恢复，不重启整个服务。 */
+    async reload(id: string): Promise<boolean> {
+      return this.run(() => api.reloadProfile(id));
+    },
+
     /** 操作后一律重读列表：`status` 是服务端算出来的，本地猜不得。 */
     async run(op: () => Promise<unknown>): Promise<boolean> {
       this.error = null;

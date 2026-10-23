@@ -270,6 +270,42 @@ test("服务关停不发 unauthorized，只关连接", async (t) => {
  * 就是跑测试的这个进程当场终止 —— 少一道形状判据时，这个文件不会留下一条红用例，
  * 而是整份挂掉。反过来说，它能跑完并给出 pong，就是「忽略」这个语义真的生效了。
  */
+/**
+ * 超过 `maxPayload` 的帧会在服务端的 Receiver 里变成一次 `error` 事件。
+ *
+ * 这条用例与上一条量的是不同的一层：JSON 形状错误仍是合法的 WebSocket 文本帧，
+ * 而这里连帧都没有被解析。若连接的 `error` 没有人听，`ws` 会把异常抛成未捕获异常，
+ * 整个测试进程当场退出 —— 因此「还能重新登录、还能开新连接并收到 pong」就是修复的证明。
+ */
+test("超过 maxPayload 的 WS 帧不会打死进程，后续连接仍可用", async (t) => {
+  const { http, ws } = await startServer(t);
+  const cookie = await loginCookie(http);
+
+  const connected = await tryConnect(ws, { cookie });
+  assert.equal(connected.opened, true);
+  t.after(() => connected.ws.terminate());
+  // 客户端在服务端因 1009 关闭时也可能收到 error；它不该变成测试里的未处理事件。
+  connected.ws.on("error", () => {});
+
+  const closed = new Promise<number | null>((resolve) => {
+    connected.ws.once("close", (code) => resolve(code));
+  });
+  connected.ws.send("x".repeat(128 * 1024));
+  assert.equal(await closed, 1009, "超限帧应以 1009（消息过大）关闭这条连接");
+
+  const health = await fetch(`${http}${API_PREFIX}/health`);
+  assert.equal(health.status, 200, "一条坏连接不能影响服务进程本身");
+
+  const again = await tryConnect(ws, { cookie });
+  assert.equal(again.opened, true, "坏连接之后新连接仍应能建立");
+  t.after(() => again.ws.terminate());
+  const pong = await new Promise((done) => {
+    again.ws.once("message", (raw) => done(JSON.parse(raw.toString())));
+    again.ws.send(JSON.stringify({ type: "ping" }));
+  });
+  assert.deepEqual(pong, { type: "pong" });
+});
+
 test("畸形 WS 帧被忽略，连接仍然可用", async (t) => {
   const { http, ws } = await startServer(t);
   const cookie = await loginCookie(http);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CronJobInfo, Message, SessionDetail } from "@atri/shared";
@@ -54,6 +54,29 @@ test("cron：5 段解析、步长、非法值与本地时区的下一时刻", ()
   for (const bad of ["* * * *", "60 * * * *", "0 24 * * *", "0 0 0 * *", "*/0 * * * *"]) {
     assert.throws(() => parseCron(bad), /cron|超出|步长/);
   }
+});
+
+test("CronStore：坏文件时拒绝写入，内存表也不能被污染", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "atri-cron-broken-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const file = join(root, "cron.json");
+  writeFileSync(file, "{ 不是合法 JSON", "utf8");
+  const lines: string[] = [];
+  const store = new CronStore({ filePath: file, logger: quietLogger(lines) });
+
+  assert.equal(store.list().length, 0);
+  assert.throws(
+    () =>
+      store.create({
+        name: "不该出现的任务",
+        cron: "0 9 * * *",
+        prompt: "不会执行",
+        profile: "default",
+        enabled: true,
+      }),
+    /不能写入/,
+  );
+  assert.equal(store.list().length, 0, "写失败后 GET /cron 不能凭空多出一条任务");
 });
 
 test("CronScheduler：到点执行、复用任务会话并记录结果", async (t) => {
@@ -187,6 +210,14 @@ test("计划任务 API：创建、手动执行、会话结果与删除", async (
     profile: "default",
   });
   assert.equal(bad.status, 400);
+  const impossible = await call("POST", "/cron", {
+    name: "无解 cron",
+    cron: "0 0 31 2 *",
+    prompt: "永远不会跑",
+    profile: "default",
+  });
+  assert.equal(impossible.status, 400);
+  assert.match(String(impossible.body.error), /一年内没有可执行时刻/);
 
   const created = await call("POST", "/cron", {
     name: "手动执行",

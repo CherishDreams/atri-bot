@@ -34,6 +34,11 @@ const sessionId = computed(() => String(route.params.sessionId ?? ""));
 const canSend = computed(() => draft.value.trim().length > 0 && !sessions.sending);
 
 let unsubscribe: (() => void) | null = null;
+/**
+ * 详情加载的代际。store 里已经挡了一次，这里再挡一次是因为 `status` 是本页自己的状态：
+ * 旧 `load()` 晚回来把新会话的 `status` 改成 missing/ready，页面仍会闪错。
+ */
+let loadSeq = 0;
 /** 实时推送的连接状态。断线只在这页说一次，不做「已连接」的常态提示。 */
 const live = ref<LiveStatus>("open");
 
@@ -79,12 +84,14 @@ async function onLoadEarlier(): Promise<void> {
 }
 
 async function load(id: string): Promise<void> {
+  const seq = ++loadSeq;
   if (!id) {
     status.value = "missing";
     return;
   }
   status.value = "loading";
   const opened = await sessions.open(id);
+  if (seq !== loadSeq) return;
   status.value = opened ? "ready" : "missing";
   await scrollToBottom();
 }
@@ -115,6 +122,18 @@ async function submitMessage(text: string): Promise<void> {
   // 条件是 draft 仍为空：用户在等回复期间又打了字，不能把人家的字覆盖掉。
   if (sessions.error && !draft.value) draft.value = content;
   await scrollToBottom();
+}
+
+/** 会话打不开时，把首句带回创建页，至少不丢用户刚打的字。 */
+async function continueInNewSession(): Promise<void> {
+  const text = draft.value.trim();
+  if (!text) return;
+  sessions.stageNewSessionDraft(text);
+  draft.value = "";
+  await router.push({
+    name: "chat-new",
+    query: profile.value === null ? {} : { profile: profile.value },
+  });
 }
 
 /** 模板入口：发送输入框里的内容。 */
@@ -222,6 +241,16 @@ onBeforeUnmount(() => {
         <p class="m-0 mb-3 text-sm text-ink-muted">
           {{ sessions.error ?? "会话不存在或已被删除" }}
         </p>
+        <p v-if="draft" class="m-0 mb-3 text-sm text-ink">尚未发送：{{ draft }}</p>
+        <n-button
+          v-if="draft"
+          size="small"
+          type="primary"
+          class="mr-2"
+          @click="continueInNewSession"
+        >
+          带着这句话去创建
+        </n-button>
         <n-button size="small" @click="router.push({ name: 'chat-new' })">创建新会话</n-button>
       </div>
     </div>

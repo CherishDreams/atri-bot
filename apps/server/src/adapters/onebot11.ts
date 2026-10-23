@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { lookup } from "node:dns/promises";
 import type { RawData } from "ws";
 import type { MessageImage } from "@atri/shared";
 import { errorMessage } from "#core/errors.ts";
@@ -59,6 +60,7 @@ export const ONEBOT_DEFAULT_ACTION_TIMEOUT_MS = 10_000;
 export const ONEBOT_MAX_IMAGES_PER_MESSAGE = 4;
 export const ONEBOT_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
+const IMAGE_MAX_REDIRECTS = 3;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 interface PendingCall {
@@ -222,23 +224,105 @@ function decodeInlineImage(value: string): MessageImage | null {
   return mediaType === null ? null : { data: bytes.toString("base64"), mediaType };
 }
 
+/**
+ * 平台图片地址的黑名单。
+ *
+ * 备注：**不拦回环/私网**是刻意的取舍 —— NapCat/SnowLuma 常与本服务在同一台机器
+ * 或同一 Docker 网络里，图片 URL 可能就是 `127.0.0.1`/`10.x`。这里挡住的是
+ * 云元数据与链路本地地址（169.254/16、100.64/10、fe80::/10）这类**几乎只有 SSRF
+ * 会用到**的目标；完整的私网隔离要靠部署网络，而不是这段代码。
+ */
+function isBlockedImageAddress(address: string): boolean {
+  const lower = address.toLowerCase();
+  if (lower === "0.0.0.0" || lower === "::") return true;
+  if (lower.startsWith("::ffff:")) return true;
+
+  const [first, second] = lower.split(".").map((part) => Number(part));
+  if (first === 169 && second === 254) return true;
+  if (first === 100 && second !== undefined && second >= 64 && second <= 127) return true;
+
+  if (lower.includes(":")) {
+    const head = Number.parseInt(lower.split(":")[0] ?? "", 16);
+    if (Number.isFinite(head) && head >= 0xfe80 && head <= 0xfebf) return true;
+  }
+  return false;
+}
+
+/** 校验目标不是明显的元数据/链路本地地址。每次重定向都要重新校验。 */
+async function assertImageUrlAllowed(url: URL): Promise<void> {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("图片地址只允许 http 或 https");
+  }
+  let addresses: { address: string }[];
+  try {
+    addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  } catch {
+    throw new Error("图片地址无法解析");
+  }
+  if (addresses.some((item) => isBlockedImageAddress(item.address))) {
+    throw new Error("图片地址指向受限网络");
+  }
+}
+
+/** 手动跟随重定向：`redirect: "follow"` 会在不经过地址校验的情况下跳到内网。 */
+async function fetchImage(url: URL, signal: AbortSignal): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop <= IMAGE_MAX_REDIRECTS; hop += 1) {
+    await assertImageUrlAllowed(current);
+    const response = await fetch(current, { redirect: "manual", signal });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      await response.body?.cancel().catch(() => {});
+      if (!location) throw new Error(`图片地址返回了 ${response.status} 但没有 Location`);
+      current = new URL(location, current);
+      continue;
+    }
+    return response;
+  }
+  throw new Error("图片地址重定向次数过多");
+}
+
+/** 按块读取并在超过上限时立刻中断；不能等 `arrayBuffer()` 把整段内容收进内存。 */
+async function readCappedImage(response: Response, limit: number): Promise<Buffer> {
+  const body = response.body;
+  if (!body) throw new Error("图片响应没有响应体");
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel().catch(() => {});
+        throw new Error("图片超过 4 MiB 上限");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    size,
+  );
+}
+
 /** 下载并校验一张图片；不可用或超限时抛错，由调用方决定是否保留占位。 */
 export async function downloadOneBotImage(value: string): Promise<MessageImage> {
   const inline = decodeInlineImage(value);
   if (inline !== null) return inline;
   if (!isHttpUrl(value)) throw new Error("图片段没有可下载的地址");
 
-  const response = await fetch(value, {
-    redirect: "follow",
-    signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS),
-  });
+  const signal = AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS);
+  const response = await fetchImage(new URL(value), signal);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const declaredSize = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredSize) && declaredSize > ONEBOT_MAX_IMAGE_BYTES) {
     throw new Error("图片超过 4 MiB 上限");
   }
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length > ONEBOT_MAX_IMAGE_BYTES) throw new Error("图片超过 4 MiB 上限");
+  const bytes = await readCappedImage(response, ONEBOT_MAX_IMAGE_BYTES);
   const mediaType = imageMediaType(bytes, response.headers.get("content-type"));
   if (mediaType === null) throw new Error("不支持的图片格式");
   return { data: bytes.toString("base64"), mediaType };

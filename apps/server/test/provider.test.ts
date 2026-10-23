@@ -173,6 +173,25 @@ test("SSE：CRLF 换行同样能切帧", async () => {
   );
 });
 
+test("SSE：CRLF 在任意字节处被 chunk 切开，event 也不能丢", async () => {
+  const text = 'event: content_block_delta\r\ndata: {"x":1}\r\n\r\n';
+  const encoder = new TextEncoder();
+  for (let cut = 1; cut < text.length; cut += 1) {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(text.slice(0, cut)));
+        controller.enqueue(encoder.encode(text.slice(cut)));
+        controller.close();
+      },
+    });
+    const frames = await collect(parseSse(body));
+    assert.equal(frames.length, 1, `cut=${cut} 时应当只解析出一帧`);
+    hasFirstFrame(frames);
+    assert.equal(frames[0].event, "content_block_delta", `cut=${cut} 时 event 不能丢`);
+    assert.equal(frames[0].data, '{"x":1}', `cut=${cut} 时 data 不能被切坏`);
+  }
+});
+
 test("SSE：多行 data 用换行拼接", async () => {
   const frames = await collect(
     parseSse(streamOf(new Response(`data: line1\ndata: line2\n\n`, { headers: {} }))),
@@ -332,6 +351,40 @@ test("OpenAI：200 流里携带的 error 也要抛出，而不是当成空回复
       await assert.rejects(() => provider.chatStream({ model: "m", messages: [] }), /overloaded/);
     },
   );
+});
+
+test("200 返回 HTML/空流：两家都报中文 ProviderError，而不是英文 SyntaxError 或空回复", async () => {
+  const providers = [
+    new OpenAIProvider({ id: "o", baseUrl: "https://x/v1" }),
+    new AnthropicProvider({ id: "a", baseUrl: "https://y/v1" }),
+  ];
+  for (const provider of providers) {
+    await withFetch(
+      async () =>
+        new Response("<html>登录页</html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      async () => {
+        await assert.rejects(
+          () => provider.chat({ model: "m", messages: [{ role: "user", content: "hi" }] }),
+          (err: unknown) => {
+            assert.ok(err instanceof ProviderError);
+            assert.match(err.message, /不是合法 JSON/);
+            return true;
+          },
+        );
+        await assert.rejects(
+          () => provider.chatStream({ model: "m", messages: [{ role: "user", content: "hi" }] }),
+          (err: unknown) => {
+            assert.ok(err instanceof ProviderError);
+            assert.match(err.message, /没有返回任何 SSE 帧/);
+            return true;
+          },
+        );
+      },
+    );
+  }
 });
 
 // --- Anthropic provider -----------------------------------------------------
@@ -815,6 +868,21 @@ test("Anthropic：429 抛 ProviderError 并提示限流", async () => {
 });
 
 // --- 工厂与选路 -------------------------------------------------------------
+
+test("baseUrl 为空串时落回实现类默认地址（配置层与 UI 的契约）", () => {
+  const openai = new OpenAIProvider({ id: "o", baseUrl: "" });
+  assert.equal(openai.baseUrl, "https://api.openai.com/v1");
+  const anthropic = new AnthropicProvider({ id: "a", baseUrl: "" });
+  assert.equal(anthropic.baseUrl, "https://api.anthropic.com/v1");
+
+  // UI 走的是 source -> factory 这条路；只测构造器会漏掉「空串被原样传下来」的那一半。
+  const { providers } = createProviders(
+    { "from-empty-source": { source: "s", model: "m" } },
+    { sources: { s: { type: "openai", baseUrl: "" } } },
+  );
+  onlyInstance(providers, OpenAIProvider);
+  assert.equal(providers[0].baseUrl, "https://api.openai.com/v1");
+});
 
 test("工厂：按 type 构造对应实现，并读出默认 provider", () => {
   const { providers, errors } = createProviders(

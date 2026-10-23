@@ -45,6 +45,50 @@ export const DEFAULT_PAGE_SIZE = 100;
  */
 export const MAX_PAGE_SIZE = 500;
 
+/** 一页历史里最多带回的图片字节数（按 base64 解码后估算）。 */
+const MAX_PAGE_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_OMITTED = "[图片已省略]";
+
+/**
+ * 会话详情是 HTTP 视图，不是引擎上下文：一页 100 条消息在极端情况下可以带几百 MB
+ * base64 图片。这里从新到旧分配一个页面预算，超出预算的旧图片不随响应发出
+ *（数据库里的数据不动）；整条消息的图片都被省略且正文为空时补一个占位。
+ */
+function capPageImages(messages: Message[]): Message[] {
+  const copies = messages.map((message) => ({
+    ...message,
+    ...(message.images ? { images: [...message.images] } : {}),
+  }));
+  let remaining = MAX_PAGE_IMAGE_BYTES;
+  for (let i = copies.length - 1; i >= 0; i -= 1) {
+    const message = copies[i];
+    if (!message?.images) continue;
+    const kept: MessageImage[] = [];
+    let dropped = false;
+    for (const image of message.images) {
+      const cost = Math.ceil((image.data.length * 3) / 4);
+      if (cost <= remaining) {
+        kept.push(image);
+        remaining -= cost;
+      } else {
+        dropped = true;
+      }
+    }
+    message.images = kept.length > 0 ? kept : undefined;
+    if (dropped) {
+      message.content =
+        message.content.trim() === "" ? IMAGE_OMITTED : `${message.content} ${IMAGE_OMITTED}`;
+    }
+  }
+  return copies;
+}
+
+/**
+ * 引擎一次最多读取多少条历史。上下文预算通常远早于此，但「先全量 SELECT 再裁剪」
+ * 仍会把一个几十万条的会话整份搬进内存；这个上限是存储层的最后一道内存边界。
+ */
+const MAX_ENGINE_HISTORY_MESSAGES = 1_000;
+
 /** 分页入参。两个都可缺省；非法值都是 400，不是「当没传」。 */
 export interface PageOptions {
   /** 一页条数，默认 100、上限 500。 */
@@ -198,13 +242,16 @@ export class SessionManager {
     ) as RawMessageRow[];
     const { items, nextCursor } = this.#pageOf(rows, page.limit, "messages");
     return {
-      detail: { ...this.#toSession(row), messages: items.map((r) => this.#toMessage(r)) },
+      detail: {
+        ...this.#toSession(row),
+        messages: capPageImages(items.map((r) => this.#toMessage(r))),
+      },
       nextCursor,
     };
   }
 
   /**
-   * 仅供引擎使用：一次给出会话摘要与**全部**历史（返回副本）。
+   * 仅供引擎使用：一次给出会话摘要与**最近 1000 条**历史（返回副本）。
    *
    * 内存版时代这个方法返回的是 Map 里那份活对象，之后 `appendMessage` 会 push 进同一个数组；
    * 库化后没有活引用可给。**这个差别是真的**：任何「先读这份、再追加、然后又读同一次的结果」
@@ -217,8 +264,9 @@ export class SessionManager {
    * `engine-tools.test.ts` 的「回喂的那一次请求里必须同时有 tool_calls 与工具结果」
    *（历史里少一条 user）。
    *
-   * 刻意不分页：引擎要的是「一次问上游时的完整上下文」，把分页塞进这里意味着模型会忘记它
-   * 早先说过的话 —— 那是上下文窗口的策略，不是存储的关切。
+   * 不分页（但有 1000 条的内存边界）：引擎要的是「一次问上游时的上下文」，
+   * 真正的裁剪在 `AgentEngine.#historyFor` 按正文/图片预算做；存储层只保证不把
+   * 一个超长会话整份搬进内存。更早的历史仍可通过 HTTP 分页读取。
    */
   getWithMessages(id: string): SessionDetail | null {
     return this.#detailOf(id);
@@ -367,12 +415,15 @@ export class SessionManager {
   }
 
   #messagesOf(sessionId: string): Message[] {
+    // 倒序 LIMIT 才是「最近的一批」；再翻回插入序交给引擎。更早的历史仍有分页接口可读，
+    // 而引擎的上下文预算本来也会把它们裁掉。
     const rows = this.#all(
       `SELECT seq, id, session_id, role, content, tool_calls, tool_call_id, images, created_at
-         FROM messages WHERE session_id = ? ORDER BY seq`,
+         FROM messages WHERE session_id = ? ORDER BY seq DESC LIMIT ?`,
       sessionId,
+      MAX_ENGINE_HISTORY_MESSAGES,
     ) as RawMessageRow[];
-    return rows.map((row) => this.#toMessage(row));
+    return rows.map((row) => this.#toMessage(row)).toReversed();
   }
 
   /**

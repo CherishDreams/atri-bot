@@ -1,5 +1,5 @@
 import { DEFAULT_TIMEOUT_MS } from "./store.ts";
-import { toNetworkError, toProviderError } from "./errors.ts";
+import { ProviderError, readProviderJson, toNetworkError, toProviderError } from "./errors.ts";
 import { idleTimeout, withTimeout, wrapStreamError, type IdleTimeout } from "./timeout.ts";
 import type { ToolCall } from "@atri/shared";
 import type {
@@ -55,7 +55,10 @@ export class OpenAIProvider {
     this.id = id;
     this.name = name ?? id;
     this.models = models;
-    this.baseUrl = normalizeBaseUrl(baseUrl ?? "https://api.openai.com/v1");
+    // 空串是配置层合法的「用默认地址」（见 shared `ProviderSource.baseUrl`），
+    // 所以这里必须是 `||`：写成 `??` 会把 "" 留给 fetch，后者把 `/chat/completions`
+    // 当成相对 URL 直接报 ERR_INVALID_URL。
+    this.baseUrl = normalizeBaseUrl(baseUrl || "https://api.openai.com/v1");
     this.apiKey = apiKey ?? "";
     this.headers = headers;
     this.timeoutMs = timeoutMs;
@@ -102,7 +105,10 @@ export class OpenAIProvider {
 
     // `response.json()` 交出 unknown（这是 JSON 边界，类型只能在此处认领），
     // 往下每个使用点只读自己声明认领的那几个键。
-    const payload = (await response.json()) as OpenAIChatPayload;
+    const payload = await readProviderJson<OpenAIChatPayload>(response, {
+      provider: this.id,
+      model,
+    });
     const choice = payload?.choices?.[0];
     const reply: ChatReply = { role: "assistant", content: choice?.message?.content ?? "" };
     const toolCalls = toToolCalls(choice?.message?.tool_calls);
@@ -139,6 +145,7 @@ export class OpenAIProvider {
 
       let content = "";
       let stopReason: string | undefined;
+      let frames = 0;
       // 按 `index` 归位的槽位：一次响应可以并行要求调多个工具，每个的 arguments
       // 会被拆成任意多片，所以这里只能累加，覆盖会丢掉前缀。
       const slots = new Map<number, { id: string; name: string; arguments: string }>();
@@ -146,6 +153,7 @@ export class OpenAIProvider {
       for await (const frame of parseSseJson(response.body)) {
         // 收到任何一帧就算「上游还在往前推」，包括那些只带 tool_calls 片段的帧。
         idle.renew();
+        frames += 1;
         if (frame.data === "[DONE]") break;
 
         // JSON.parse 交出的是 unknown，这里认领 OpenAI 兼容契约里的那几个键。
@@ -180,6 +188,15 @@ export class OpenAIProvider {
             model,
           });
         }
+      }
+
+      // 200 但返回 HTML/空体时，parseSseJson 一帧都不会产出。若这里直接返回空串，
+      // 引擎会把一次配置错误当成「模型正常地什么都没说」落库。
+      if (frames === 0) {
+        throw new ProviderError(
+          `provider「${this.id}」${model === undefined ? "" : `调用模型 ${model} `}没有返回任何 SSE 帧（可能不是流式接口或返回了 HTML）`,
+          { provider: this.id },
+        );
       }
 
       const toolCalls = [...slots.entries()]
@@ -259,7 +276,7 @@ export class OpenAIProvider {
       throw toNetworkError(err, { provider: this.id });
     }
     if (!response.ok) throw await toProviderError(response, { provider: this.id });
-    return (await response.json()) as OpenAIModelsPayload;
+    return readProviderJson<OpenAIModelsPayload>(response, { provider: this.id });
   }
 }
 

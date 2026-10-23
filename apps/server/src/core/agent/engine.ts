@@ -50,6 +50,75 @@ export interface EngineDeps {
   systemPrompt: string;
 }
 
+/**
+ * 发给上游的历史文本预算（字符）。本仓自选值，不是模型上下文的换算表：
+ * 没有这个上限时，任何长会话都会在某一轮突然超过上游窗口，而且每次请求都要把全部历史
+ * 搬进内存；有它之后至少有确定的边界，代价是很久以前的正文不再进入本轮上下文。
+ *
+ * `images` 不按 base64 字符计入这里，单独由 `MAX_CONTEXT_IMAGE_BYTES` 限制。
+ */
+export const MAX_CONTEXT_CHARS = 120_000;
+/** 一轮请求最多携带的图片字节数（按 base64 解码后的估算）；更老的图片会被省略。 */
+export const MAX_CONTEXT_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_OMITTED = "[图片已省略]";
+
+/** 历史窗口只影响发给上游的那一份副本，不改 sqlite 里的消息。 */
+function contextWindow(messages: Message[]): Message[] {
+  let start = messages.length;
+  let used = 0;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message) continue;
+    const cost =
+      message.content.length +
+      (message.toolCalls?.reduce((sum, call) => sum + call.arguments.length, 0) ?? 0);
+    // 最后一条（本轮用户消息）无论多大都必须发；否则模型看不见自己刚被问了什么。
+    if (start < messages.length && used + cost > MAX_CONTEXT_CHARS) break;
+    used += cost;
+    start = i;
+  }
+  const window = messages.slice(start);
+  // 窗口从中间切断时，开头的 tool 结果没有对应的 assistant 调用；上游会拒绝对话。
+  while (window[0]?.role === "tool") window.shift();
+  return window;
+}
+
+/**
+ * 按“从新到旧”的顺序分配图片预算。
+ *
+ * 只改传给上游的副本：旧图片仍留在历史里，控制台还能看；但模型不会再为它们付
+ * 一次 token/内存。整条消息的图片都被省略且正文为空时补一个占位，避免给上游发空内容。
+ */
+function capHistoryImages(messages: Message[]): Message[] {
+  const copies = messages.map((message) => ({
+    ...message,
+    ...(message.images ? { images: [...message.images] } : {}),
+  }));
+  let remaining = MAX_CONTEXT_IMAGE_BYTES;
+  for (let i = copies.length - 1; i >= 0; i -= 1) {
+    const message = copies[i];
+    if (!message?.images) continue;
+    const kept: MessageImage[] = [];
+    let dropped = false;
+    for (const image of message.images) {
+      // base64 的字符数约等于解码后字节数的 4/3；不必精确到字节，预算本来就是保守值。
+      const cost = Math.ceil((image.data.length * 3) / 4);
+      if (cost <= remaining) {
+        kept.push(image);
+        remaining -= cost;
+      } else {
+        dropped = true;
+      }
+    }
+    message.images = kept.length > 0 ? kept : undefined;
+    if (dropped) {
+      message.content =
+        message.content.trim() === "" ? IMAGE_OMITTED : `${message.content} ${IMAGE_OMITTED}`;
+    }
+  }
+  return copies;
+}
+
 export interface HandleMessageOptions {
   sessionId: string;
   content: string;
@@ -270,8 +339,11 @@ export class AgentEngine {
           refusal === null
             ? // 顺序执行：内置工具是本地代码，并行没有延迟收益，而帧顺序由此确定 ——
               // 并行时前端要靠 id 反推次序，那是一条更贵的路径。
-              await this.tools.run(call)
+              await this.tools.run(call, { signal })
             : { toolCallId: call.id, name: call.name, content: refusal, isError: true };
+        // 工具可能在取消之后才返回（工具实现不遵守 signal，注册表只能放弃等待）。
+        // 这里停掉整轮，避免拿着已经断开的客户端继续执行后面的工具。
+        if (signal?.aborted) throw new Error("请求已取消");
         const record = this.#record(session, {
           role: "tool",
           content: toolResult.content,
@@ -331,13 +403,15 @@ export class AgentEngine {
    * `SessionManager.appendMessage` 不做角色校验，所以兜底只能放在这里。
    */
   #historyFor(session: SessionDetail): ChatMessage[] {
+    // 先截窗口、再按预算分配图片；两步都只动副本。
+    const window = capHistoryImages(contextWindow(session.messages));
     // 用 flatMap 而不是 `filter(...).map(m => m.toolCallId as string)`：filter 不窄化类型，
     // 那个 `as` 就落在**真边界之外**（AGENTS.md 的 `as` 白名单里没有它这一类）。
     const answered = new Set(
-      session.messages.flatMap((m) => (m.role === "tool" && m.toolCallId ? [m.toolCallId] : [])),
+      window.flatMap((m) => (m.role === "tool" && m.toolCallId ? [m.toolCallId] : [])),
     );
 
-    return session.messages.map((m) => {
+    return window.map((m) => {
       const calls = m.toolCalls?.filter((call) => answered.has(call.id));
       // 一条都没配上的助手消息退化成纯文本（保留它说过的话，丢掉它没做完的要求）。
       return this.#toChatMessage(m, calls && calls.length > 0 ? calls : undefined);

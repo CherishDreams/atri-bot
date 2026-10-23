@@ -196,6 +196,19 @@ export class AuthManager {
    * 这一条守卫同时也是「不拿 undefined 去查 Map」的类型保证。
    */
   getByToken(token: string | undefined): LoginResponse | null {
+    return this.#lookup(token, true);
+  }
+
+  /**
+   * 只校验、不续期。给 WebSocket 广播用：一条空闲的长连接不能靠「服务端在推消息」
+   * 把登录会话的空闲计时无限推后 —— 那会让一个被偷走的连接在 TTL 之后继续存活。
+   * 过期条目同样会被惰性删除。
+   */
+  peekByToken(token: string | undefined): LoginResponse | null {
+    return this.#lookup(token, false);
+  }
+
+  #lookup(token: string | undefined, touch: boolean): LoginResponse | null {
     if (typeof token !== "string" || token.length === 0) return null;
 
     const record = this.#sessions.get(token);
@@ -207,7 +220,7 @@ export class AuthManager {
       return null;
     }
 
-    record.lastSeenAt = now;
+    if (touch) record.lastSeenAt = now;
     return {
       user: { username: record.username } satisfies AuthUser,
       expiresAt: new Date(record.absoluteExpiresAt).toISOString(),

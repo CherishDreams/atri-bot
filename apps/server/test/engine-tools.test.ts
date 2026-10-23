@@ -12,7 +12,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Message, ServerFrame } from "@atri/shared";
-import { AgentEngine } from "#core/agent/engine.ts";
+import { AgentEngine, MAX_CONTEXT_CHARS, MAX_CONTEXT_IMAGE_BYTES } from "#core/agent/engine.ts";
 import { SessionEvents } from "#core/agent/events.ts";
 import { SessionLock } from "#core/session/lock.ts";
 import { ApiError } from "#core/errors.ts";
@@ -317,6 +317,33 @@ test("撞上限时抛错，但已经跑过的步骤都已落库", async (t) => {
   assert.equal(historyOf(h.sessions, h.session.id).length, 5);
 });
 
+test("工具不返回时，客户端取消会释放会话锁而不是把它永远占住", async (t) => {
+  const h = await harness(t, {
+    replies: [
+      { content: "", toolCalls: [{ id: "c1", name: "probe", arguments: "{}" }] },
+      { content: "不应到达" },
+    ],
+    tools: [
+      {
+        ...timeTool,
+        run: () => new Promise<string>(() => {}),
+      },
+    ],
+    enabled: { probe: { enabled: true } },
+  });
+  const controller = new AbortController();
+  const pending = h.engine.handleMessage({
+    sessionId: h.session.id,
+    content: "查一个不会返回的工具",
+    signal: controller.signal,
+  });
+  // 给循环一点时间真的进入 tool.run，再模拟客户端关页。
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  controller.abort();
+  await assert.rejects(pending, /请求已取消/);
+  assert.equal(h.lock.has(h.session.id), false, "取消后锁必须已经释放");
+});
+
 test("客户端断开后不再发起下一步", async (t) => {
   const controller = new AbortController();
   const h = await harness(t, {
@@ -341,6 +368,97 @@ test("客户端断开后不再发起下一步", async (t) => {
     });
   });
   assert.equal(h.provider.seen.length, 1, "第二步不该再问上游");
+});
+
+test("发给上游的历史受文本预算约束，且不会从 tool 结果中间截断", async (t) => {
+  const h = await harness(t, { replies: [{ content: "答" }], enabled: {} });
+  const now = new Date().toISOString();
+  const append = (role: Message["role"], content: string, extra: Partial<Message> = {}) => {
+    const id = crypto.randomUUID();
+    h.sessions.appendMessage(h.session.id, {
+      id,
+      sessionId: h.session.id,
+      role,
+      content,
+      createdAt: now,
+      ...extra,
+    });
+    return id;
+  };
+  // 先造一段早已超出预算的历史：最老那条有自己的标记，不能出现在请求里。
+  append("user", "OLDEST-" + "x".repeat(10_000));
+  for (let i = 0; i < 20; i += 1) {
+    append("user", `older-${i}-` + "x".repeat(10_000));
+  }
+  await h.engine.handleMessage({ sessionId: h.session.id, content: "最新问题" });
+
+  const sent = h.provider.seen[0]?.messages ?? [];
+  assert.ok(sent.length > 0);
+  assert.ok(
+    sent.every((message) => !message.content.startsWith("OLDEST-")),
+    "超出预算的最老消息不能还在上下文里",
+  );
+  const chars = sent.reduce((sum, message) => sum + message.content.length, 0);
+  assert.ok(
+    chars <= MAX_CONTEXT_CHARS + "最新问题".length,
+    `上下文正文应受预算约束，实际 ${chars} 字符`,
+  );
+  assert.equal(sent.at(-1)?.content, "最新问题", "最后一条必须是本轮用户消息");
+
+  // 手工把一条带工具调用的半截历史放在窗口边界附近：窗口从中间截断时，
+  // 开头的 tool 结果必须被丢掉，否则上游会看到没有对应调用的结果。
+  const h2 = await harness(t, { replies: [{ content: "答" }], enabled: {} });
+  const toolId = crypto.randomUUID();
+  h2.sessions.appendMessage(h2.session.id, {
+    id: crypto.randomUUID(),
+    sessionId: h2.session.id,
+    role: "assistant",
+    content: "",
+    toolCalls: [{ id: toolId, name: "probe", arguments: "{}" }],
+    createdAt: now,
+  });
+  h2.sessions.appendMessage(h2.session.id, {
+    id: crypto.randomUUID(),
+    sessionId: h2.session.id,
+    role: "tool",
+    content: "OLD-TOOL",
+    toolCallId: toolId,
+    createdAt: now,
+  });
+  for (let i = 0; i < 20; i += 1) {
+    h2.sessions.appendMessage(h2.session.id, {
+      id: crypto.randomUUID(),
+      sessionId: h2.session.id,
+      role: "user",
+      content: `newer-${i}-` + "y".repeat(10_000),
+      createdAt: now,
+    });
+  }
+  await h2.engine.handleMessage({ sessionId: h2.session.id, content: "后来" });
+  assert.notEqual(h2.provider.seen[0]?.messages[0]?.role, "tool", "窗口不能以孤立 tool 结果开头");
+});
+
+test("发给上游的图片受总字节预算约束", async (t) => {
+  const h = await harness(t, { replies: [{ content: "看完了" }], enabled: {} });
+  const images = Array.from({ length: 12 }, () => ({
+    data: "A".repeat(1_000_000),
+    mediaType: "image/png",
+  }));
+  h.sessions.appendMessage(h.session.id, {
+    id: crypto.randomUUID(),
+    sessionId: h.session.id,
+    role: "user",
+    content: "这些图片",
+    images,
+    createdAt: new Date().toISOString(),
+  });
+
+  await h.engine.handleMessage({ sessionId: h.session.id, content: "看看" });
+  const imageMessage = h.provider.seen[0]?.messages.find((message) => message.role === "user");
+  const kept = imageMessage?.images ?? [];
+  const bytes = kept.reduce((sum, image) => sum + Math.ceil((image.data.length * 3) / 4), 0);
+  assert.ok(bytes <= MAX_CONTEXT_IMAGE_BYTES, `图片总字节应受预算约束，实际 ${bytes}`);
+  assert.ok(kept.length < images.length, "超出预算的图片应被省略");
 });
 
 test("上一轮留下的半截工具调用，发往上游前会被修掉", async (t) => {

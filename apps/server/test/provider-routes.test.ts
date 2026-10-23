@@ -166,6 +166,8 @@ interface ApiBody {
   deleted: string[];
   /** 失败响应：`{ error: "<中文说明>" }`（见 `api/http.ts` 的 sendError）。 */
   error: string;
+  /** `GET /profiles` 的列表；只有少数用例读它。 */
+  profiles: { id: string; defaultProviderId: string | null }[];
   /** 档级默认那条端点的返回：`{ profile: ProfileRecord }`。 */
   profile: ProfileRecord;
   session: Session;
@@ -290,6 +292,15 @@ test("路由：provider 实例的增改查删，并带 loaded 标注", async (t)
   const disabled = await post(app.origin, cookie, "/providers/s-model-a", { enabled: false });
   assert.equal(disabled.body.provider.enabled, false);
 
+  // 禁用中的实例不能当默认：否则保存成功、下一条消息却静默回退到别的模型。
+  const rejectedDefault = await post(app.origin, cookie, "/providers/s-model-a", {
+    default: true,
+  });
+  assert.equal(rejectedDefault.status, 400);
+  assert.equal(
+    (await post(app.origin, cookie, "/providers/s-model-a", { enabled: true })).status,
+    200,
+  );
   const madeDefault = await post(app.origin, cookie, "/providers/s-model-a", { default: true });
   assert.equal(madeDefault.body.provider.default, true);
 
@@ -341,6 +352,36 @@ test("路由：源被引用时拒绝删除，cascade 才连带删掉", async (t)
   assert.equal(cascaded.status, 200);
   assert.deepEqual(cascaded.body.deleted, ["s", "p1", "p2"]);
   assert.deepEqual((await get(app.origin, cookie, "/providers")).body.providers, []);
+});
+
+test("级联删除源时，配置档里指向被删模型的默认引用也一起清掉", async (t) => {
+  const app = await startApp(t);
+  t.after(() => app.stop());
+  const cookie = await login(app.origin);
+
+  await post(app.origin, cookie, "/provider-sources", { id: "s" });
+  await post(app.origin, cookie, "/providers", { id: "p1", source: "s", model: "m1" });
+  const setDefault = await post(
+    app.origin,
+    cookie,
+    `/profiles/${DEFAULT_PROFILE_ID}/default-provider`,
+    { providerId: "p1" },
+  );
+  assert.equal(setDefault.status, 200);
+
+  const cascaded = await del(app.origin, cookie, "/provider-sources/s?cascade=1");
+  assert.equal(cascaded.status, 200);
+  assert.equal(
+    (JSON.parse(readFileSync(app.profilePath, "utf8")) as Record<string, unknown>).defaultProvider,
+    undefined,
+    "档里的默认引用必须随级联删除一起消失",
+  );
+  const profiles = (await get(app.origin, cookie, "/profiles")).body.profiles;
+  assert.equal(
+    profiles.find((row) => row.id === DEFAULT_PROFILE_ID)?.defaultProviderId,
+    null,
+    "目录状态也要同步清空",
+  );
 });
 
 /**
@@ -695,4 +736,5 @@ test("引用不到源、修好、再禁用：禁用后的原因不许还是上�
     /未找到/,
     "重建之后的列表里不该再挂着上一轮那条「未找到 provider source」",
   );
+  assert.match(String(disabled.error), /已禁用/, "主动禁用不能显示成「加载失败」");
 });

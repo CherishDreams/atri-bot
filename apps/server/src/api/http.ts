@@ -157,6 +157,18 @@ export interface ProfileDirectory {
    * 删的是 `profiles/<id>/` 整个目录（`config.json` 与插件数据）。
    */
   remove(id: string): Promise<boolean>;
+  /**
+   * 从所有配置档里清掉指向这些 provider id 的默认引用，返回被改动的档 id。
+   *
+   * 删除全局 provider/source 时走这里：否则档文件里会留下一个永远解析不到的 id，
+   * 每一条消息都静默落到别的模型上。只改 `defaultProvider` 这一根引用，不碰档里其它键。
+   */
+  clearDefaultProviders(providerIds: readonly string[]): string[];
+  /**
+   * 重新读磁盘并重建这一档的对象图（插件也重新加载）。修好 failed 档的文件后用它，
+   * 不必重启整个服务；被会话占用时拒绝，避免把正在用的引擎换掉。
+   */
+  reload(id: string): Promise<ProfileRecord>;
 }
 
 /**
@@ -205,6 +217,8 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(payload),
+    // provider-sources / adapters 详情会返回明文密钥；API 响应不应被浏览器或中间缓存留存。
+    "cache-control": "no-store",
   });
   res.end(payload);
 }

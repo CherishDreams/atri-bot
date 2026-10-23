@@ -50,12 +50,17 @@ onMounted(async () => {
     },
   );
 
-  await sessions.refresh();
+  await sessions.refresh().catch((err: unknown) => {
+    sessions.error = err instanceof Error ? err.message : "会话列表加载失败";
+  });
 });
 
 onBeforeUnmount(() => {
   unsubscribe?.();
   unsubscribe = null;
+  // 与 ChatSessionView 同一条：离开这一页必须中断在途流，否则 `sending` 会挂到
+  // 别的页面的发送按钮上，而这一页已经没人接收增量了。
+  sessions.abortStream();
 });
 </script>
 

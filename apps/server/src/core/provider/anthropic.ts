@@ -1,5 +1,5 @@
 import { DEFAULT_TIMEOUT_MS } from "./store.ts";
-import { toNetworkError, toProviderError } from "./errors.ts";
+import { ProviderError, readProviderJson, toNetworkError, toProviderError } from "./errors.ts";
 import { idleTimeout, withTimeout, wrapStreamError, type IdleTimeout } from "./timeout.ts";
 import { normalizeModels } from "./openai.ts";
 import type { ToolCall } from "@atri/shared";
@@ -62,7 +62,8 @@ export class AnthropicProvider {
     this.id = id;
     this.name = name ?? id;
     this.models = models;
-    this.baseUrl = (baseUrl ?? "https://api.anthropic.com/v1").replace(/\/+$/, "");
+    // 与 openai 那一侧同一条契约：空串表示「用实现类默认地址」，不能用 `??` 放过去。
+    this.baseUrl = (baseUrl || "https://api.anthropic.com/v1").replace(/\/+$/, "");
     this.apiKey = apiKey ?? "";
     this.version = version;
     this.maxTokens = maxTokens;
@@ -115,7 +116,10 @@ export class AnthropicProvider {
     if (!response.ok) throw await toProviderError(response, { provider: this.id, model });
 
     // `response.json()` 交出 unknown（JSON 边界），只在此处认领要用的那几个键。
-    const payload = (await response.json()) as AnthropicChatPayload;
+    const payload = await readProviderJson<AnthropicChatPayload>(response, {
+      provider: this.id,
+      model,
+    });
     const reply: ChatReply = { role: "assistant", content: extractText(payload?.content) };
     const toolCalls = extractToolUses(payload?.content);
     if (toolCalls) reply.toolCalls = toolCalls;
@@ -146,6 +150,7 @@ export class AnthropicProvider {
 
       let content = "";
       let stopReason: string | undefined;
+      let frames = 0;
       // 按内容块 `index` 归位：`content_block_start` 给 id/name，参数随后以
       // `input_json_delta` 分片到达，所以只能累加。
       const slots = new Map<number, { id: string; name: string; arguments: string }>();
@@ -166,6 +171,7 @@ export class AnthropicProvider {
       for await (const frame of parseSseJson(response.body)) {
         // 任何一帧都算「还在往前推」，包括只带工具参数碎片的那些。
         idle.renew();
+        frames += 1;
         // JSON.parse 交出的是 unknown，这里认领 Anthropic 流式帧里的那几个键。
         const chunk = frame.payload as AnthropicStreamPayload | null;
         // 事件类型在 `event:` 字段里，而不是 data 载荷内。
@@ -214,6 +220,13 @@ export class AnthropicProvider {
           default:
             break;
         }
+      }
+      // 200 但返回 HTML/空体时一帧都不会有；否则这里会静默返回空回复。
+      if (frames === 0) {
+        throw new ProviderError(
+          `provider「${this.id}」${model === undefined ? "" : `调用模型 ${model} `}没有返回任何 SSE 帧（可能不是流式接口或返回了 HTML）`,
+          { provider: this.id },
+        );
       }
       // 上游没发 message_stop 就断流时，已收到的内容仍然有效。
       return finish();
@@ -273,7 +286,7 @@ export class AnthropicProvider {
     }
     if (!response.ok) throw await toProviderError(response, { provider: this.id });
 
-    const payload = (await response.json()) as OpenAIModelsPayload;
+    const payload = await readProviderJson<OpenAIModelsPayload>(response, { provider: this.id });
     return normalizeModels(payload?.data);
   }
 }

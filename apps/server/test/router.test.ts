@@ -25,3 +25,9 @@ test("忽略结尾的斜杠", () => {
   const r = new Router().get("/x", () => {});
   assert.ok(r.match("GET", "/x/"));
 });
+
+test("非法百分号编码不会被当成服务端故障", () => {
+  const r = new Router();
+  r.get("/api/v1/sessions/:id", () => {});
+  assert.equal(r.match("GET", "/api/v1/sessions/%E0%A4%A"), null);
+});

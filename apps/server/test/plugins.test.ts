@@ -774,6 +774,64 @@ test("两个目录声明同一个 id 时，后来那个被拒绝 —— 数据�
 });
 
 /**
+ * failed 记录也要占用 id。
+ *
+ * 这一条与上面那条不是重复：那条验证的是「active 先到」，而失败记录若被排除，
+ * 后加载的插件会拿到同一个 `<dataRoot>/<id>` —— 而失败插件的 `setup()` 在抛错前
+ * 完全可能已经把 token/缓存写进去了。拒绝后加载者，才是「数据目录不共享」的完整判据。
+ */
+test("先失败的插件仍占用 id：同 id 的另一个目录必须被拒绝", async (t) => {
+  const dataRoot = useDataRoot(t);
+  const first = await makePlugin(
+    t,
+    `
+    import { writeFileSync } from "node:fs";
+    export default {
+      id: "shared-failed",
+      name: "先失败的",
+      setup(ctx) {
+        writeFileSync(ctx.dataDir + "/secret.json", "先写下的私有数据");
+        throw new Error("失败发生在写入之后");
+      },
+    };
+  `,
+  );
+  const second = await makePlugin(
+    t,
+    `
+    export default { id: "shared-failed", name: "后来者", setup() {} };
+  `,
+  );
+  const mgr = new PluginManager({ pluginDirs: [] }, silentLogger(), {
+    dataRoot,
+    ensurePrivateDir,
+    readConfigFileAt,
+    writeConfigFileAt,
+  });
+
+  await assert.rejects(() => mgr.load(first), /失败发生在写入之后/);
+  const failed = mgr.get("shared-failed");
+  assert.equal(failed?.status, "failed");
+
+  await assert.rejects(
+    () => mgr.load(second),
+    /插件 id "shared-failed" 与已加载的插件冲突/,
+    "failed 记录也要参与冲突判定",
+  );
+  assert.equal(
+    mgr.list().filter((plugin) => plugin.status === "active").length,
+    0,
+    "后来者不得成为 active，否则它会继承先失败插件的数据目录",
+  );
+  assert.equal(mgr.list().length, 2, "被拒的后来者仍留一条 failed 记录，便于操作者看见");
+  assert.equal(mgr.get("shared-failed")?.name, "先失败的", "按 id 查到的仍是先登记的那一条");
+  assert.equal(
+    readFileSync(join(dataRoot, "shared-failed", "secret.json"), "utf8"),
+    "先写下的私有数据",
+  );
+});
+
+/**
  * R1：跨配置档的**模块身份**隔离。
  *
  * `PluginManager.#revision` 是每个实例各自从 0 开始数的，所以两个管理器扫**同一个安装目录**时
@@ -937,6 +995,24 @@ test("ctx.dataDir 的目录是 0700，宽松的旧目录也会被收紧", async 
   );
   assert.equal(readFileSync(join(own, "token.txt"), "utf8"), "t", "收紧权限不许动内容");
   await mgr.unloadAll();
+});
+
+test("插件工具的形状不完整时拒绝加载，而不是把坏 schema 传给上游", async (t) => {
+  const dir = await makePlugin(
+    t,
+    `
+    export default {
+      id: "bad-tool-shape",
+      tools() {
+        return [{ id: "broken_tool", run: async () => "" }];
+      },
+      setup() {},
+    };
+  `,
+  );
+  const mgr = makeManager(t);
+  await assert.rejects(() => mgr.load(dir), /description|parameters/);
+  assert.equal(mgr.list()[0]?.status, "failed");
 });
 
 test("插件工具：动态清单、internal 标记与跨插件冲突", async (t) => {
