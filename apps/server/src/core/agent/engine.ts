@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { Message, MessageImage, SessionDetail } from "@atri/shared";
-import { ApiError } from "#core/errors.ts";
+import type { AdapterAccessControl, Message, MessageImage, SessionDetail } from "@atri/shared";
+import { ApiError, errorStack } from "#core/errors.ts";
 import type { Logger } from "#core/logger.ts";
 import type { ProviderRegistry } from "#core/provider/registry.ts";
 import type { ChatMessage, ChatTool } from "#core/provider/types.ts";
@@ -10,6 +10,10 @@ import type { SessionEvents } from "./events.ts";
 import type { ToolConfigStore } from "#core/tool/store.ts";
 import type { ToolRegistry } from "#core/tool/registry.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
+import type { CommandRegistry } from "#core/command/registry.ts";
+import type { CommandContext } from "#core/command/types.ts";
+import { parseCommand, splitCommandArgs } from "#core/command/parser.ts";
+import { DEFAULT_COMMAND_PREFIX } from "#core/command/types.ts";
 
 /**
  * 引擎实际依赖的东西，与 `docs/architecture.md` 的装配示例一致。
@@ -48,6 +52,24 @@ export interface EngineDeps {
    * 空串表示不注入 system 消息。
    */
   systemPrompt: string;
+  /**
+   * 指令注册表（可选：单元测试与不需要指令的嵌入式用法可以不注入）。
+   * 每份配置档一个：内置指令 + 这一档的插件指令，随插件启停自动进退。
+   */
+  commands?: CommandRegistry;
+  /**
+   * 这一份档的准入控制现读。指令的 admin 权限要拿 `adminIds` 判断，
+   * 注入访问器而不是让引擎缓存一份名单 —— 保存档后下一条消息就该用新规则
+   * （与适配器的 `resolveAccess` 同一条理由）。
+   */
+  resolveAccess?: () => AdapterAccessControl;
+  /**
+   * 唤醒前缀：群聊消息必须以它开头才被处理，同时是指令的匹配前缀。
+   * 可变（配置保存后由组合根热更新）；空串 = 关闭群聊唤醒门槛，此时指令
+   * 仍按 `DEFAULT_COMMAND_PREFIX` 识别 —— 关门槛不该顺手关掉指令系统。
+   * 缺省 `/`。
+   */
+  wakePrefix?: string;
 }
 
 /**
@@ -122,6 +144,22 @@ function capHistoryImages(messages: Message[]): Message[] {
 export interface HandleMessageOptions {
   sessionId: string;
   content: string;
+  /**
+   * 指令匹配用的文本。适配器路径下群聊正文带 `[发送人]` 前缀，而指令匹配必须针对
+   * **原始输入**（`/help` 才是 `/help`，不是 `[张三] /help`）；控制台路径缺省时用
+   * `content` 本身。只在指令匹配里用，不落库。
+   */
+  commandText?: string;
+  /**
+   * 平台发送人身份。指令的 admin 权限与指令上下文要用；控制台来源不带它
+   *（登录态本身就是管理员凭证）。它只在运行期使用，**不落库**。
+   */
+  sender?: { id: string; name: string };
+  /**
+   * 消息来源。`platform` = 适配器；`console` = 控制台（视为管理员）；
+   * `cron` = 计划任务 —— 定时提示词是写给模型的，不做指令匹配。
+   */
+  source?: "platform" | "console" | "cron";
   /** 随这条用户消息一起交给模型的图片；直接聊天接口不带它。 */
   images?: MessageImage[];
   model?: string;
@@ -168,6 +206,9 @@ export class AgentEngine {
    * 下一条消息读到的是新提示词。
    */
   systemPrompt: string;
+  commands?: CommandRegistry;
+  resolveAccess?: () => AdapterAccessControl;
+  wakePrefix: string;
 
   constructor({
     sessions,
@@ -180,6 +221,9 @@ export class AgentEngine {
     profileId,
     defaultProviderId,
     systemPrompt,
+    commands,
+    resolveAccess,
+    wakePrefix = DEFAULT_COMMAND_PREFIX,
   }: EngineDeps) {
     this.sessions = sessions;
     this.providers = providers;
@@ -191,6 +235,9 @@ export class AgentEngine {
     this.profileId = profileId;
     this.defaultProviderId = defaultProviderId;
     this.systemPrompt = systemPrompt;
+    this.commands = commands;
+    this.resolveAccess = resolveAccess;
+    this.wakePrefix = wakePrefix;
   }
 
   /**
@@ -200,6 +247,9 @@ export class AgentEngine {
   async handleMessage({
     sessionId,
     content,
+    commandText,
+    sender,
+    source,
     images,
     model,
     onDelta,
@@ -212,6 +262,18 @@ export class AgentEngine {
       throw new ApiError(SESSION_BUSY_MESSAGE, 409);
     }
     try {
+      // 指令匹配排在**落库之前**：命中即短路，工具循环与 provider 完全不参与 ——
+      // 这是指令系统存在的意义（AstrBot 的同一条管线次序：指令优先于 LLM）。
+      // 匹配没有命中（带了前缀但不是任何指令名）就落回正常路径，交给模型。
+      const commandReply = await this.#tryCommand({
+        sessionId,
+        content,
+        commandText,
+        sender,
+        source,
+      });
+      if (commandReply !== null) return commandReply;
+
       // 顺序是有意义的，而且是为了兼容库化后的读取语义：**先追加、再读历史**。
       // 内存版的 `getWithMessages` 返回 Map 里那份活对象，先读后追加也看得见这条用户消息；
       // 库化后每次读都是一份独立快照，反过来写就会把刚刚那条用户消息漏在上下文外面
@@ -246,6 +308,77 @@ export class AgentEngine {
       // 都在这条链上，任何一处漏了释放，那个会话就**永久**发不出消息了。
       this.lock.release(sessionId);
     }
+  }
+
+  /**
+   * 指令匹配与执行。命中返回落库后的助手消息；没命中返回 `null`（走正常 LLM 路径）。
+   *
+   * 用户消息**照常落库**：历史要看得见「敲过什么」，控制台才有回显；指令的回复也以
+   * 助手消息落库，与普通回复同一条展示路径。它们会进入后续轮次的上下文窗口 ——
+   * `/help` 的输出对模型无害，而「上一轮用过 /remind 约了什么」这类事实反而是有用的上下文。
+   *
+   * 前缀取自 `wakePrefix`（空串换缺省 `/`，见 `HandleMessageOptions.wakePrefix`）；
+   * `commandText` 是去掉群聊发送人前缀的原始输入。cron 来源与没注入注册表的引擎
+   * 都不做匹配：定时提示词是写给模型的，不该被「碰巧以 / 开头」劫走。
+   */
+  async #tryCommand({
+    sessionId,
+    content,
+    commandText,
+    sender,
+    source,
+  }: Pick<
+    HandleMessageOptions,
+    "sessionId" | "content" | "commandText" | "sender" | "source"
+  >): Promise<Message | null> {
+    if (this.commands === undefined || source === "cron") return null;
+    const prefix = this.wakePrefix.trim() === "" ? DEFAULT_COMMAND_PREFIX : this.wakePrefix;
+    const parsed = parseCommand(commandText ?? content, prefix);
+    if (parsed === null) return null;
+    const entry = this.commands.find(parsed.name);
+    if (entry === null) return null;
+
+    // 先落用户消息再执行：指令跑多久，用户敲的那条都已经在了。
+    // 会话不存在的 404 由 `appendMessage` 抛出，与正常路径同一句话。
+    const userMessage = this.#newMessage(sessionId, { role: "user", content });
+    this.sessions.appendMessage(sessionId, userMessage);
+    this.events.emit({ type: "message", message: userMessage });
+
+    // console 来源经过登录鉴权，本身就是管理员；平台来源按档的管理员名单现读。
+    const access = this.resolveAccess?.();
+    const isAdmin =
+      source !== "platform" ||
+      (sender !== undefined && access?.adminIds.includes(sender.id) === true);
+    const ctx: CommandContext = {
+      profileId: this.profileId,
+      sessionId,
+      prefix,
+      source: source === "console" ? "console" : "platform",
+      senderId: sender?.id ?? null,
+      senderName: sender?.name ?? null,
+      isAdmin,
+    };
+
+    let text: string;
+    if (entry.def.permission === "admin" && !isAdmin) {
+      text = `指令「${prefix}${entry.def.name}」仅管理员可用。`;
+    } else {
+      try {
+        text = await entry.def.run({ raw: parsed.raw, args: splitCommandArgs(parsed.raw) }, ctx);
+      } catch (err) {
+        // 指令抛错的原文只进日志：它可能带着插件自己的堆栈与路径，
+        // 回给聊天窗口的就是一句固定话（与适配器的错误兜底同一条纪律）。
+        this.logger.error(
+          `指令「${entry.def.name}」（来源 ${entry.source}）执行失败: ${errorStack(err)}`,
+        );
+        text = "指令执行失败，详情见服务端日志。";
+      }
+    }
+
+    const reply = this.#newMessage(sessionId, { role: "assistant", content: text });
+    this.sessions.appendMessage(sessionId, reply);
+    this.events.emit({ type: "message", message: reply });
+    return reply;
   }
 
   /**

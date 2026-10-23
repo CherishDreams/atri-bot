@@ -9,6 +9,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import ProfileSwitcher from "@/components/config/ProfileSwitcher.vue";
 import PluginCard from "@/components/plugins/PluginCard.vue";
 import PluginConfigDrawer from "@/components/plugins/PluginConfigDrawer.vue";
+import CommandListCard from "@/components/plugins/CommandListCard.vue";
 
 /**
  * 插件页：已安装的插件、它们在这份配置里的启用状态，以及 schema 驱动的配置。
@@ -156,6 +157,8 @@ if (profiles.profiles.length === 0 && !profiles.loading) void profiles.refresh()
           />
         </div>
       </n-spin>
+
+      <CommandListCard v-if="profile !== null" class="mt-6" :profile="profile" />
     </div>
 
     <PluginConfigDrawer

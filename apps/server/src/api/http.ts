@@ -5,6 +5,7 @@ import { ApiError } from "#core/errors.ts";
 import type { AppConfig } from "#config/index.ts";
 import type { AgentEngine } from "#core/agent/engine.ts";
 import type { AuthManager } from "#core/auth/manager.ts";
+import type { CommandRegistry } from "#core/command/registry.ts";
 import type { Logger, LogStore } from "#core/logger.ts";
 import type { ProviderConfigStore, ProviderEntry } from "#core/provider/store.ts";
 import type { ProviderRegistry } from "#core/provider/registry.ts";
@@ -50,9 +51,16 @@ export interface ProfileBundle {
    * 下一次收到消息就按它判断，不需要重启长连接。
    */
   access: AdapterAccessControl;
+  /**
+   * 群聊唤醒前缀（缺省 `/`，空串关闭门槛）。可变，同 `access` 的更新路径。
+   * 适配器的门槛检查与引擎的指令匹配都以它为准。
+   */
+  wakePrefix: string;
   tools: ToolRegistry;
   toolConfig: ToolConfigStore;
   plugins: PluginManager;
+  /** 这一档的指令注册表（内置 + 插件指令）。`GET /commands` 的数据源。 */
+  commands: CommandRegistry;
   engine: AgentEngine;
 }
 

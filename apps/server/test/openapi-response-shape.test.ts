@@ -123,6 +123,7 @@ const ORDER = [
   "listAdapters",
   "deleteAdapter",
   "listTools",
+  "listCommands",
   "setToolEnabled",
   "deleteSession",
   "deleteProvider",
@@ -848,6 +849,9 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       return at("/adapters/guard-adapter");
     case "listTools":
       return at("/tools");
+    case "listCommands":
+      // 内置指令随引擎装配恒在，数组天然非空，不需要先造资源。
+      return at("/commands");
     case "setToolEnabled": {
       // 内置工具的 id 是代码里的常量，不需要先创建资源。
       // 三次写入：先关（证明 enabled=false 这一支的形状）、再开、最后关回原样 ——

@@ -232,6 +232,29 @@ export interface PluginInfo {
 }
 
 /**
+ * 一条已注册指令的对外视图（`GET /commands` 的元素）。
+ *
+ * 指令与工具是两个词、两套注册表（AGENTS.md 的命名纪律）：指令是**文本协议**——
+ * 用户在聊天里敲 `/help` 这类前缀消息触发、结果直接回复且完全不经过模型；
+ * 工具是模型请求、本地执行、结果回喂的一次性动作。所以这里没有 `parameters`，
+ * `source` 也只有「哪来的」（builtin / 插件 id），没有启用开关 —— 指令随它的插件启停
+ * 自动进退，不做按档开关（要关指令就禁用那个插件）。
+ */
+export interface CommandInfo {
+  /** 指令名（不含唤醒前缀）。匹配时不区分大小写。 */
+  name: string;
+  /** 别名（同样不含前缀），可为空数组。 */
+  aliases: string[];
+  description: string;
+  /** 使用说明（参数怎么填）；缺省时省略。 */
+  usage?: string;
+  /** 权限：`all` 所有人可用；`admin` 仅管理员（平台管理员名单或控制台）。 */
+  permission: "all" | "admin";
+  /** 注册来源：`builtin` 或插件 id。 */
+  source: string;
+}
+
+/**
  * 一颗可被模型调用的工具，以及它当前的启用状态。
  *
  * `enabled` 的默认语义与 `AdapterInfo` **相反**：适配器没写就启用（少听一个端口而已），
@@ -319,6 +342,11 @@ export interface ProfileConfig {
    * 同一次读里都"没错" —— 只留一个数，界面无从说谎。
    */
   maxToolSteps: number;
+  /**
+   * 群聊唤醒前缀（生效值）。空串 = 关闭群聊唤醒门槛；此时指令仍按 `/` 识别。
+   * 私聊永远不设门槛。
+   */
+  wakePrefix: string;
   tools: ToolInfo[];
   plugins: PluginInfo[];
   /**

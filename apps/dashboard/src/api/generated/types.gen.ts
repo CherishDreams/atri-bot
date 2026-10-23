@@ -495,11 +495,15 @@ export type ProfileConfig = {
      * 这一档的准入控制；绑定到这一档的适配器共用这份名单。
      */
     access: AdapterAccessControl;
+    /**
+     * 群聊唤醒前缀（生效值），缺省 `/`；空串表示关闭群聊唤醒门槛（此时指令仍按 `/` 识别）。私聊永远不设门槛。
+     */
+    wakePrefix: string;
 };
 
 /**
  * 配置工作台「保存」发的那一批改动。**全部键可选**：省略的键表示不动，所以它是 diff 而不是整档替换 —— 另一个标签页改过的项不会被这里悄悄写回旧值。
- * 顶层出现这六个之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。
+ * 顶层出现白名单之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。
  */
 export type ProfileConfigPatch = {
     /**
@@ -534,6 +538,10 @@ export type ProfileConfigPatch = {
      * 整份替换这一档的准入控制；省略表示不动。
      */
     access?: AdapterAccessControl;
+    /**
+     * 群聊唤醒前缀。须为不含空白的 ≤16 字符（空串关闭门槛）；越界回 400 而不是夹取。
+     */
+    wakePrefix?: string;
 };
 
 /**
@@ -760,6 +768,36 @@ export type AdapterEnabledRequest = {
 export type AdapterRemoved = {
     id: string;
     removed: boolean;
+};
+
+/**
+ * 一条已注册指令。指令是文本协议（带唤醒前缀的聊天消息触发），与工具（模型调用）是两套注册表。
+ */
+export type CommandInfo = {
+    /**
+     * 指令名（不含唤醒前缀），匹配不区分大小写。
+     */
+    name: string;
+    /**
+     * 别名（同样不含前缀）。
+     */
+    aliases: Array<string>;
+    /**
+     * 一句话说明这条指令做什么。
+     */
+    description: string;
+    /**
+     * 使用说明（参数怎么填）；没有时省略。
+     */
+    usage?: string;
+    /**
+     * `all` 所有人可用；`admin` 仅管理员（档的管理员名单或控制台）。
+     */
+    permission: 'all' | 'admin';
+    /**
+     * 注册来源：`builtin` 或插件 id。
+     */
+    source: string;
 };
 
 /**
@@ -2896,3 +2934,44 @@ export type ReloadProfileResponses = {
 };
 
 export type ReloadProfileResponse = ReloadProfileResponses[keyof ReloadProfileResponses];
+
+export type ListCommandsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         */
+        profile: string;
+    };
+    url: '/commands';
+};
+
+export type ListCommandsErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type ListCommandsError = ListCommandsErrors[keyof ListCommandsErrors];
+
+export type ListCommandsResponses = {
+    /**
+     * 指令清单：内置指令 + 这一档处于运行中的插件声明的指令，注册表现读。
+     */
+    200: {
+        commands: Array<CommandInfo>;
+    };
+};
+
+export type ListCommandsResponse = ListCommandsResponses[keyof ListCommandsResponses];

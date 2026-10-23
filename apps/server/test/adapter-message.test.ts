@@ -44,7 +44,13 @@ function reply(content: string): Message {
 }
 
 function target(
-  handle: (options: { sessionId: string; content: string }) => Promise<Message>,
+  handle: (options: {
+    sessionId: string;
+    content: string;
+    commandText?: string;
+    sender?: { id: string; name: string };
+    source?: string;
+  }) => Promise<Message>,
 ): AdapterTarget {
   return { engine: { handleMessage: handle } } as unknown as AdapterTarget;
 }
@@ -175,6 +181,8 @@ test("MessageAdapter：群聊前缀、会话映射与长回复切块", async () 
       }),
     conversations,
     maxMessageLength: 10,
+    // 这条用例证的是「格式化/映射/切块」，不是唤醒门槛：显式关掉。
+    resolveWakePrefix: () => "",
   });
 
   await adapter.receive(
@@ -186,7 +194,10 @@ test("MessageAdapter：群聊前缀、会话映射与长回复切块", async () 
     }),
   );
 
-  assert.deepEqual(calls, [{ sessionId: "session-1", content: "[小 明] 大家好" }]);
+  assert.deepEqual(
+    calls.map((options) => ({ sessionId: options.sessionId, content: options.content })),
+    [{ sessionId: "session-1", content: "[小 明] 大家好" }],
+  );
   assert.deepEqual(titles, [{ key: "default:group:456", title: "QQ 群 456" }]);
   assert.equal(adapter.sent.length, 3, "25 个字按 10 切成 10/10/5");
   assert.ok(adapter.sent.every((item) => item.text.length <= 10));
@@ -235,6 +246,8 @@ test("MessageAdapter：白名单按会话过滤，管理员始终放行，规则
     conversations: { getOrCreate: () => "s" },
     // 每收到一条消息现读；这里用一个可替换的闭包模拟「配置档里的名单保存了」。
     resolveAccess: () => access,
+    // 白名单这条用例不混唤醒门槛的行为，显式关掉。
+    resolveWakePrefix: () => "",
   });
 
   await adapter.receive(inbound({ sender: { id: "123", name: "路人" }, text: "非白名单私聊" }));
@@ -336,6 +349,86 @@ test("MessageAdapter：配置档不可用时不进引擎，只记一条 warn", a
   await adapter.receive(inbound());
   assert.equal(adapter.sent.length, 0);
   assert.match(warnings[0] ?? "", /配置档「gone」当前不可用/);
+});
+
+test("MessageAdapter：群聊唤醒门槛只挡群聊，私聊不受影响", async () => {
+  const calls: string[] = [];
+  const debugs: string[] = [];
+  const adapter = new TestAdapter({
+    id: "test",
+    profileId: "default",
+    logger: {
+      debug: (m) => debugs.push(m),
+      info() {},
+      warn() {},
+      error() {},
+    },
+    resolveTarget: () =>
+      target(async (options) => {
+        calls.push(options.content);
+        return reply("ok");
+      }),
+    conversations: { getOrCreate: () => "s" },
+    // 缺省（`/`）即门槛开启，不传 resolveWakePrefix —— 证的就是缺省行为。
+  });
+
+  // 群聊：没带前缀的丢弃（debug 一条，不带正文）；带前缀的进引擎。
+  await adapter.receive(inbound({ conversation: { kind: "group", id: "456" }, text: "大家好" }));
+  assert.deepEqual(calls, [], "未唤醒的群消息不该进引擎");
+  assert.ok(debugs.some((line) => line.includes("未唤醒") && !line.includes("大家好")));
+
+  await adapter.receive(inbound({ conversation: { kind: "group", id: "456" }, text: "/签到" }));
+  assert.deepEqual(calls, ["[小明] /签到"], "带前缀的群消息照常进引擎（发送人前缀留给模型）");
+
+  // 私聊永远不设门槛。
+  await adapter.receive(inbound({ text: "你好" }));
+  assert.deepEqual(calls, ["[小明] /签到", "你好"]);
+});
+
+test("MessageAdapter：门槛前缀现读且可关闭，发送人身份随消息带给引擎", async () => {
+  const calls: { content: string; sender?: { id: string; name: string } }[] = [];
+  let prefix = "/";
+  const adapter = new TestAdapter({
+    id: "test",
+    profileId: "default",
+    logger: logger([], []),
+    resolveTarget: () =>
+      target(async (options) => {
+        calls.push({ content: options.content, sender: options.sender });
+        return reply("ok");
+      }),
+    conversations: { getOrCreate: () => "s" },
+    resolveWakePrefix: () => prefix,
+  });
+  const image = { data: "aGk=", mediaType: "image/png" };
+  const group = { kind: "group" as const, id: "456" };
+
+  // 换前缀立刻生效（现读）：旧前缀在新前缀下不再是唤醒。
+  prefix = "#";
+  await adapter.receive(inbound({ conversation: group, text: "/签到" }));
+  assert.deepEqual(calls, []);
+  await adapter.receive(inbound({ conversation: group, text: "#签到" }));
+  assert.equal(calls.length, 1);
+
+  // 关门槛恢复旧行为：普通文本与纯图片群消息都照常进引擎。
+  prefix = "";
+  await adapter.receive(inbound({ conversation: group, text: "大家好" }));
+  assert.equal(calls.length, 2);
+  await adapter.receive(inbound({ conversation: group, text: "", images: [image] }));
+  assert.equal(calls.length, 3);
+
+  // 开门槛：纯图片群消息没有正文可带前缀，按「未唤醒」处理。
+  prefix = "/";
+  await adapter.receive(inbound({ conversation: group, text: "", images: [image] }));
+  assert.equal(calls.length, 3, "门槛开启时纯图片群消息没有前缀，不放行");
+
+  // 发送人身份随消息带给引擎（指令的 admin 判断用它）；群聊正文仍带发送人前缀。
+  prefix = "";
+  await adapter.receive(inbound({ conversation: group, text: "/描述", images: [image] }));
+  assert.deepEqual(calls[3], {
+    content: "[小明] /描述",
+    sender: { id: "123", name: "小明" },
+  });
 });
 
 function fakeSessions(): SessionDirectory & { ids: Set<string>; created: string[] } {

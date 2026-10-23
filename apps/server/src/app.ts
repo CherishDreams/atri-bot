@@ -17,6 +17,9 @@ import { ToolRegistry } from "./core/tool/registry.ts";
 // 而同一对数字在读文件时用来夹取 —— 两种用法刻意不同，判据也写在那儿。
 import { MAX_MAX_TOOL_STEPS, MIN_MAX_TOOL_STEPS, ToolConfigStore } from "./core/tool/store.ts";
 import { createBuiltinTools } from "./core/tool/builtins.ts";
+import { CommandRegistry } from "./core/command/registry.ts";
+import { createBuiltinCommands } from "./core/command/builtins.ts";
+import { DEFAULT_COMMAND_PREFIX } from "./core/command/types.ts";
 import { AuthManager } from "./core/auth/manager.ts";
 import { ApiError, errorMessage } from "./core/errors.ts";
 import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
@@ -89,7 +92,21 @@ const PROFILE_PATCH_KEYS = [
   "tools",
   "plugins",
   "access",
+  "wakePrefix",
 ] as const;
+
+/**
+ * 唤醒前缀的取值规则：字符串、去掉首尾空白后 ≤16 字符、不能带换行这类控制字符
+ *（它要进日志也要被 `startsWith` 匹配）。空串合法 = 关闭群聊门槛。
+ * 读文件时不抛（手写的配置不该让服务起不来，退回缺省并 warn）；
+ * 写接口上抛 400（给请求夹值等于「你要的没生效却显示成功」，与 maxToolSteps 同一条）。
+ */
+function coerceWakePrefix(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length > 16 || /\s/.test(trimmed)) return null;
+  return trimmed;
+}
 
 /**
  * 把 `{ "<id>": { enabled: boolean } }` 那一段验成一张可应用的清单。
@@ -441,6 +458,10 @@ export async function createApp(config: AppConfig) {
     }
     const toolConfig = new ToolConfigStore({ filePath: path }, logger);
     const tools = new ToolRegistry();
+    // 指令注册表：内置指令进静态面，插件指令走动态来源。创建顺序见下面三条：
+    // 注册表先于插件管理器（它的 `commandsTaken` 要用），内置指令最后注册
+    //（`/plugins` 的访问器闭包要引用 `plugins`）。
+    const commands = new CommandRegistry(logger);
     // 传 getter 而不是 `plugins.list()` 的结果：此刻还没 `loadAll()`，而且插件能在运行期
     // 增删与启停，快照会让这颗工具继续说出装配那一刻的事实。
     const plugins = new PluginManager(pluginRuntimeConfig(config), logger, {
@@ -460,11 +481,31 @@ export async function createApp(config: AppConfig) {
       writeConfigFileAt,
       // 按档过滤的动作端口：插件只能操作绑定到这份档的适配器。
       adapterActions: adapterActionsFor(id),
+      // 内置指令已占用的名字：插件指令撞它们时在**加载期**被拒成 failed，
+      // 而不是留一条永不响应的指令（与工具撞号同一条严格度）。
+      commandsTaken: () => commands.takenNames(),
     });
     for (const tool of createBuiltinTools()) tools.register(tool);
     // 插件工具走动态来源：插件重载/禁用后下一轮请求立刻看到新清单，
     // 不需要在每次启停时重建工具注册表。
     tools.registerSource(() => plugins.tools());
+    commands.registerSource(() => plugins.commands());
+    for (const def of createBuiltinCommands({
+      registry: commands,
+      listPlugins: () => plugins.peers(),
+    })) {
+      commands.register(def);
+    }
+    // 群聊唤醒前缀：读文件时容忍坏形状（手写配置退回缺省并 warn，不让服务起不来），
+    // 写接口上才严格要求。
+    const fileWakePrefix = coerceWakePrefix(profile.wakePrefix);
+    if (profile.wakePrefix !== undefined && fileWakePrefix === null) {
+      logger.warn(
+        `配置档「${id}」的 wakePrefix 不合法（须为不含空白的 ≤16 字符前缀，或空串关闭门槛），` +
+          `已按缺省「${DEFAULT_COMMAND_PREFIX}」处理；修好 ${path} 或重新保存一次即可`,
+      );
+    }
+    const wakePrefix = fileWakePrefix ?? DEFAULT_COMMAND_PREFIX;
     const engine = new AgentEngine({
       sessions,
       providers,
@@ -476,6 +517,10 @@ export async function createApp(config: AppConfig) {
       profileId: id,
       defaultProviderId,
       systemPrompt: personas.promptFor(personaId),
+      commands,
+      // admin 权限按这份档的管理员名单现读：保存档后下一条指令就是新名单。
+      resolveAccess: () => profiles.get(id)?.access ?? emptyAccess(),
+      wakePrefix,
     });
     return {
       id,
@@ -484,9 +529,11 @@ export async function createApp(config: AppConfig) {
       defaultProviderId,
       personaId,
       access,
+      wakePrefix,
       tools,
       toolConfig,
       plugins,
+      commands,
       engine,
     };
   }
@@ -711,12 +758,25 @@ export async function createApp(config: AppConfig) {
       let nextAccess: ReturnType<typeof validateAccess> | undefined;
       if (body.access !== undefined) nextAccess = validateAccess(body.access);
 
+      let nextWakePrefix: string | undefined;
+      if (body.wakePrefix !== undefined) {
+        const value = coerceWakePrefix(body.wakePrefix);
+        if (value === null) {
+          throw new ApiError(
+            "`wakePrefix` 必须是不含空白的 ≤16 字符前缀（空串表示关闭群聊唤醒门槛）",
+            400,
+          );
+        }
+        nextWakePrefix = value;
+      }
+
       // --- 到这里全部验完了，下面才开始动磁盘与运行态 -----------------------
       if (
         nextDefault !== undefined ||
         nextPersona !== undefined ||
         nextSteps !== undefined ||
         nextAccess !== undefined ||
+        nextWakePrefix !== undefined ||
         tools.length > 0
       ) {
         updateProfileConfig(profileConfigPath(profilesDir, id), (file) => {
@@ -731,6 +791,7 @@ export async function createApp(config: AppConfig) {
           }
           if (nextSteps !== undefined) file.maxToolSteps = nextSteps;
           if (nextAccess !== undefined) file.access = nextAccess;
+          if (nextWakePrefix !== undefined) file.wakePrefix = nextWakePrefix;
           for (const [tid, enabled] of tools) {
             const current = file.tools ?? {};
             // 展开保留这一段里我们不认识的键（`ToolToggle` 是开放类型，与插件段同一条理由）。
@@ -755,6 +816,12 @@ export async function createApp(config: AppConfig) {
         // 适配器的 `resolveAccess` 每次收到消息都读 bundle 上的这一份；
         // 所以改完这里，下一条消息就是新名单，不需要重启长连接。
         bundle.access = nextAccess;
+      }
+      if (nextWakePrefix !== undefined) {
+        // 同一条现读语义的两半：适配器的门槛检查读 bundle，指令匹配读引擎。
+        // 两处一起改，下一条消息生效，不必重启长连接。
+        bundle.wakePrefix = nextWakePrefix;
+        bundle.engine.wakePrefix = nextWakePrefix;
       }
 
       const failed: { id: string; error: string }[] = [];
@@ -944,6 +1011,9 @@ export async function createApp(config: AppConfig) {
       // 名单属于配置档，不属于平台实例：每收到一条消息现读绑定档的那一份，
       // 所以保存档里的 access 后下一条消息就生效，不必重启适配器。
       resolveAccess: () => profiles.get(entry.profile)?.access ?? emptyAccess(),
+      // 唤醒门槛同一条现读语义：只对群聊生效；档不可用时退缺省（门槛照设，
+      // 与 resolveAccess 退「全部放行」不同 —— 挡消息宁可错杀，放消息不可错放）。
+      resolveWakePrefix: () => profiles.get(entry.profile)?.wakePrefix ?? DEFAULT_COMMAND_PREFIX,
     };
     switch (entry.type) {
       case ADAPTER_TYPES.napcat:

@@ -2328,6 +2328,49 @@
           }
         }
       }
+    },
+    "/commands": {
+      "get": {
+        "operationId": "listCommands",
+        "summary": "列出已注册的指令及其来源",
+        "tags": ["commands"],
+        "responses": {
+          "200": {
+            "description": "指令清单：内置指令 + 这一档处于运行中的插件声明的指令，注册表现读。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["commands"],
+                  "properties": {
+                    "commands": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CommandInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -3263,7 +3306,8 @@
           "maxToolSteps",
           "tools",
           "plugins",
-          "access"
+          "access",
+          "wakePrefix"
         ],
         "properties": {
           "id": {
@@ -3302,12 +3346,16 @@
           "access": {
             "description": "这一档的准入控制；绑定到这一档的适配器共用这份名单。",
             "$ref": "#/components/schemas/AdapterAccessControl"
+          },
+          "wakePrefix": {
+            "type": "string",
+            "description": "群聊唤醒前缀（生效值），缺省 `/`；空串表示关闭群聊唤醒门槛（此时指令仍按 `/` 识别）。私聊永远不设门槛。"
           }
         }
       },
       "ProfileConfigPatch": {
         "type": "object",
-        "description": "配置工作台「保存」发的那一批改动。**全部键可选**：省略的键表示不动，所以它是 diff 而不是整档替换 —— 另一个标签页改过的项不会被这里悄悄写回旧值。\n顶层出现这六个之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。",
+        "description": "配置工作台「保存」发的那一批改动。**全部键可选**：省略的键表示不动，所以它是 diff 而不是整档替换 —— 另一个标签页改过的项不会被这里悄悄写回旧值。\n顶层出现白名单之外的任何键都回 400：放任意键进来等于把这份档文件开成一台远程编辑器。",
         "properties": {
           "defaultProvider": {
             "type": ["string", "null"],
@@ -3350,6 +3398,10 @@
           "access": {
             "description": "整份替换这一档的准入控制；省略表示不动。",
             "$ref": "#/components/schemas/AdapterAccessControl"
+          },
+          "wakePrefix": {
+            "type": "string",
+            "description": "群聊唤醒前缀。须为不含空白的 ≤16 字符（空串关闭门槛）；越界回 400 而不是夹取。"
           }
         }
       },
@@ -3807,6 +3859,41 @@
           },
           "removed": {
             "type": "boolean"
+          }
+        }
+      },
+      "CommandInfo": {
+        "type": "object",
+        "description": "一条已注册指令。指令是文本协议（带唤醒前缀的聊天消息触发），与工具（模型调用）是两套注册表。",
+        "required": ["name", "aliases", "description", "permission", "source"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "指令名（不含唤醒前缀），匹配不区分大小写。"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "别名（同样不含前缀）。"
+          },
+          "description": {
+            "type": "string",
+            "description": "一句话说明这条指令做什么。"
+          },
+          "usage": {
+            "type": "string",
+            "description": "使用说明（参数怎么填）；没有时省略。"
+          },
+          "permission": {
+            "type": "string",
+            "enum": ["all", "admin"],
+            "description": "`all` 所有人可用；`admin` 仅管理员（档的管理员名单或控制台）。"
+          },
+          "source": {
+            "type": "string",
+            "description": "注册来源：`builtin` 或插件 id。"
           }
         }
       }

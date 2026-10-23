@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 import type { PluginInfo, PluginStatus } from "@atri/shared";
 import type { Logger } from "#core/logger.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
+import { assertCommandDefinition } from "#core/command/registry.ts";
+import type { CommandDefinition, CommandEntry } from "#core/command/types.ts";
 import type { AppConfig } from "#config/index.ts";
 import type { FileConfig } from "#config/file.ts";
 import { ApiError, errorMessage } from "#core/errors.ts";
@@ -46,6 +48,12 @@ export interface PluginDefinition {
    * 工具开关里。
    */
   tools?: ToolDefinition[] | ((ctx: PluginContext) => ToolDefinition[]);
+  /**
+   * 插件提供的指令（`/help` 这类文本协议，见 `core/command/types.ts`）。
+   * 与工具同一种形状：静态数组或工厂。名字/别名撞内置指令或其它活跃插件时，
+   * **这一颗插件加载失败**（冲突要让加载期就看得见，而不是留一条永不响应的指令）。
+   */
+  commands?: CommandDefinition[] | ((ctx: PluginContext) => CommandDefinition[]);
   setup?: (ctx: PluginContext) => void | Promise<void>;
   teardown?: () => void | Promise<void>;
 }
@@ -124,6 +132,12 @@ export interface PluginStorage {
    * 自己这份档的适配器。缺省时插件仍能加载，只是 `ctx.adapters()` 为空。
    */
   adapterActions?: PluginAdapterActions;
+  /**
+   * 内置指令已经占用的名字与别名（归一化小写）。由组合根从这一档的
+   * `CommandRegistry.takenNames()` 注入，让「插件指令撞内置指令」在加载期
+   * 就被拒绝成 failed —— 与工具撞号的跨插件检查同一条严格度。
+   */
+  commandsTaken?: () => Set<string>;
 }
 
 /**
@@ -172,6 +186,8 @@ interface PluginRecord {
   ctx: PluginContext | null;
   /** 这颗插件提供的工具；只有 active 记录非空。 */
   tools: ToolDefinition[];
+  /** 这颗插件提供的指令；只有 active 记录非空。 */
+  commands: CommandDefinition[];
   status: PluginStatus;
   /** 上一次加载失败的可读原因；正常为 `null`。只给操作者，见 `#peers()` 与 `list_plugins`。 */
   error: string | null;
@@ -239,6 +255,34 @@ function resolvePluginTools(
       throw new ApiError(`插件「${pluginId}」重复声明了工具「${tool.id}」`, 400);
     }
     seen.add(tool.id);
+  }
+  return [...declared];
+}
+
+/**
+ * 解析插件声明的指令，并在登记前挡住坏形状与同插件内重复。
+ *
+ * 与 `resolvePluginTools` 同一条设计：校验在 `setup()` 之前做，坏指令让**这一颗插件**
+ * 加载失败，而不是留一条永不响应的指令。跨来源冲突（内置指令、其它活跃插件）由
+ * `load()` 在这里的结果之上检查。
+ */
+function resolvePluginCommands(
+  pluginId: string,
+  plugin: PluginDefinition,
+  ctx: PluginContext,
+): CommandDefinition[] {
+  const declared =
+    typeof plugin.commands === "function" ? plugin.commands(ctx) : (plugin.commands ?? []);
+  const seen = new Set<string>();
+  for (const def of declared) {
+    assertCommandDefinition(def, `插件「${pluginId}」的`);
+    const names = [def.name, ...(def.aliases ?? [])].map((n) => n.trim().toLowerCase());
+    for (const name of names) {
+      if (seen.has(name)) {
+        throw new ApiError(`插件「${pluginId}」重复声明了指令名「${name}」`, 400);
+      }
+      seen.add(name);
+    }
   }
   return [...declared];
 }
@@ -489,6 +533,35 @@ export class PluginManager {
         }
       }
 
+      // 指令在工具之后解析，同一套「setup 之前拒绝」的次序：跨来源冲突在这里查
+      //（内置指令的名字由组合根经 `commandsTaken` 注入，其它活跃插件的名字现读）。
+      let commands: CommandDefinition[];
+      try {
+        commands = resolvePluginCommands(id, plugin, ctx);
+      } catch (err) {
+        await ctx.dispose();
+        throw err;
+      }
+      const taken = new Set(this.#storage.commandsTaken?.() ?? []);
+      for (const other of this.#records.values()) {
+        if (other.status !== "active" || other.dir === dir) continue;
+        for (const def of other.commands) {
+          for (const name of [def.name, ...(def.aliases ?? [])])
+            taken.add(name.trim().toLowerCase());
+        }
+      }
+      for (const def of commands) {
+        for (const name of [def.name, ...(def.aliases ?? [])]) {
+          const key = name.trim().toLowerCase();
+          if (!taken.has(key)) continue;
+          await ctx.dispose();
+          throw new ApiError(
+            `插件「${id}」的指令「${def.name}」与已有指令重名（${key}），不能重复注册`,
+            400,
+          );
+        }
+      }
+
       try {
         await plugin.setup?.(ctx);
       } catch (err) {
@@ -503,6 +576,7 @@ export class PluginManager {
         plugin,
         ctx,
         tools,
+        commands,
         status: "active",
         error: null,
         settings,
@@ -548,6 +622,7 @@ export class PluginManager {
       plugin: null,
       ctx: null,
       tools: [],
+      commands: [],
       status: "failed",
       error: reason,
       settings,
@@ -580,6 +655,7 @@ export class PluginManager {
       plugin: null,
       ctx: null,
       tools: [],
+      commands: [],
       status: "disabled",
       error: null,
       settings,
@@ -739,6 +815,25 @@ export class PluginManager {
     return [...this.#records.values()]
       .filter((record) => record.status === "active")
       .flatMap((record) => record.tools);
+  }
+
+  /**
+   * 当前 active 插件提供的指令，带来源 id。`CommandRegistry` 把这个方法登记成
+   * 动态来源（与 `tools()` 同一条现读语义：重载/禁用后下一条消息就看不到旧指令）。
+   */
+  commands(): CommandEntry[] {
+    return [...this.#records.values()]
+      .filter((record) => record.status === "active")
+      .flatMap((record) => record.commands.map((def) => ({ def, source: record.meta.id })));
+  }
+
+  /**
+   * 同伴视图的公开出口（`/plugins` 内置指令用）。与 `ctx.plugins()` 是同一份投影：
+   * 只给 id/name/version/description/enabled，不给 dir 与 error —— 指令的回复会
+   * 发进聊天窗口，操作者才看的诊断字段不该从这条路出去。
+   */
+  peers(): PluginInfo[] {
+    return this.#peers();
   }
 
   #view(rec: PluginRecord): PluginView {

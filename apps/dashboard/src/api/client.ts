@@ -24,6 +24,7 @@ import {
   createProfile as createProfileOp,
   deleteProfile as deleteProfileOp,
   listPlugins as listPluginsOp,
+  listCommands as listCommandsOp,
   listAdapters as listAdaptersOp,
   listAdapterTemplates as listAdapterTemplatesOp,
   listCronJobs as listCronJobsOp,
@@ -349,6 +350,14 @@ export async function savePluginConfig(
 
 export async function listTools(profile: string) {
   return body(await listToolsOp({ query: { profile } }));
+}
+
+/**
+ * 列出这一档已注册的指令（内置 + 插件）。只读：指令不做按档开关，
+ * 要关一条指令就去禁用提供它的插件。
+ */
+export async function listCommands(profile: string) {
+  return body(await listCommandsOp({ query: { profile } }));
 }
 
 /**

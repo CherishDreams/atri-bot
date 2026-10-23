@@ -1,5 +1,6 @@
 import type { AdapterAccessControl, MessageImage } from "@atri/shared";
 import { ApiError, errorMessage, errorStack } from "#core/errors.ts";
+import { DEFAULT_COMMAND_PREFIX } from "#core/command/types.ts";
 import type { Logger } from "#core/logger.ts";
 import type { AdapterTarget } from "./manager.ts";
 
@@ -63,6 +64,11 @@ export interface MessageAdapterDeps {
    * （测试与嵌入式使用）。不缓存：保存档里的名单后，下一条消息就该用新规则。
    */
   resolveAccess?: () => AdapterAccessControl;
+  /**
+   * 唤醒前缀现读，**属于绑定的配置档**（与 `resolveAccess` 同一条理由：保存后
+   * 下一条消息生效，不必重启长连接）。缺省为 `/`。只对群聊生效；空串关闭门槛。
+   */
+  resolveWakePrefix?: () => string;
   /** 单条平台消息的最大长度，默认 1500。 */
   maxMessageLength?: number;
 }
@@ -158,6 +164,7 @@ export abstract class MessageAdapter {
   #resolveTarget: (profileId: string) => AdapterTarget | null;
   #conversations: ConversationSessions;
   #resolveAccess: () => AdapterAccessControl;
+  #resolveWakePrefix: () => string;
   #maxMessageLength: number;
   #queues = new Map<string, Promise<void>>();
 
@@ -168,6 +175,7 @@ export abstract class MessageAdapter {
     resolveTarget,
     conversations,
     resolveAccess = () => ({ whitelistEnabled: false, allowedIds: [], adminIds: [] }),
+    resolveWakePrefix = () => DEFAULT_COMMAND_PREFIX,
     maxMessageLength = DEFAULT_MAX_MESSAGE_LENGTH,
   }: MessageAdapterDeps) {
     this.id = id;
@@ -176,6 +184,7 @@ export abstract class MessageAdapter {
     this.#resolveTarget = resolveTarget;
     this.#conversations = conversations;
     this.#resolveAccess = resolveAccess;
+    this.#resolveWakePrefix = resolveWakePrefix;
     this.#maxMessageLength = maxMessageLength;
   }
 
@@ -198,6 +207,16 @@ export abstract class MessageAdapter {
       // 被挡下的消息只记事件键与发送人，不记正文：它可能来自无关的群成员。
       this.logger.info(`${label} 已丢弃：发送人 ${oneLine(message.sender.id, 64)} 不在白名单`);
       return Promise.resolve();
+    }
+    // 群聊唤醒门槛属于**配置档**，排在白名单之后：没被准入的群谈唤醒没有意义。
+    // 判据针对 `message.text`（原始输入）—— 下面 `formatInbound` 加的发送人前缀
+    // 会破坏前缀匹配。私聊不设门槛（两个人对话，每条都值得回应）。
+    if (message.conversation.kind === "group") {
+      const prefix = this.#resolveWakePrefix().trim();
+      if (prefix !== "" && !message.text.startsWith(prefix)) {
+        this.logger.debug(`${label} 未唤醒（缺少前缀「${prefix}」），已忽略`);
+        return Promise.resolve();
+      }
     }
     const sender = oneLine(message.sender.name, 60) || message.sender.id;
     const messageId =
@@ -253,6 +272,11 @@ export abstract class MessageAdapter {
       const reply = await target.engine.handleMessage({
         sessionId,
         content: formatInbound(message),
+        // 指令匹配针对原始输入：群聊正文会加发送人前缀，那会让 `/help` 变成
+        // 「[张三] /help」。发送人身份随消息带给引擎，指令的 admin 权限要用。
+        commandText: message.text,
+        sender: message.sender,
+        source: "platform",
         ...(message.images && message.images.length > 0 ? { images: message.images } : {}),
       });
       const text = reply.content.trim();

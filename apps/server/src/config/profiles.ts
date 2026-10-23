@@ -100,6 +100,12 @@ export interface ProfileFileConfig {
    * 它不再是适配器实例的属性 —— 平台实例只是这份跑法的入口。
    */
   access?: AdapterAccessControl;
+  /**
+   * 群聊唤醒前缀（缺省 `/`）：群聊消息必须以它开头才被处理，同时是指令的匹配前缀。
+   * 空串 = 关闭群聊唤醒门槛（恢复「所有白名单消息都回复」的旧行为），此时指令
+   * 仍按 `/` 识别 —— 关门槛不该顺手关掉指令系统。私聊永远不设门槛。
+   */
+  wakePrefix?: string;
   [key: string]: unknown;
 }
 

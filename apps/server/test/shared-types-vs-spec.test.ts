@@ -30,6 +30,7 @@ const SPEC_PATH = fileURLToPath(new URL("../openapi.json", import.meta.url));
 const COMPARABLE = [
   "AdapterAccessControl",
   "AdapterInfo",
+  "CommandInfo",
   "CronJobInfo",
   "CronLastStatus",
   "LogEntry",

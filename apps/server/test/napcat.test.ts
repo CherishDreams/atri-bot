@@ -136,6 +136,7 @@ test("NapCat：作为 WS 服务端接收客户端，鉴权与私聊/群聊收发
     path: "/ws",
     token: "secret",
     logger: silentLogger(),
+    resolveWakePrefix: () => "", // 这条用例证传输与收发，不是唤醒门槛：显式关掉
     resolveTarget: () =>
       ({
         engine: {

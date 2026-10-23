@@ -4,8 +4,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
-import type { ServerFrame, ToolInfo } from "@atri/shared";
+import type { CommandInfo, ServerFrame, ToolInfo } from "@atri/shared";
 import { API_PREFIX, APP_NAME, WS_PATH } from "@atri/shared";
+import type { CommandEntry } from "#core/command/types.ts";
 import { createProviders } from "#core/provider/factory.ts";
 import {
   PROVIDER_PROBE_KINDS,
@@ -111,6 +112,8 @@ function profileConfigView(bundle: ProfileBundle) {
     personaId: bundle.personaId,
     // 夹取后的生效值，不是文件里的原值：见 `ProfileConfig.maxToolSteps` 的注释。
     maxToolSteps: bundle.toolConfig.maxSteps(),
+    // 与 bundle 上那份可变值同源：保存后回读的就是运行中的那个前缀。
+    wakePrefix: bundle.wakePrefix,
     // 内部工具（系统插件提供）不进用户的工具开关；它们由引擎始终声明。
     tools: bundle.tools
       .list()
@@ -122,6 +125,20 @@ function profileConfigView(bundle: ProfileBundle) {
       allowedIds: [...bundle.access.allowedIds],
       adminIds: [...bundle.access.adminIds],
     },
+  };
+}
+
+/**
+ * 注册表条目 -> 对外视图。权限归一成必填的 `all`/`admin`（定义里缺省即 `all`）。
+ */
+function viewCommand(entry: CommandEntry): CommandInfo {
+  return {
+    name: entry.def.name,
+    aliases: [...(entry.def.aliases ?? [])],
+    description: entry.def.description,
+    ...(entry.def.usage === undefined ? {} : { usage: entry.def.usage }),
+    permission: entry.def.permission === "admin" ? "admin" : "all",
+    source: entry.source,
   };
 }
 
@@ -598,9 +615,14 @@ export function createHttpServer(deps: HttpDeps) {
     res.on("close", onClose);
     openStreams.add(controller);
     try {
+      // 控制台来源：指令可以在这里用，且发送人视为管理员（登录态即凭证）。
+      // 登录用户名就是消息的身份：指令上下文里「谁敲的」说的是它。
+      const session = requireAuth(auth, req, res);
       const reply = await bundle.engine.handleMessage({
         sessionId: params.id,
         content: body.content,
+        source: "console",
+        ...(session ? { sender: { id: session.user.username, name: session.user.username } } : {}),
         model: readModel(body),
         signal: controller.signal,
       });
@@ -668,9 +690,14 @@ export function createHttpServer(deps: HttpDeps) {
     openStreams.add(controller);
 
     try {
+      // 与非流式端点同一条：控制台来源可执行指令，发送人视为管理员，
+      // 登录用户名作为消息的身份带给指令上下文。
+      const session = requireAuth(auth, req, res);
       const reply = await bundle.engine.handleMessage({
         sessionId: params.id,
         content: body.content,
+        source: "console",
+        ...(session ? { sender: { id: session.user.username, name: session.user.username } } : {}),
         model: readModel(body),
         signal: controller.signal,
         onDelta: (delta) => {
@@ -1139,6 +1166,17 @@ export function createHttpServer(deps: HttpDeps) {
     } catch (err) {
       fail(res, err);
     }
+  });
+
+  // --- 指令 ---------------------------------------------------------------
+  //
+  // 只读：指令不做按档开关（要关指令就禁用提供它的插件），所以没有 enable 端点；
+  // 注册表现读，插件重载/禁用后下一次 GET 就是新清单。
+
+  router.get(`${API_PREFIX}/commands`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    sendJson(res, 200, { commands: bundle.commands.list().map(viewCommand) });
   });
 
   // --- 配置档 -------------------------------------------------------------

@@ -156,7 +156,9 @@ export class CronScheduler {
         }
       }
 
-      await engine.handleMessage({ sessionId, content: job.prompt });
+      // source 标成 cron：定时提示词是写给模型的，不做指令匹配 —— 否则一个
+      // 「碰巧以 / 开头」的提示词会被指令系统劫走，而任务作者无法理解为什么。
+      await engine.handleMessage({ sessionId, content: job.prompt, source: "cron" });
       this.#record(job, "success", null);
       this.#logger.info(`计划任务「${job.name}」执行完成（配置档「${job.profile}」）`);
     } catch (err) {
