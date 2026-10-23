@@ -104,11 +104,10 @@ config/   ── 与 core/ 双向（按文件看没有环）
   这条是测试能直接 `createApp(config)` 起真服务、而不必 mock 掉半个世界的原因。
 - 每个模块往里收一层：`index.ts` 薄入口 → `app.ts` 装配 → `core/` 逻辑 → `api/` 传输。
 
-新增能力时的落点：入站适配 → `adapters/`（消息类继承 `MessageAdapter`）；
-出站模型 → `core/provider/factory.ts` 的 `TYPES` 表；
+新增能力时的落点：入站适配 → `adapters/`（OneBot 11 共用 `adapters/onebot11.ts`，
+消息类继承 `MessageAdapter`）；出站模型 → `core/provider/factory.ts` 的 `TYPES` 表；
 工具能力 → `core/tool/`（注册表不 import 具体工具、也不读配置，内置工具由组合根注册；
-工具需要别层的数据时**由组合根注入访问器**，不要在 `core/tool/` 里 import 那一层 ——
-`list_plugins` 收 `() => plugins.list()` 就是这个形状，分层规则没有检查守着）；
+工具需要别层的数据时**由组合根注入访问器**，不要在 `core/tool/` 里 import 那一层）；
 业务逻辑 → `core/`；HTTP 表面 → `api/server.ts` + `openapi.json`。
 
 **内置工具一颗一个文件**：`core/tool/builtins/<id>.ts` 只导出自己那颗的 `ToolDefinition`，
@@ -116,6 +115,13 @@ config/   ── 与 core/ 双向（按文件看没有环）
 （`openai.ts` / `anthropic.ts` 各一份实现，`factory.ts` 负责挑）。**不要**加
 `builtins/index.ts` 这类 re-export 中间层：清单是唯一的装配点，多一处出口就会变成
 「改了工具文件但忘了登记」，而登记与否没有任何检查在守（注册表按注入的东西说话）。
+
+**系统内省工具走内置插件，不走用户工具开关**：`apps/server/plugins/system/index.js`
+声明 `tools(ctx)`，`list_plugins` 标 `internal: true`。`PluginManager.tools()` 作为
+`ToolRegistry` 的动态来源，插件加载/卸载/重载时自动进退；`internal` 工具由引擎始终
+声明，但不进 `GET /tools`、`ProfileConfig.tools` 与配置页。不要把它加回
+`core/tool/builtins/`，也不要为它新增一个用户可见的开关。插件工具 id 必须唯一，
+跨插件冲突在 `PluginManager.load()` 里直接拒绝。
 
 ### 信任边界只有一条：插件
 
@@ -131,6 +137,8 @@ config/   ── 与 core/ 双向（按文件看没有环）
   秘密会换名字、会新增，黑名单每一次都迟到。
 - **`ctx` 交出去的东西按同一条规矩办**。`ctx.plugins()` 返回 `PluginManager.#peers()` 逐键拼出的
   `PluginInfo`，不含同伴的 `dir` 与 `error`（后者可能带着 `resolve()` 之后的绝对路径）；
+  `ctx.adapters()` 只返回绑定到本档的 `id/name/type/running`，`ctx.callAction()` 由组合根
+  注入的端口执行并校验配置档边界 —— 插件不能借它操作别的档，也拿不到适配器的 token/目录；
   要扩大它就是「在 `#peers()` 里显式加一行 + 同步 `test/plugins.test.ts` 那句不该有 dir/error/dataDir」，
   而不是把 `#view()` 那份给控制台的形状直接递给插件。
   `ctx.dataDir` 是这条规矩的一个样本：它给的是
@@ -193,14 +201,25 @@ architecture.md 与 README 里各有一句「重启即全部失效」只在前�
   `发送[<...>]:<内容>`；第一段是实例 id（如 `napcat`），不是配置档 id。
   群聊内容带发送人前缀；发送人 id/message_id 与回复摘要只在 debug 写。
   平台昵称与内容里的换行必须收成空格，否则用户可伪造日志行。
+- **OneBot 11 的协议层是共享的**：`adapters/onebot11.ts` 负责消息段解析、图片下载、
+  action 请求/响应与登录信息；`adapters/napcat.ts` 只实现反向 WS 监听，`adapters/snowluma.ts`
+  只实现正向 WS 客户端与重连。新增 OneBot 11 实现时不要再复制一份段解析；平台差异
+  放进各自的类与模板，不要进 `core/`。
 - NapCat 走 OneBot 11 **反向 WebSocket**：atri-bot 监听 `host:port/path`，NapCat 作为
   WebSocket 客户端连入；token 用 `Authorization: Bearer` 或 `?access_token=` 校验，
   **不打印 token**。客户端断开后由 NapCat 自己重连，监听不关。
+  SnowLuma 走**正向 WebSocket**：atri-bot 连它，token 以 `Authorization: Bearer` 发送
+  （可留空），断开后按固定间隔重连。
   入站图片会优先按 `url` 下载、失败再用 `get_image` 刷新，成功则转 base64 随
   `Message.images` 落库；单张 4 MiB、单条最多 4 张，失败/超限退回 `[图片]` 占位。
   provider 各自把 `images` 翻成自己的多模态内容块（OpenAI `image_url`、Anthropic
-  base64 `image`）。不做正向 WS、图片上传与请求处理；协议细节与理由见
-  `adapters/napcat.ts` 与 architecture.md 的适配器、模型 provider 两节。
+  base64 `image`）。不做图片上传与请求处理；协议细节见 `adapters/onebot11.ts`、
+  `adapters/napcat.ts`、`adapters/snowluma.ts` 与 architecture.md。
+- **`call_action` 是逃生口，不是核心 API**：`Adapter.callAction()` 与
+  `AdapterManager.callAction()` 把原始 action 原样转发；HTTP 入口是
+  `POST /adapters/{id}/action`，插件入口是 `ctx.callAction()`。不要为每个平台动作
+  在 core 里加一个 if 分支；先走 call_action 验证，确有稳定语义再包装成工具/端点。
+  参数与错误要设上限，且错误文本不得回显 token/apiKey。
 
 ### 人格、访问控制与计划任务
 

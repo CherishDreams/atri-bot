@@ -113,7 +113,7 @@ model）。这一条分界与 AstrBot 一致：除了配置文件，其余都是
   保存配置后插件自动重载。抽屉里有未保存改动时，先保存或关闭抽屉再切配置。
 - **「供应商」页**（`/providers`）：部署级全局一份，增删源与模型**即时**写回
   `data/providers.json`。`/provider` 是它的旧链接。
-- **「接入平台」页**（`/adapters`）：新增、编辑、删除、启用/禁用接入平台实例（目前 NapCat）。
+- **「接入平台」页**（`/adapters`）：新增、编辑、删除、启用/禁用接入平台实例（目前 NapCat / SnowLuma）。
   配置写进 `data/adapters.json`，全程在网页完成，不需要手写 JSON。
 - **「计划任务」页**（`/cron`）：按 5 段 cron 定时执行提示词。任务选用一份配置档，
   结果写进任务自己的内部会话，可在页面上跳到该会话；支持立即执行、启停与删除。
@@ -217,8 +217,34 @@ Token 保存在 `data/adapters.json`（目录 `0700`、文件 `0600`），不要
   `[napcat:privateMessage:123456]: 你好`、`[napcat:groupMessage:456]: [群名片] 大家好`、
   `发送[napcat:privateMessage:123456]:你好`。图片消息在日志里显示 `[图片]`；群聊内容带
   发送人前缀，「日志」页可以直接按 `privateMessage` / `groupMessage` / QQ 号搜索。
-- v1 不做正向 WebSocket（不需要 NapCat 再开 WS 服务器）、图片上传、好友/加群请求处理；
+- NapCat 侧不做正向 WebSocket（不需要它再开 WS 服务器）、图片上传、好友/加群请求处理；
   这些是后续的适配器能力。
+
+#### SnowLuma 适配器
+
+SnowLuma 也讲 **OneBot 11**，但方向相反：**SnowLuma 暴露 WebSocket 服务，atri-bot 作为客户端连入**。
+在「接入平台」页添加 SnowLuma 时填写：
+
+- WebSocket 地址：SnowLuma 的 OneBot 11 服务地址，例如 `ws://127.0.0.1:3001/ws`
+- Access Token：可留空；填了就以 `Authorization: Bearer` 发送（如果 SnowLuma 只认 query，
+  也可以直接把它写在 URL 里）
+- 配置：选一份可用配置
+- 启用：打开
+
+连接断开后 atri-bot 会按固定间隔自动重连，连接/断线都写服务端日志。SnowLuma 与 NapCat
+共用 OneBot 11 的消息段解析、图片下载与 action 调用，差别只在连接方向、token 来源与
+模板字段。
+
+### 调用平台原始动作（call_action）
+
+框架没有包装成具体端点或工具的 OneBot 11 动作（群列表、文件上传、拍一拍、撤回……）不必先改框架：
+
+- 控制台「接入平台」卡片上的调试图标会打开动作编辑器，填 `action` 与 JSON `params`，结果原样展示；
+- 管理员也可以直接 `POST /adapters/{id}/action`，body `{ "action": "...", "params": {...} }`；
+- 插件里用 `ctx.adapters()` 找到绑定到本档的实例，再 `await ctx.callAction(adapterId, action, params)`。
+
+动作名与参数原样转发，平台不支持或未连接时返回 `{ ok: false, error }`，不会伪装成成功。
+参数 JSON 最长 64 KiB；错误文本会截断，且不回显源上的 apiKey。
 
 ##### 用 Docker 跑 NapCat（本地调试）
 
@@ -436,6 +462,15 @@ provider 启动，并且在控制台的「供应商」页里以 `loaded: false` 
 「获取模型列表」会拿**已保存的**凭证去打上游的 `GET /models`，所以源有未保存改动时按钮会
 变成「保存并获取模型列表」。上游没有 `/models` 时可以用「自定义模型」手填模型 id 绕过。
 
+每个模型行右侧有一个测试图标，菜单里可以：
+
+- **测试 API**：用已保存的源拉一次模型列表，验证地址与凭证；
+- **测试模型**：用这个实例绑定的模型发一次最小补全，验证模型真的能回。
+
+结果包含 `ok`、延迟与中文原因；测试不写会话、不占会话锁。对应接口是
+`POST /providers/{id}/probe`，body `{ "kind": "api" | "model" }`。上游失败也是 200 +
+`ok: false`，错误文本会截断并抹掉 `apiKey`。
+
 「配置文件」页的「默认模型」分类改的是当前配置档的 `defaultProvider`（清单里挑一个实例），
 **要按保存**；chat 顶栏那个模型选择器是它的快捷入口，写的是同一个键、走同一个服务端校验，
 所以两处显示的永远是同一个默认，换浏览器、换设备也一样。
@@ -520,21 +555,24 @@ pnpm start            # 或 node apps/server/src/index.ts
 ## 扩展方式
 
 - **插件** —— 一个目录，内含 `index.js`，默认导出
-  `{ id, name, version, description?, config?, setup(ctx), teardown?() }`
-  （也支持默认导出工厂函数 `(shared) => 上述对象`）。目录来自配置中的 `pluginDirs`。
+  `{ id, name, version, description?, config?, tools?, setup(ctx), teardown?() }`
+  （也支持默认导出工厂函数 `(shared) => 上述对象`）。`tools` 可以是数组，也可以是
+  `(ctx) => 工具数组`；目录来自配置中的 `pluginDirs`。
   目录里还可以放一份可选的 `_conf_schema.json`：它声明这个插件有哪些用户可配置项，
   控制台按它渲染表单，值落在插件自己的数据目录（见[插件配置](#插件配置)）。
   要存数据用 `ctx.dataDir`（见[插件的动态加载](#插件的动态加载)），**不要**写进插件自己那个目录 ——
   那个目录是会被升级覆盖、被用户改名的。参见 `apps/server/plugins/hello`。
-- **适配器** —— 入站平台。消息类适配器继承 `adapters/message.ts` 的 `MessageAdapter`，
-  实现 `start()` / `stop()` / `sendText()`；`adapters/templates.ts` 声明可添加的类型与表单字段，
-  `AdapterConfigStore` 把实例存到 `data/adapters.json`，`AdapterManager` 管增删改与启停。
-  会话映射、发送人前缀、按会话串行与长回复切块由基类统一处理。
-  控制台的「接入平台」页是唯一写入口。仓库内置 `NapCat`（OneBot 11 反向 WebSocket），
-  见上面的 [NapCat 适配器](#napcat-适配器)。
+- **适配器** —— 入站平台。OneBot 11 的段解析、图片下载与 action 调用在
+  `adapters/onebot11.ts`，传输实现只负责连接方向；`adapters/templates.ts` 声明可添加的
+  类型与表单字段，`AdapterConfigStore` 把实例存到 `data/adapters.json`，
+  `AdapterManager` 管增删改与启停。会话映射、发送人前缀、按会话串行与长回复切块由
+  `MessageAdapter` 统一处理。仓库内置 **NapCat**（反向 WebSocket）与 **SnowLuma**
+  （正向 WebSocket），见上面的 [NapCat 适配器](#napcat-适配器) 与
+  [SnowLuma 适配器](#snowluma-适配器)。
 - **工具（function calling）** —— 内置工具一颗一个文件（`apps/server/src/core/tool/builtins/`），
-  在 `builtins.ts` 的清单里登记后由组合根注册进 `ToolRegistry`。目前有两颗：`current_time`
-  （报此刻的日期与时钟，可传 IANA 时区）与 `list_plugins`（列已安装的插件及其加载结果）。
+  在 `builtins.ts` 的清单里登记后由组合根注册进 `ToolRegistry`；插件也可以在定义里声明
+  `tools`，由 `PluginManager.tools()` 作为**动态来源**登记。用户可见的内置工具目前只有
+  `current_time`（报此刻的日期与时钟，可传 IANA 时区）。
   启用走**配置档文件**的 `tools` 段，
   **默认全部关闭**（与适配器的默认启用刻意相反：少听一个端口是部署细节，
   给模型多一件可做的事是能力授予）：
@@ -547,7 +585,11 @@ pnpm start            # 或 node apps/server/src/index.ts
   启用后引擎会真的执行它：模型要求调用 → 本地执行 → 结果回喂 → 模型再答，
   一条消息里最多循环 `maxToolSteps` 步（默认 5）。会话历史里因此会出现
   `role: "tool"` 的消息，控制台以紧凑条块显示调用与结果。
-  插件注册自己的工具（`ctx.tool()`）还没有做 —— 那需要一次单独的能力授予设计。
+
+  **系统内省工具不是用户开关。** `list_plugins` 等由内置插件
+  `apps/server/plugins/system/` 声明为 `internal: true`：引擎始终交给模型，
+  但 `GET /tools`、配置工作台与工具开关页都不展示。需要看插件列表时，模型仍可以直接调用它；
+  要整体停用系统能力，去插件页停用 `system` 插件。
 
 - **Provider** —— 模型的出站适配。内置 `openai` 与 `anthropic` 两种实现，
   在 `data/providers.json`（**部署级全局一份**，不属于任何配置档）里按类型声明，
@@ -570,17 +612,20 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 `PluginManager` 提供 `load(dir)` / `reload(id)` / `unload(id)` / `setEnabled(id, bool)`，
 并在 `stop()` 时 `unloadAll()`。重载 / 启用 / 禁用 / 卸载与配置都只在「插件」页操作；
-控制台保持会话工作区两栏，不再有右侧插件面板。
+控制台保持会话工作区两栏，不再有右侧插件面板。插件声明的工具随插件加载/卸载/重载
+自动进出 `ToolRegistry`，不需要手工同步。
 
 **一颗插件坏了只影响它自己。** 加载（含 `setup()`）抛错的插件被记为 `failed` 并带上失败原因，
-`loadAll()` 记下这一条后继续扫下一个 —— 启动不会因为它退出，控制台插件页显示原因与「重载」，
-`list_plugins` 那颗工具也如实报告它「上次加载失败」。常见的三种失败与它们的修法：
+`loadAll()` 记下这一条后继续扫下一个 —— 启动不会因为它退出，控制台插件页显示原因与「重载」。
+系统插件的 `list_plugins` 只报告「运行中 / 已禁用」，失败原因原文仍只在插件页给操作者。
+常见的四种失败与它们的修法：
 
-| 失败原因                           | 怎么修                                                  |
-| ---------------------------------- | ------------------------------------------------------- |
-| `index.js` 没有导出 `id`           | 补上 `id`（工厂写法也要在返回的对象里带）               |
-| `插件 id "..." 不能用作数据目录名` | 改成小写字母/数字开头、只含 `a-z0-9._-`、不超过 64 字符 |
-| `插件 id "..." 与已加载的插件冲突` | 两份插件不能共用一个 id：改其中一个的 `id`              |
+| 失败原因                            | 怎么修                                                  |
+| ----------------------------------- | ------------------------------------------------------- |
+| `index.js` 没有导出 `id`            | 补上 `id`（工厂写法也要在返回的对象里带）               |
+| `插件 id "..." 不能用作数据目录名`  | 改成小写字母/数字开头、只含 `a-z0-9._-`、不超过 64 字符 |
+| `插件 id "..." 与已加载的插件冲突`  | 两份插件不能共用一个 id：改其中一个的 `id`              |
+| `工具 id "..." 不合法 / 与插件冲突` | 工具 id 用小写字母/数字开头，且不要与其他插件的工具重名 |
 
 `id` 之所以要有这三条约束，是因为它同时是**日志里的标识**、**`ctx.dataDir` 的路径组件**与
 **插件之间互相识别的键**：它能穿越目录、能伪造日志行、还能让后加载的一份拿到前一份的数据目录。
@@ -619,6 +664,11 @@ pnpm start            # 或 node apps/server/src/index.ts
   它们的 `enabled` 为 `false`），每项只有 `id` / `name` / `version` / `description` / `enabled`
   五个键。拿不到同伴的目录，也拿不到它们的失败原因（那是第三方文本，里面可能有绝对路径）；
   要每次读现值而不是存下来，因为插件是在运行期被加载、重载与启停的
+- `ctx.adapters()`：**实时**列出绑定到本插件所属配置档的接入平台，每项只有
+  `id` / `name` / `type` / `running`。它不暴露实例目录、token 或错误原文。
+- `ctx.callAction(adapterId, action, params?)`：调用绑定到本档的适配器的原始 OneBot 11
+  动作（`call_action`）。动作失败抛错，插件可以 catch 后降级；跨配置档的实例会被拒绝，
+  插件无法借它操作别的档。
 
 ### 插件配置
 
@@ -674,6 +724,7 @@ pnpm start            # 或 node apps/server/src/index.ts
 | GET             | `/adapters/templates`                           | 可添加的适配器类型与表单字段                                                                        |
 | GET/POST/DELETE | `/adapters/{id}`                                | 读取（含平台字段）/ 更新 / 删除一个实例                                                             |
 | POST            | `/adapters/{id}/enable`                         | 启用或禁用实例，body `{ "enabled": true }`                                                          |
+| POST            | `/adapters/{id}/action`                         | 调用平台原始动作，body `{ "action": "...", "params": {...} }`；返回 `{ ok, data?, error? }`         |
 | GET / POST      | `/personas`                                     | 列出 / 新建人格                                                                                     |
 | POST / DELETE   | `/personas/{id}`                                | 更新 / 删除人格（仍被配置档引用时删除回 409）                                                       |
 | GET / POST      | `/cron`                                         | 列出 / 新建计划任务                                                                                 |
@@ -682,6 +733,7 @@ pnpm start            # 或 node apps/server/src/index.ts
 | GET             | `/logs`                                         | 最近的程序日志（默认 200 条，最多 500 条）                                                          |
 | GET             | `/logs/stream`                                  | 实时日志流（SSE，先补发历史再推送；`after` 续传）                                                   |
 | POST/DELETE     | `/providers`、`/providers/:id`                  | 新增 / 修改 / 删除模型实例                                                                          |
+| POST            | `/providers/{id}/probe`                         | 测试 API 或模型可用性，body `{ "kind": "api" \| "model" }`；返回 `{ ok, latencyMs, detail, error }` |
 | GET             | `/provider-sources`                             | 列出 provider source（**明文含 apiKey**）                                                           |
 | POST/DELETE     | `/provider-sources`、`/provider-sources/:id`    | 新增 / 修改 / 删除 provider source                                                                  |
 | POST            | `/provider-sources/:id/models`                  | 按已保存的凭证拉取上游模型列表                                                                      |
@@ -704,7 +756,8 @@ pnpm start            # 或 node apps/server/src/index.ts
 `/sessions/:id/messages[/stream]`。缺了它一律 **400**，
 不会回落到 `default` —— 「界面在 B、写进 A、还回 201」这类错只有在服务端拒绝猜的时候才可能被发现。
 `/health`、`/auth/*`、`/sessions*`（列表与增删会话本身）、`/adapters*`、`/logs*`、
-`/profiles*`、`/personas*`、`/cron*`、以及**整个 `/providers*` 与 `/provider-sources*`** 都不需要：
+`/profiles*`、`/personas*`、`/cron*`、以及**整个 `/providers*`（含 `probe`）与
+`/provider-sources*`** 都不需要：
 前两样是对话历史与配置档清单本身，人格与计划任务是部署级资源（计划任务自己保存所用配置档），
 供应商是部署级全局一份（按档各要一个 `profile` 反而会让「在 A 上改了源、B 以为自己也有」变成可能）。
 

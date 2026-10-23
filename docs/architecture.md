@@ -116,18 +116,19 @@ function rebuildProviders(): ProviderRegistry {
   /* 读 providerConfig → createProviders() → 填 providers / providerErrors，并设默认 */
 }
 // 以下每一样**都是一份配置档**各有一套：插件管理器、工具注册表、工具开关、引擎。
-// `list_plugins` 要读插件列表，所以构造顺序是「插件管理器在前、工具在后」。
-// 传的是 **getter 而不是 `plugins.list()` 的结果**：此刻还没 `loadAll()`，
-// 而插件能在运行期被加载/重载/启停 —— 快照会把这颗工具冻在装配那一刻。
+// 插件工具（含系统插件声明的 internal 工具）是**动态来源**：注册表每次 list 现读
+// `plugins.tools()`，所以插件加载/重载/停用后下一轮请求立刻看到新清单。
 // 第三个参数是框架私有的数据根，而且是**这一档自己的**那一个：插件只经 `ctx.dataDir`
 // 看到 `<dataDir>/profiles/<档 id>/plugins/<自己的 id>`，拿不到 `dataDir` 本体
 //（那下面躺着 `sessions.sqlite` 与全局那份 `providers.json`）。
 const plugins = new PluginManager(pluginRuntimeConfig(config), logger, {
   dataRoot: join(profileDir(profilesDir, id), "plugins"),
   persistEnabled: (pluginId, enabled) => setProfilePluginEnabled(profilePath, pluginId, enabled),
+  adapterActions: adapterActionsFor(id), // 按档过滤的 call_action 端口
 });
 const tools = new ToolRegistry();
-for (const tool of createBuiltinTools({ listPlugins: () => plugins.list() })) tools.register(tool);
+for (const tool of createBuiltinTools()) tools.register(tool);
+tools.registerSource(() => plugins.tools());
 const toolConfig = new ToolConfigStore({ filePath: profilePath }, logger);
 // 引擎吃五样：会话、（全局那一份）provider、工具注册表、工具开关存储、日志器，
 // 加上「这一档默认用清单里的哪一个」——`model` 缺省时由它填，这是档级默认与全局默认
@@ -241,11 +242,14 @@ HTTP 面是 `GET /logs`（历史）与 `GET /logs/stream`（SSE）。流先补�
 
 ### 实例管理与状态
 
-- **类型与表单在源码里。** `adapters/templates.ts` 列出内置类型（目前 NapCat）和每种类型
-  要填的字段。用户只填值，不能声明新类型；这与 provider 的 `TYPES` 表同一层级。
+- **类型与表单在源码里。** `adapters/templates.ts` 列出内置类型（NapCat / SnowLuma）和每种
+  类型要填的字段、`generateToken` 与 `setupHint`。用户只填值，不能声明新类型；这与 provider
+  的 `TYPES` 表同一层级。
 - **配置在 `data/adapters.json`。** 目录 0700、文件 0600（里面可能有 access token）；
   NapCat 的字段是监听 host/port/path 与 token，由实例自己监听，NapCat 连入；
-  旧配置迁移一次。控制台是唯一写入口，API 提供新增/编辑/删除/启停与模板读取。
+  SnowLuma 的字段是它暴露的 ws/wss URL 与可选 token，atri-bot 作为客户端连入；
+  旧配置迁移一次。控制台是唯一写入口，API 提供新增/编辑/删除/启停、模板读取与
+  `POST /adapters/{id}/action` 原始动作。
 - **生命周期在管理器里。** 每条实例记录 `enabled` / `running` / `error` 与其实例；
   编辑或启停时先停旧实例、再按新配置构造并启动。启动失败只影响这一条，配置保留，
   原因显示在卡片上；配置档不可用时同理，不静默改绑。
@@ -282,6 +286,14 @@ HTTP 面是 `GET /logs`（历史）与 `GET /logs/stream`（SSE）。流先补�
   发送人 id/message_id 与回复条数摘要只在 debug 级别写。这样日志页能按
   私聊/群聊/QQ 号检索，也避免平台昵称里的换行伪造日志行。
 
+### OneBot 11 共用协议层
+
+`adapters/onebot11.ts` 承担 NapCat 与 SnowLuma 共用的部分：消息段解析、图片下载/嗅探、
+`get_login_info`、`send_private_msg` / `send_group_msg`、action 的 `echo` Promise 表、
+超时与断线时的在途清理。传输子类只实现 `canSend()` / `sendRaw()` / `unavailableMessage()`
+与连接生命周期；平台差异（反向监听 vs 正向连接、token 来源、模板字段）留在各自文件里。
+新增第三个 OneBot 11 实现时不要复制段解析与 action 表。
+
 ### NapCat：OneBot 11 反向 WebSocket
 
 `adapters/napcat.ts` 是**反向 WebSocket**：每个实例监听自己的 `host:port/path`，
@@ -300,8 +312,25 @@ NapCat 作为客户端连入，与 AstrBot 的方向一致。监听地址/端口
 `get_image` 刷新链接，成功则转成 base64 附件随消息落库并进入历史，失败/超限才退回
 `[图片]` 占位（单张 4 MiB、单条最多 4 张）。图片本体必须落库而不是只留 URL：QQ 图片链接
 带时效，只存链接会让历史变破图，回喂模型时也取不到。语音/文件仍是占位；不做图片上传、
-合并转发、好友/加群请求，也不做正向 WebSocket。群消息目前全部触发引擎，不要求 `@` 机器人；
-要改成「仅被 @ 时响应」应该加平台配置项，而不是把这个策略塞进基类。
+合并转发、好友/加群请求，NapCat 侧不做正向 WebSocket。群消息目前全部触发引擎，不要求
+`@` 机器人；要改成「仅被 @ 时响应」应该加平台配置项，而不是把这个策略塞进基类。
+
+### SnowLuma：OneBot 11 正向 WebSocket
+
+`adapters/snowluma.ts` 是**正向 WebSocket**：SnowLuma 暴露 OneBot 11 服务，atri-bot 作为
+客户端连入。URL 必填，token 可空；非空时以 `Authorization: Bearer` 发送（如果服务端只认
+query，可直接写进 URL）。连接断开后按固定间隔重连；`running` 表示适配器已启动并进入
+连接/重连循环，不等于此刻已经连上 —— 与 NapCat 的 `running` 只表示监听器已启动同理。
+消息段、图片与 action 全部复用 `onebot11.ts`。
+
+### 原始动作 `call_action`
+
+`Adapter.callAction(action, params)` 与 `AdapterManager.callAction()` 是框架未包装能力的
+统一入口：群列表、文件上传、拍一拍、撤回等 OneBot 11 动作不必为每一个都改一次核心或 UI。
+结果统一为 `{ ok, data?, error? }`；未运行、平台不支持与上游失败都是 200 + `ok:false`，
+不是服务端 5xx。HTTP 入口是 `POST /adapters/{id}/action`，插件入口是
+`ctx.callAction(adapterId, action, params)`；后者由组合根注入并校验
+「适配器绑定的配置档 == 插件所属配置档」。参数 JSON 上限 64 KiB，错误截断且不记录参数。
 
 ## 人格、访问控制与计划任务
 
@@ -690,6 +719,20 @@ errors.ts ProviderError 与上游错误归一
 每条带 `loaded` 与失败原因。旧语义只返回注册表里活着的那些，
 于是「我明明配了它却不在列表里」这种最难自查的状况在界面上表现为「凭空消失」。
 
+### Provider 探针
+
+`POST /providers/{id}/probe` 有两条路径：
+
+- `kind: "api"`：用**已保存的**实例配置造一个临时 provider，打一次 `listModels()`，验证
+  地址、凭证与 `/models` 接口；
+- `kind: "model"`：用实例绑定的模型发一次最小补全（`ping`，无工具、无历史、无会话），
+  验证模型真的能回。
+
+失败不是 5xx：上游 401、超时、网关没有 `/models` 都是 `ok: false` + `error`，因为这是
+一次「是否可用」的探测，不是服务端处理失败。超时 10s / 20s 是常量，不继承实例可能长达
+10 分钟的 `timeoutMs`；错误截断到 300 字符，并把源上的 `apiKey` 替换成 `***`。
+探针不写会话、不占会话锁。
+
 ## 工具（function calling）
 
 `core/tool/` 是模型可以请求执行的**本地动作**。与 `core/provider/` 同一套三层拆分，
@@ -731,22 +774,24 @@ builtins/ 一颗工具一个文件（`currentTime.ts`），只导出自己那颗
 `isError: true` 的结果回喂模型。那是模型的一次可纠正回合（幻觉出一个工具名是常态），
 抛出去会把整轮打成 400/500。provider 层的错误不经过这里，照旧抛。
 
-### 工具怎么拿到别层的数据
+### 插件工具与 internal
 
-`list_plugins` 要读插件清单，而数据源 `PluginManager.list()` 在 `plugins/` 下 ——
-`core/` 不得 import `plugins/`，所以数据只能由组合根递进来
-（`app.ts` 传 `{ listPlugins: () => plugins.list() }`）。两个具体选择：
+插件可以在定义里声明 `tools`（数组，或 `(ctx) => 工具数组`）。`PluginManager.tools()` 是
+`ToolRegistry` 的动态来源：每次 `list()` 现读，所以插件加载/卸载/重载后下一轮请求立刻
+看到新清单，不需要重建注册表。工具 id 在加载时校验；两个 active 插件声明同一个 id
+会拒绝后加载的那一个，不能静默覆盖。
 
-- **收 getter 而不是数组。** 注册发生在 `plugins.loadAll()` 之前，插件又能在运行期被加载、
-  重载、启停；传快照等于把工具冻在装配那一刻，之后一直报「当前没有安装任何插件」。
-- **在 core 里重新声明窄形状 `PluginSummary`，而不是复用 `PluginView`。** import 那个类型
-  本身就构成对 `plugins/` 的依赖；按「这颗工具实际读的四五个键」声明之后，`PluginView`
-  作为超集可以直接赋值，不需要 `as`（`as` 只该出现在真边界上）。
-  这条分层约束**没有任何检查守着**：oxlint 不解析模块路径，`tsc` 不看目录，只有 review 在看。
+工具标 `internal: true` 时：引擎**始终**把它交给模型（不需要用户开关），但
+`GET /tools`、`ProfileConfig.tools` 与配置页不展示，`POST /tools/{id}/enable` 也拒绝。
+内置插件 `apps/server/plugins/system/index.js` 的 `list_plugins` 就是这个形状；
+它随程序发布、在插件页可见，可以整体停用，但不是一个用户级的工具开关。
 
-还有一条安全边界：工具结果会整段发给第三方 provider，所以 `list_plugins` 只报「上次加载失败」
-这个事实，不外传 `error` 原文 —— 那串是**第三方文本**（动态 import 的报错、插件自己抛的错，
-都可能带着文件系统路径）。失败原因是给操作者看的，控制台插件页已经在显示它。
+插件工具天然拿着 `ctx`，例如 `ctx.plugins()` 读同伴、`ctx.adapters()` / `ctx.callAction()`
+读绑定到本档的接入平台；`core/` 仍然不 import `plugins/`。旧的内置 `list_plugins`
+（`core/tool/builtins/` + `listPlugins` 访问器）已删除，不要加回去。
+
+安全边界不变：插件工具结果会整段发给第三方 provider，框架不会替插件过滤文本；
+系统插件的 `list_plugins` 只报「运行中 / 已禁用」，失败原因原文只在插件页给操作者。
 
 ### 两家的 function calling 报文不一样，所以映射各写一份
 
@@ -855,7 +900,8 @@ builtins/ 一颗工具一个文件（`currentTime.ts`），只导出自己那颗
 `plugins` 是**函数**而不是数组（`plugins: () => this.#peers()`）：`loadAll()` 按 `pluginDirs`
 的顺序逐个 `await`，先加载的那个在自己的 `setup()` 里看同伴时，后面的还没进 `#records`；
 `reload()` 与 `setEnabled()` 又会持续改变这份事实。传快照等于让每个插件都停留在
-出生那一刻看到的插件表上。这与 `list_plugins` 那棵内置工具收访问器而不是数组是同一个理由。
+出生那一刻看到的插件表上。`PluginManager.tools()` 同理：动态来源每次现读，不在装配时
+抓快照，否则插件重载后模型还会看到旧工具。
 
 ### 插件的语言与类型入口
 
