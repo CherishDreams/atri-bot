@@ -18,9 +18,26 @@ export interface JsonSchema {
   [key: string]: unknown;
 }
 
+/**
+ * 工具执行时框架交给它的取消信号与轮次上下文。
+ *
+ * `context` 是「这颗调用发生在哪一轮」的坐标：大多数工具不需要它（`current_time`
+ * 只回答当前时刻），但记忆、表情包这类**要往某个会话里落东西**的工具必须知道
+ * 自己在给谁干活 —— 引擎在每次执行调用时传入，注册表原样转发。
+ */
+export interface ToolRunContext {
+  profileId: string;
+  sessionId: string;
+  /** 平台发送人 id / 显示名；控制台来源是登录用户名，cron 来源为 null。 */
+  senderId: string | null;
+  senderName: string | null;
+}
+
 /** 工具执行时框架交给它的取消信号。插件工具应当把它继续传给自己的网络请求。 */
 export interface ToolRunOptions {
   signal?: AbortSignal;
+  /** 本轮上下文；没有就省略（工具自己决定缺坐标时怎么办，而不是框架猜）。 */
+  context?: ToolRunContext;
 }
 
 /**

@@ -1,5 +1,10 @@
 import { defineStore } from "pinia";
-import type { AdapterAccessControl, ProfileConfig, ProfileConfigPatch } from "../api/client.js";
+import type {
+  AdapterAccessControl,
+  MemoryConfig,
+  ProfileConfig,
+  ProfileConfigPatch,
+} from "../api/client.js";
 import * as api from "../api/client.js";
 
 /**
@@ -32,6 +37,8 @@ interface Draft {
   tools: Record<string, boolean>;
   /** 这一档的准入控制；绑定到这一档的所有适配器共用它。 */
   access: AdapterAccessControl;
+  /** 记忆设置（生效值）。服务端是补丁语义：只发改过的键。 */
+  memory: MemoryConfig;
 }
 
 function draftOf(config: ProfileConfig): Draft {
@@ -45,6 +52,7 @@ function draftOf(config: ProfileConfig): Draft {
       allowedIds: [...config.access.allowedIds],
       adminIds: [...config.access.adminIds],
     },
+    memory: { ...config.memory },
   };
 }
 
@@ -80,6 +88,7 @@ function copyDraft(draft: Draft): Draft {
       allowedIds: [...draft.access.allowedIds],
       adminIds: [...draft.access.adminIds],
     },
+    memory: { ...draft.memory },
   };
 }
 
@@ -117,6 +126,15 @@ function patchOf(original: Draft, draft: Draft): ProfileConfigPatch {
       adminIds: [...draft.access.adminIds],
     };
   }
+  // memory 是服务端的**补丁**语义：只发改过的键，其余键原样保留在档文件里。
+  const memory: ProfileConfigPatch["memory"] = {};
+  if (original.memory.enabled !== draft.memory.enabled) memory.enabled = draft.memory.enabled;
+  if (original.memory.provider !== draft.memory.provider) memory.provider = draft.memory.provider;
+  if (original.memory.topK !== draft.memory.topK) memory.topK = draft.memory.topK;
+  if (original.memory.autoRecord !== draft.memory.autoRecord) {
+    memory.autoRecord = draft.memory.autoRecord;
+  }
+  if (Object.keys(memory).length > 0) patch.memory = memory;
   return patch;
 }
 
@@ -228,6 +246,22 @@ export const useProfileConfigStore = defineStore("profileConfig", {
 
     setAccessAdminIds(ids: string[]): void {
       if (this.draft) this.draft.access = { ...this.draft.access, adminIds: [...ids] };
+    },
+
+    setMemoryEnabled(enabled: boolean): void {
+      if (this.draft) this.draft.memory = { ...this.draft.memory, enabled };
+    },
+
+    setMemoryProvider(provider: string): void {
+      if (this.draft) this.draft.memory = { ...this.draft.memory, provider };
+    },
+
+    setMemoryTopK(topK: number): void {
+      if (this.draft) this.draft.memory = { ...this.draft.memory, topK };
+    },
+
+    setMemoryAutoRecord(autoRecord: boolean): void {
+      if (this.draft) this.draft.memory = { ...this.draft.memory, autoRecord };
     },
 
     /** 丢掉草稿：只在「确认放弃未保存改动」之后调用，所以它必须显式存在。 */

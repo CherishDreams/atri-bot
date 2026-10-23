@@ -60,6 +60,25 @@ const MIGRATIONS: readonly string[] = [
   // 图片随消息落库（base64 JSON），因为平台侧 URL 会过期。旧库由这条加列迁移原地升级；
   // 纯文本消息该列为 NULL，不写 `[]`，与 `tool_calls` 的「没有这个键」保持一致。
   `ALTER TABLE messages ADD COLUMN images TEXT;`,
+  // 内置记忆供应商的存储（core/memory/builtin.ts）。与消息同库不同表：
+  // 记忆条目天然带 profile/session 坐标，单独开一个库只会复制一遍迁移与权限逻辑。
+  // `keywords` 是写入时抽好的归一化词串（空格分隔），召回就是一次 LIKE 扫描 + JS 打分，
+  // 不引 FTS5（node:sqlite 的编译特性随 Node 版本变，赌不起）也不引向量库。
+  `CREATE TABLE memories (
+     seq         INTEGER PRIMARY KEY,
+     id          TEXT NOT NULL UNIQUE,
+     profile_id  TEXT NOT NULL,
+     session_id  TEXT NOT NULL,
+     kind        TEXT NOT NULL,
+     content     TEXT NOT NULL,
+     keywords    TEXT NOT NULL,
+     source      TEXT NOT NULL,
+     created_at  TEXT NOT NULL,
+     last_hit_at TEXT,
+     hit_count   INTEGER NOT NULL DEFAULT 0
+   ) STRICT;
+
+   CREATE INDEX memories_by_profile ON memories (profile_id, seq);`,
 ];
 
 /**

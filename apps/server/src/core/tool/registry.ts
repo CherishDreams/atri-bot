@@ -1,6 +1,6 @@
 import type { ToolCall, ToolResult } from "@atri/shared";
 import { errorMessage } from "#core/errors.ts";
-import type { ToolDefinition } from "./types.ts";
+import type { ToolDefinition, ToolRunContext } from "./types.ts";
 
 /**
  * 回喂给模型的单条结果上限（字符）。
@@ -89,7 +89,15 @@ export class ToolRegistry {
    */
   async run(
     call: ToolCall,
-    { limitChars = RESULT_LIMIT_CHARS, signal }: { limitChars?: number; signal?: AbortSignal } = {},
+    {
+      limitChars = RESULT_LIMIT_CHARS,
+      signal,
+      context,
+    }: {
+      limitChars?: number;
+      signal?: AbortSignal;
+      context?: ToolRunContext;
+    } = {},
   ): Promise<ToolResult> {
     const tool = this.get(call.name);
     if (!tool) {
@@ -121,7 +129,9 @@ export class ToolRegistry {
       // `Promise.resolve` 是运行时边界：插件可能忽略类型、返回同步值；直接对返回值
       // 调 `.then` 会把一个正常的同步工具误判成执行失败。
       text = await raceWithAbort(
-        Promise.resolve(tool.run(args, { signal: combinedSignal })),
+        Promise.resolve(
+          tool.run(args, { signal: combinedSignal, ...(context ? { context } : {}) }),
+        ),
         combinedSignal,
       );
     } catch (err) {

@@ -36,6 +36,7 @@ import { SESSION_BUSY_MESSAGE, SESSION_BUSY_DELETE_MESSAGE } from "#core/session
 import type { AdapterUpdateInput } from "#adapters/manager.ts";
 import { ADAPTER_TEMPLATES } from "#adapters/templates.ts";
 import { configFilePath } from "#config/file.ts";
+import { normalizeMemoryConfig, readProfileConfig } from "#config/profiles.ts";
 import type { AppConfig } from "#config/index.ts";
 
 /**
@@ -114,6 +115,11 @@ function profileConfigView(bundle: ProfileBundle) {
     maxToolSteps: bundle.toolConfig.maxSteps(),
     // 与 bundle 上那份可变值同源：保存后回读的就是运行中的那个前缀。
     wakePrefix: bundle.wakePrefix,
+    // 记忆设置**现读档文件**（与工具开关同一条「回读是此刻事实」的道理）：
+    // 服务在每轮召回时也现读，保存即生效，bundle 上不留一份会过期的快照。
+    // 供应商清单让界面直接画出下拉框（builtin 恒在，插件 provider 现读）。
+    memory: normalizeMemoryConfig(readProfileConfig(bundle.path).memory),
+    memoryProviders: ["builtin", ...bundle.plugins.memoryProviders().map((p) => p.id)],
     // 内部工具（系统插件提供）不进用户的工具开关；它们由引擎始终声明。
     tools: bundle.tools
       .list()

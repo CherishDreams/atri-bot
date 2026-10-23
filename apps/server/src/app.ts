@@ -20,6 +20,9 @@ import { createBuiltinTools } from "./core/tool/builtins.ts";
 import { CommandRegistry } from "./core/command/registry.ts";
 import { createBuiltinCommands } from "./core/command/builtins.ts";
 import { DEFAULT_COMMAND_PREFIX } from "./core/command/types.ts";
+import { BuiltinMemoryProvider } from "./core/memory/builtin.ts";
+import { MemoryService } from "./core/memory/service.ts";
+import { createMemoryTools } from "./core/memory/tools.ts";
 import { AuthManager } from "./core/auth/manager.ts";
 import { ApiError, errorMessage } from "./core/errors.ts";
 import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
@@ -56,6 +59,7 @@ import {
   listProfileDirs,
   migrateProvidersToGlobal,
   normalizeAccess,
+  normalizeMemoryConfig,
   profileConfigPath,
   profileDir,
   profilesRoot,
@@ -67,6 +71,7 @@ import {
   setProfilePluginEnabled,
   updateProfileConfig,
   validateAccess,
+  validateMemoryPatch,
   writeProfileConfig,
 } from "./config/profiles.ts";
 import type { ProfileFileConfig } from "./config/profiles.ts";
@@ -93,6 +98,7 @@ const PROFILE_PATCH_KEYS = [
   "plugins",
   "access",
   "wakePrefix",
+  "memory",
 ] as const;
 
 /**
@@ -237,6 +243,12 @@ export async function createApp(config: AppConfig) {
   const lock = new SessionLock();
   const events = new SessionEvents();
   const personas = new PersonaStore({ filePath: join(config.dataDir, "personas.json"), logger });
+  /**
+   * 内置记忆供应商，部署级**一份**（数据按 `profile_id` 列分档，不按实例分）。
+   * 它开自己的连接指向同一个 `sessions.sqlite`：改 `SessionManager` 让它交出连接
+   * 是一次不必要的重构，而 WAL + 5s busy timeout 下两条短同步事务的连接互不碍事。
+   */
+  const builtinMemory = new BuiltinMemoryProvider({ dataDir: config.dataDir, logger });
 
   // 「跑法」住在配置档文件里，供应商住在 `providers.json`，都不在 `atri.config.json`。
   // 顺序是有意的：先建目录、再一次性 seed、**然后**才构造任何对象图 —— 存储拿到的一直是
@@ -496,6 +508,15 @@ export async function createApp(config: AppConfig) {
     })) {
       commands.register(def);
     }
+    // 记忆服务：按档在「内置实现」与插件供应商之间选（配置现读，保存后下一轮生效）。
+    // 内置供应商全局一份，服务每档一个 —— providerFor/resolveConfig 都带着档坐标。
+    const memory = new MemoryService({
+      logger,
+      resolveConfig: () => normalizeMemoryConfig(readProfileConfig(path).memory),
+      builtin: builtinMemory,
+      pluginProviders: () => plugins.memoryProviders(),
+    });
+    for (const tool of createMemoryTools(memory)) tools.register(tool);
     // 群聊唤醒前缀：读文件时容忍坏形状（手写配置退回缺省并 warn，不让服务起不来），
     // 写接口上才严格要求。
     const fileWakePrefix = coerceWakePrefix(profile.wakePrefix);
@@ -521,6 +542,9 @@ export async function createApp(config: AppConfig) {
       // admin 权限按这份档的管理员名单现读：保存档后下一条指令就是新名单。
       resolveAccess: () => profiles.get(id)?.access ?? emptyAccess(),
       wakePrefix,
+      // 记忆召回进报头、interaction 自动记录在轮末：都由服务自己按配置决定做不做。
+      contextProviders: [(turn) => memory.contextFor(turn)],
+      onTurnEnd: (turn, reply) => memory.recordInteraction(turn, reply.content),
     });
     return {
       id,
@@ -770,6 +794,10 @@ export async function createApp(config: AppConfig) {
         nextWakePrefix = value;
       }
 
+      // memory 段是 **diff**（只写给出的键），先验成补丁，落盘时与现有段合并。
+      let memoryPatch: ReturnType<typeof validateMemoryPatch> | undefined;
+      if (body.memory !== undefined) memoryPatch = validateMemoryPatch(body.memory);
+
       // --- 到这里全部验完了，下面才开始动磁盘与运行态 -----------------------
       if (
         nextDefault !== undefined ||
@@ -777,6 +805,7 @@ export async function createApp(config: AppConfig) {
         nextSteps !== undefined ||
         nextAccess !== undefined ||
         nextWakePrefix !== undefined ||
+        memoryPatch !== undefined ||
         tools.length > 0
       ) {
         updateProfileConfig(profileConfigPath(profilesDir, id), (file) => {
@@ -792,6 +821,14 @@ export async function createApp(config: AppConfig) {
           if (nextSteps !== undefined) file.maxToolSteps = nextSteps;
           if (nextAccess !== undefined) file.access = nextAccess;
           if (nextWakePrefix !== undefined) file.wakePrefix = nextWakePrefix;
+          if (memoryPatch !== undefined) {
+            // memory 段是补丁合并：只覆盖给出的键，文件里手写的其它键原样保留
+            //（键是开放类型，读时逐键兜默认，所以部分写入永远合法）。
+            file.memory = {
+              ...(typeof file.memory === "object" && file.memory !== null ? file.memory : {}),
+              ...memoryPatch,
+            };
+          }
           for (const [tid, enabled] of tools) {
             const current = file.tools ?? {};
             // 展开保留这一段里我们不认识的键（`ToolToggle` 是开放类型，与插件段同一条理由）。
@@ -1097,6 +1134,8 @@ export async function createApp(config: AppConfig) {
       // 库排在最后关：`http.close()` 先掐掉在途的 SSE 与 WS，那一刻之后不应再有新的写库请求；
       // 插件的 teardown 理论上也可能触发写（今天 ctx 里没有会话句柄，排在后面才对未来也成立）。
       sessions.close();
+      // 记忆供应商用的是同一个库文件的另一条连接：它关自己的连接，与上面的 close 互不依赖。
+      builtinMemory.close();
     },
   };
 }

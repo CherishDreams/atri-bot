@@ -499,6 +499,11 @@ export type ProfileConfig = {
      * 群聊唤醒前缀（生效值），缺省 `/`；空串表示关闭群聊唤醒门槛（此时指令仍按 `/` 识别）。私聊永远不设门槛。
      */
     wakePrefix: string;
+    memory: MemoryConfig;
+    /**
+     * 这一档可选的记忆供应商 id 清单：恒含 `builtin`，其余是当前运行中的插件声明的。界面用它画 provider 下拉框。
+     */
+    memoryProviders: Array<string>;
 };
 
 /**
@@ -542,6 +547,15 @@ export type ProfileConfigPatch = {
      * 群聊唤醒前缀。须为不含空白的 ≤16 字符（空串关闭门槛）；越界回 400 而不是夹取。
      */
     wakePrefix?: string;
+    /**
+     * 记忆设置的**补丁**：只覆盖给出的键，其余不动。`topK` 越界回 400；`provider` 必须是 `builtin` 或合法的插件 id 形状。
+     */
+    memory?: {
+        enabled?: boolean;
+        provider?: string;
+        topK?: number;
+        autoRecord?: boolean;
+    };
 };
 
 /**
@@ -798,6 +812,28 @@ export type CommandInfo = {
      * 注册来源：`builtin` 或插件 id。
      */
     source: string;
+};
+
+/**
+ * 一份配置档的记忆设置（生效值，缺省已由服务端补齐）。`provider` 指向 `builtin` 或插件声明的记忆供应商 —— 可替换组件的配置口；一次请求只选一个 provider，指到不存在的 id 时不降级。
+ */
+export type MemoryConfig = {
+    /**
+     * 是否启用记忆注入与自动记录。默认 true。
+     */
+    enabled: boolean;
+    /**
+     * 用哪个记忆供应商：`builtin` 或插件 provider id。默认 `builtin`。
+     */
+    provider: string;
+    /**
+     * 每轮注入的记忆条数上限（1–10）。默认 3。
+     */
+    topK: number;
+    /**
+     * 是否把每轮交互自动存为一条记忆。默认 true。
+     */
+    autoRecord: boolean;
 };
 
 /**

@@ -16,7 +16,7 @@
  */
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AdapterAccessControl } from "@atri/shared";
+import type { AdapterAccessControl, MemoryConfig } from "@atri/shared";
 import { ApiError } from "#core/errors.ts";
 import {
   ensurePrivateDir,
@@ -106,6 +106,12 @@ export interface ProfileFileConfig {
    * 仍按 `/` 识别 —— 关门槛不该顺手关掉指令系统。私聊永远不设门槛。
    */
   wakePrefix?: string;
+  /**
+   * 记忆设置。文件里允许只写部分键（读时逐键兜默认，见 `normalizeMemoryConfig`）；
+   * `provider` 指向 `builtin` 或某个插件声明的记忆供应商 —— 那是「可替换组件」的
+   * 配置口：内置方案不够用就装一个提供记忆模块的插件，改这里即可切换。
+   */
+  memory?: unknown;
   [key: string]: unknown;
 }
 
@@ -161,6 +167,117 @@ export function normalizeAccess(raw: unknown, onMalformed?: () => void): Adapter
     allowedIds,
     adminIds,
   };
+}
+
+/**
+ * 记忆配置的内置默认。开箱即用是需求本身（「作为系统的内置记忆处理」）：
+ * 默认开启、默认内置方案、每轮 3 条、自动记录交互。换成关闭是操作者的一次显式决定。
+ */
+export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
+  enabled: true,
+  provider: "builtin",
+  topK: 3,
+  autoRecord: true,
+};
+
+export const MIN_MEMORY_TOP_K = 1;
+export const MAX_MEMORY_TOP_K = 10;
+
+/**
+ * 读盘时的归一：逐键兜默认，整段缺失 = 默认配置。
+ *
+ * 与 `normalizeAccess` 的 fail-closed 不同侧：access 坏形状的后果是「对谁开门」，
+ * 必须往保守收；memory 坏形状的后果只是「记得多记得少」，退默认即可，但要
+ * 让 `onMalformed` 说一声（操作者该知道自己的 `"topK": "三"` 没生效）。
+ */
+export function normalizeMemoryConfig(raw: unknown, onMalformed?: () => void): MemoryConfig {
+  if (raw === undefined) return { ...DEFAULT_MEMORY_CONFIG };
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    onMalformed?.();
+    return { ...DEFAULT_MEMORY_CONFIG };
+  }
+  const record = raw as Record<string, unknown>;
+  let malformed = false;
+  const enabled =
+    typeof record.enabled === "boolean"
+      ? record.enabled
+      : assignMalformed(DEFAULT_MEMORY_CONFIG.enabled);
+  const provider =
+    typeof record.provider === "string" && record.provider !== ""
+      ? record.provider
+      : record.provider === undefined
+        ? DEFAULT_MEMORY_CONFIG.provider
+        : assignMalformed(DEFAULT_MEMORY_CONFIG.provider);
+  const topK =
+    typeof record.topK === "number" && Number.isFinite(record.topK)
+      ? Math.min(Math.max(Math.trunc(record.topK), MIN_MEMORY_TOP_K), MAX_MEMORY_TOP_K)
+      : record.topK === undefined
+        ? DEFAULT_MEMORY_CONFIG.topK
+        : assignMalformed(DEFAULT_MEMORY_CONFIG.topK);
+  const autoRecord =
+    typeof record.autoRecord === "boolean"
+      ? record.autoRecord
+      : record.autoRecord === undefined
+        ? DEFAULT_MEMORY_CONFIG.autoRecord
+        : assignMalformed(DEFAULT_MEMORY_CONFIG.autoRecord);
+
+  function assignMalformed<T>(fallback: T): T {
+    malformed = true;
+    return fallback;
+  }
+  if (malformed) onMalformed?.();
+  return { enabled, provider, topK, autoRecord };
+}
+
+/**
+ * API 写入时的严格校验：只接受**已声明键的合法值**，返回「要合并进文件的补丁」。
+ *
+ * 与 `maxToolSteps` 同一条判据：越界回 400 而不是夹取 —— 静默改成别的值会让
+ * 界面上的数字与实际生效的数字分家。键缺失 = 不动那一项（diff 语义）。
+ */
+export function validateMemoryPatch(raw: unknown): Partial<MemoryConfig> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ApiError("memory 必须是对象", 400);
+  }
+  const record = raw as Record<string, unknown>;
+  const patch: Partial<MemoryConfig> = {};
+  if (record.enabled !== undefined) {
+    if (typeof record.enabled !== "boolean") throw new ApiError("memory.enabled 必须是布尔值", 400);
+    patch.enabled = record.enabled;
+  }
+  if (record.provider !== undefined) {
+    if (
+      typeof record.provider !== "string" ||
+      !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(record.provider)
+    ) {
+      throw new ApiError(
+        "memory.provider 必须是 `builtin` 或一个插件记忆供应商的 id（小写字母数字与 . _ -）",
+        400,
+      );
+    }
+    patch.provider = record.provider;
+  }
+  if (record.topK !== undefined) {
+    if (
+      typeof record.topK !== "number" ||
+      !Number.isInteger(record.topK) ||
+      record.topK < MIN_MEMORY_TOP_K ||
+      record.topK > MAX_MEMORY_TOP_K
+    ) {
+      throw new ApiError(
+        `memory.topK 必须是 ${MIN_MEMORY_TOP_K} 到 ${MAX_MEMORY_TOP_K} 之间的整数`,
+        400,
+      );
+    }
+    patch.topK = record.topK;
+  }
+  if (record.autoRecord !== undefined) {
+    if (typeof record.autoRecord !== "boolean") {
+      throw new ApiError("memory.autoRecord 必须是布尔值", 400);
+    }
+    patch.autoRecord = record.autoRecord;
+  }
+  return patch;
 }
 
 /** API 写入时的严格校验：形状不对直接 400，不静默丢条目。 */

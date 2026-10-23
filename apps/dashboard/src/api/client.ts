@@ -508,6 +508,7 @@ export type {
   AdapterInfo,
   AdapterTemplate,
   CronJobInfo,
+  MemoryConfig,
   Message,
   PersonaInfo,
   ProfileConfig,

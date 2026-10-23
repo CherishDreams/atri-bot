@@ -318,6 +318,24 @@ export interface ProfileRecord {
 }
 
 /**
+ * 一份配置档的记忆设置（生效值，缺省已由服务端补齐）。
+ *
+ * 记忆是「可替换组件」的样板：`provider` 指向 `builtin`（内置实现）或某个插件
+ * 声明的记忆供应商。一次请求只选一个 provider，指到不存在的 id 时不降级 ——
+ * 静默换方案的症状是「记忆忽好忽坏而配置没变」。
+ */
+export interface MemoryConfig {
+  /** 是否启用记忆注入与自动记录。默认 true。 */
+  enabled: boolean;
+  /** 用哪个记忆供应商：`builtin` 或插件 provider id。默认 `builtin`。 */
+  provider: string;
+  /** 每轮注入的记忆条数上限（1–10）。默认 3。 */
+  topK: number;
+  /** 是否把每轮交互自动存为一条记忆（interaction）。默认 true。 */
+  autoRecord: boolean;
+}
+
+/**
  * 一份配置档**此刻的可编辑内容**，配置工作台的草稿起点。
  *
  * 为什么要一个端点而不是让界面拼 `GET /tools` + `GET /plugins` + `GET /profiles`：
@@ -347,6 +365,14 @@ export interface ProfileConfig {
    * 私聊永远不设门槛。
    */
   wakePrefix: string;
+  /** 这一档的记忆设置（生效值）。 */
+  memory: MemoryConfig;
+  /**
+   * 这一档可选的记忆供应商 id 清单：恒含 `builtin`，其余是**当前运行中**的插件
+   * 声明的。它不是档文件的键 —— 是给配置页画 provider 下拉框的现算清单，
+   * 插件启停后跟着变。
+   */
+  memoryProviders: string[];
   tools: ToolInfo[];
   plugins: PluginInfo[];
   /**

@@ -7,6 +7,7 @@ import type { Logger } from "#core/logger.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
 import { assertCommandDefinition } from "#core/command/registry.ts";
 import type { CommandDefinition, CommandEntry } from "#core/command/types.ts";
+import type { MemoryProvider } from "#core/memory/types.ts";
 import type { AppConfig } from "#config/index.ts";
 import type { FileConfig } from "#config/file.ts";
 import { ApiError, errorMessage } from "#core/errors.ts";
@@ -54,6 +55,13 @@ export interface PluginDefinition {
    * **这一颗插件加载失败**（冲突要让加载期就看得见，而不是留一条永不响应的指令）。
    */
   commands?: CommandDefinition[] | ((ctx: PluginContext) => CommandDefinition[]);
+  /**
+   * 插件提供的**记忆供应商**（可替换组件的另一半，见 `core/memory/types.ts`）。
+   * 一个插件至多提供一组 provider；`id` 缺省取插件自己的 id，与其它插件的
+   * provider 撞 id 时这一颗加载失败。配置档 `memory.provider` 写这里的 id
+   * 即可把内置记忆换掉。
+   */
+  memoryProviders?: MemoryProvider[] | ((ctx: PluginContext) => MemoryProvider[]);
   setup?: (ctx: PluginContext) => void | Promise<void>;
   teardown?: () => void | Promise<void>;
 }
@@ -188,6 +196,8 @@ interface PluginRecord {
   tools: ToolDefinition[];
   /** 这颗插件提供的指令；只有 active 记录非空。 */
   commands: CommandDefinition[];
+  /** 这颗插件提供的记忆供应商；只有 active 记录非空。 */
+  memory: MemoryProvider[];
   status: PluginStatus;
   /** 上一次加载失败的可读原因；正常为 `null`。只给操作者，见 `#peers()` 与 `list_plugins`。 */
   error: string | null;
@@ -285,6 +295,42 @@ function resolvePluginCommands(
     }
   }
   return [...declared];
+}
+
+/**
+ * 解析插件声明的记忆供应商。形状校验照搬 `resolvePluginTools` 的严格度：
+ * 校验在 `setup()` 之前，坏的让这颗插件加载失败。`id` 缺省取插件自己的 id ——
+ * 配置文件里写的就是它，所以它必须稳定且不与其它插件撞。
+ */
+function resolvePluginMemoryProviders(
+  pluginId: string,
+  plugin: PluginDefinition,
+  ctx: PluginContext,
+): MemoryProvider[] {
+  const declared =
+    typeof plugin.memoryProviders === "function"
+      ? plugin.memoryProviders(ctx)
+      : (plugin.memoryProviders ?? []);
+  const seen = new Set<string>();
+  for (const provider of declared) {
+    const id = typeof provider?.id === "string" && provider.id !== "" ? provider.id : pluginId;
+    if (typeof provider?.recall !== "function" || typeof provider?.write !== "function") {
+      throw new ApiError(
+        `插件「${pluginId}」的记忆供应商「${id}」必须实现 recall() 与 write()`,
+        400,
+      );
+    }
+    if (seen.has(id)) {
+      throw new ApiError(`插件「${pluginId}」重复声明了记忆供应商「${id}」`, 400);
+    }
+    seen.add(id);
+  }
+  // 补 id 的动作放在校验之后统一做：避免上面的错误文案里出现「补过的 id」。
+  return declared.map((provider) =>
+    typeof provider.id === "string" && provider.id !== ""
+      ? provider
+      : { ...provider, id: pluginId },
+  );
 }
 
 /**
@@ -562,6 +608,29 @@ export class PluginManager {
         }
       }
 
+      // 记忆供应商在指令之后、setup 之前解析，同一套次序。跨插件撞 id 在这里拒：
+      // 两个插件声明同一个 provider id 时，「配置里写的是谁」就说不清了。
+      let memory: MemoryProvider[];
+      try {
+        memory = resolvePluginMemoryProviders(id, plugin, ctx);
+      } catch (err) {
+        await ctx.dispose();
+        throw err;
+      }
+      for (const other of this.#records.values()) {
+        if (other.status !== "active" || other.dir === dir) continue;
+        const memoryClash = memory.find((provider) =>
+          other.memory.some((owned) => owned.id === provider.id),
+        );
+        if (memoryClash) {
+          await ctx.dispose();
+          throw new ApiError(
+            `插件「${id}」的记忆供应商「${memoryClash.id}」与插件「${other.meta.id}」冲突`,
+            400,
+          );
+        }
+      }
+
       try {
         await plugin.setup?.(ctx);
       } catch (err) {
@@ -577,6 +646,7 @@ export class PluginManager {
         ctx,
         tools,
         commands,
+        memory,
         status: "active",
         error: null,
         settings,
@@ -623,6 +693,7 @@ export class PluginManager {
       ctx: null,
       tools: [],
       commands: [],
+      memory: [],
       status: "failed",
       error: reason,
       settings,
@@ -656,6 +727,7 @@ export class PluginManager {
       ctx: null,
       tools: [],
       commands: [],
+      memory: [],
       status: "disabled",
       error: null,
       settings,
@@ -825,6 +897,17 @@ export class PluginManager {
     return [...this.#records.values()]
       .filter((record) => record.status === "active")
       .flatMap((record) => record.commands.map((def) => ({ def, source: record.meta.id })));
+  }
+
+  /**
+   * 当前 active 插件提供的记忆供应商。`MemoryService` 把这个方法当作动态来源
+   * （每次现读）：插件重载/禁用后，配置指向它的那一档下一轮就选不到它，
+   * 服务侧按「供应商缺失」处理并只 warn 一次。
+   */
+  memoryProviders(): MemoryProvider[] {
+    return [...this.#records.values()]
+      .filter((record) => record.status === "active")
+      .flatMap((record) => record.memory);
   }
 
   /**

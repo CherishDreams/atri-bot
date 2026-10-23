@@ -48,6 +48,12 @@ export const CATEGORIES: Category[] = [
     icon: "settings",
   },
   {
+    key: "memory",
+    label: "记忆",
+    hint: "长期记忆的开关与方案：内置实现或插件提供的记忆模块，这里切换。",
+    icon: "memory",
+  },
+  {
     key: "access",
     label: "访问控制",
     hint: "这一档的白名单与管理员名单；绑定到这一档的接入平台共用它。",

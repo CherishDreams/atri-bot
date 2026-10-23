@@ -5,6 +5,7 @@ import { useProfile } from "@/composables/useProfile";
 import { useProfileConfigStore } from "@/stores/profileConfig";
 import { useProfilesStore } from "@/stores/profiles";
 import AccessPanel from "@/components/config/AccessPanel.vue";
+import MemoryPanel from "@/components/config/MemoryPanel.vue";
 import CategoryNav from "@/components/config/CategoryNav.vue";
 import ConfigToolbar from "@/components/config/ConfigToolbar.vue";
 import ManageProfilesModal from "@/components/config/ManageProfilesModal.vue";
@@ -76,6 +77,7 @@ const PANELS = {
   persona: PersonaPanel,
   tools: ToolListPanel,
   runtime: RuntimePanel,
+  memory: MemoryPanel,
   access: AccessPanel,
 } as const;
 const panel = computed(() => PANELS[active.value.key as keyof typeof PANELS]);

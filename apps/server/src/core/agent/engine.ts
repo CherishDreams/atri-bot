@@ -7,6 +7,7 @@ import type { ChatMessage, ChatTool } from "#core/provider/types.ts";
 import type { SessionManager } from "#core/session/manager.ts";
 import { SESSION_BUSY_MESSAGE, type SessionLock } from "#core/session/lock.ts";
 import type { SessionEvents } from "./events.ts";
+import type { TurnContextProvider, TurnInfo } from "./context.ts";
 import type { ToolConfigStore } from "#core/tool/store.ts";
 import type { ToolRegistry } from "#core/tool/registry.ts";
 import type { ToolDefinition } from "#core/tool/types.ts";
@@ -70,6 +71,16 @@ export interface EngineDeps {
    * 缺省 `/`。
    */
   wakePrefix?: string;
+  /**
+   * 每轮上下文装配器（记忆召回、时间感知、技能目录……）。每轮调用一次、
+   * 整轮复用，产出追加在人格之后作为 system 的一部分；约定见 `core/agent/context.ts`。
+   */
+  contextProviders?: TurnContextProvider[];
+  /**
+   * 一轮结束后的钩子（目前唯一消费者是记忆的 interaction 自动记录）。
+   * 抛错由引擎吞成 warn —— 收尾动作不能让已经完成的回复变成失败。
+   */
+  onTurnEnd?: (turn: TurnInfo, reply: Message) => Promise<void>;
 }
 
 /**
@@ -209,6 +220,8 @@ export class AgentEngine {
   commands?: CommandRegistry;
   resolveAccess?: () => AdapterAccessControl;
   wakePrefix: string;
+  contextProviders?: TurnContextProvider[];
+  onTurnEnd?: (turn: TurnInfo, reply: Message) => Promise<void>;
 
   constructor({
     sessions,
@@ -224,6 +237,8 @@ export class AgentEngine {
     commands,
     resolveAccess,
     wakePrefix = DEFAULT_COMMAND_PREFIX,
+    contextProviders,
+    onTurnEnd,
   }: EngineDeps) {
     this.sessions = sessions;
     this.providers = providers;
@@ -238,6 +253,8 @@ export class AgentEngine {
     this.commands = commands;
     this.resolveAccess = resolveAccess;
     this.wakePrefix = wakePrefix;
+    this.contextProviders = contextProviders;
+    this.onTurnEnd = onTurnEnd;
   }
 
   /**
@@ -293,8 +310,22 @@ export class AgentEngine {
       if (!session) throw new ApiError("会话不存在", 404);
       this.events.emit({ type: "message", message: userMessage });
 
+      // 每轮上下文只装配一次：记忆召回这类要查库的 provider 不随工具步数放大，
+      // 且同轮内模型看到的附加段落必须稳定。指令命中的轮走不到这里。
+      const turn: TurnInfo = {
+        profileId: this.profileId,
+        sessionId,
+        userText: (commandText ?? content).trim(),
+        senderId: sender?.id ?? null,
+        senderName: sender?.name ?? null,
+        source: source === "cron" ? "cron" : source === "platform" ? "platform" : "console",
+      };
+      const extraContext = await this.#gatherContext(turn);
+
       const reply = await this.#runLoop({
         session,
+        turn,
+        extraContext,
         // 请求没带 model 时用**这一档**的默认，而不是直接交给注册表：注册表现在是
         // 全局一份，它的 `default` 是部署级的默认，替不了「这一档默认用另一个模型」。
         model: model ?? this.defaultProviderId ?? undefined,
@@ -302,11 +333,38 @@ export class AgentEngine {
         onMessage,
         signal,
       });
+      // 收尾钩子在锁内跑：interaction 记录是这一轮的一部分，放锁外会让下一条消息
+      // 与它并发写同一个会话的记忆表。失败吞成 warn（见 EngineDeps.onTurnEnd）。
+      await this.#afterTurn(turn, reply);
       return reply;
     } finally {
       // 写在 finally 是这条锁的全部要点：上游报错、工具抛错、客户端断开、撞步数上限
       // 都在这条链上，任何一处漏了释放，那个会话就**永久**发不出消息了。
       this.lock.release(sessionId);
+    }
+  }
+
+  /** 收集本轮的上下文段落。任何 provider 抛错都吞成 warn：装饰性上下文不挡回复。 */
+  async #gatherContext(turn: TurnInfo): Promise<string[]> {
+    if (this.contextProviders === undefined || this.contextProviders.length === 0) return [];
+    const sections: string[] = [];
+    for (const provider of this.contextProviders) {
+      try {
+        const section = await provider(turn);
+        if (section !== null && section.trim() !== "") sections.push(section.trim());
+      } catch (err) {
+        this.logger.warn(`本轮上下文装配失败: ${errorStack(err)}`);
+      }
+    }
+    return sections;
+  }
+
+  async #afterTurn(turn: TurnInfo, reply: Message): Promise<void> {
+    if (this.onTurnEnd === undefined) return;
+    try {
+      await this.onTurnEnd(turn, reply);
+    } catch (err) {
+      this.logger.warn(`本轮收尾钩子失败: ${errorStack(err)}`);
     }
   }
 
@@ -393,12 +451,16 @@ export class AgentEngine {
    */
   async #runLoop({
     session,
+    turn,
+    extraContext,
     model,
     onDelta,
     onMessage,
     signal,
   }: {
     session: SessionDetail;
+    turn: TurnInfo;
+    extraContext: string[];
     model?: string;
     onDelta?: (delta: string) => void;
     onMessage?: (message: Message) => void;
@@ -414,6 +476,11 @@ export class AgentEngine {
     //（先读后写会让这轮的上游请求看不见用户刚说的那句），详见 `session/manager.ts` 的
     // `getWithMessages`。
     const cap = this.toolConfig.maxSteps();
+    // 报头 = 人格 + 本轮上下文段落。工具循环的每一步都发同一段：段落已在
+    // `handleMessage` 里装配好，这里只是拼接（history 每步在长，报头不变）。
+    const prompt = [this.systemPrompt.trim(), ...extraContext]
+      .filter((part) => part !== "")
+      .join("\n\n");
 
     for (let step = 0; ; step++) {
       if (signal?.aborted) throw new Error("请求已取消");
@@ -424,11 +491,8 @@ export class AgentEngine {
         );
       }
 
-      // 人格只属于这一轮请求的报头，不写历史：它没有「什么时候说过」的语义，
-      // 存进 sqlite 既会让历史详情多出一条假消息，也会在人格修改后留下旧版本。
-      // 每一步都要重新拼一次：工具结果是在循环里追加到 history 的，提前拼好的
-      // 数组不会跟着长，第二轮请求就会看不到工具结果。
-      const prompt = this.systemPrompt.trim();
+      // 报头只属于这一轮请求，不写历史：人格与注入段落都没有「什么时候说过」的语义，
+      // 存进 sqlite 既会让历史详情多出一条假消息，也会在配置修改后留下旧版本。
       const requestMessages: ChatMessage[] =
         prompt === "" ? history : [{ role: "system", content: prompt }, ...history];
 
@@ -472,7 +536,16 @@ export class AgentEngine {
           refusal === null
             ? // 顺序执行：内置工具是本地代码，并行没有延迟收益，而帧顺序由此确定 ——
               // 并行时前端要靠 id 反推次序，那是一条更贵的路径。
-              await this.tools.run(call, { signal })
+              // 带上本轮坐标：记忆、表情包这类「往哪个会话落东西」的工具靠它定位。
+              await this.tools.run(call, {
+                signal,
+                context: {
+                  profileId: this.profileId,
+                  sessionId: session.id,
+                  senderId: turn.senderId,
+                  senderName: turn.senderName,
+                },
+              })
             : { toolCallId: call.id, name: call.name, content: refusal, isError: true };
         // 工具可能在取消之后才返回（工具实现不遵守 signal，注册表只能放弃等待）。
         // 这里停掉整轮，避免拿着已经断开的客户端继续执行后面的工具。

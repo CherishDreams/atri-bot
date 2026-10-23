@@ -35,6 +35,7 @@ const COMPARABLE = [
   "CronLastStatus",
   "LogEntry",
   "LogLevel",
+  "MemoryConfig",
   "Message",
   "PersonaInfo",
   "PluginInfo",
