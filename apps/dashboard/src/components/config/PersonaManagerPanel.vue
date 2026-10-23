@@ -21,7 +21,8 @@ const saving = ref(false);
 const formError = ref<string | null>(null);
 const form = reactive({ id: "", name: "", description: "", systemPrompt: "" });
 const PlusIcon = icon("plus");
-const EditIcon = icon("settings");
+const EditIcon = icon("edit");
+const TrashIcon = icon("trash");
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
@@ -177,9 +178,14 @@ async function remove(persona: PersonaInfo): Promise<void> {
             {{ persona.systemPrompt }}
           </p>
           <div class="mt-4 flex items-center justify-end gap-2 border-t-1 border-line pt-3">
-            <n-button size="small" quaternary @click="openEdit(persona)">
+            <n-button
+              size="small"
+              quaternary
+              :aria-label="`编辑 ${persona.name}`"
+              :title="`编辑 ${persona.name}`"
+              @click="openEdit(persona)"
+            >
               <template #icon><component :is="EditIcon" /></template>
-              编辑
             </n-button>
             <n-popconfirm
               positive-text="删除"
@@ -187,7 +193,15 @@ async function remove(persona: PersonaInfo): Promise<void> {
               @positive-click="remove(persona)"
             >
               <template #trigger>
-                <n-button size="small" quaternary type="error">删除</n-button>
+                <n-button
+                  size="small"
+                  quaternary
+                  type="error"
+                  :aria-label="`删除 ${persona.name}`"
+                  :title="`删除 ${persona.name}`"
+                >
+                  <template #icon><component :is="TrashIcon" /></template>
+                </n-button>
               </template>
               删除后不可恢复。仍被配置档引用时服务端会拒绝。
             </n-popconfirm>

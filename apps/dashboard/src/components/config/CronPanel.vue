@@ -34,6 +34,9 @@ const form = reactive({
   enabled: true,
 });
 const PlusIcon = icon("plus");
+const PlayIcon = icon("play");
+const EditIcon = icon("edit");
+const TrashIcon = icon("trash");
 
 const presets = [
   { label: "每天 09:00", value: "0 9 * * *" },
@@ -287,13 +290,36 @@ async function remove(job: CronJobInfo): Promise<void> {
             >
               打开结果会话
             </router-link>
-            <n-button size="small" quaternary :loading="busyId === job.id" @click="run(job)">
-              立即执行
+            <n-button
+              size="small"
+              quaternary
+              :loading="busyId === job.id"
+              :aria-label="`立即执行 ${job.name}`"
+              :title="`立即执行 ${job.name}`"
+              @click="run(job)"
+            >
+              <template #icon><component :is="PlayIcon" /></template>
             </n-button>
-            <n-button size="small" quaternary @click="openEdit(job)">编辑</n-button>
+            <n-button
+              size="small"
+              quaternary
+              :aria-label="`编辑 ${job.name}`"
+              :title="`编辑 ${job.name}`"
+              @click="openEdit(job)"
+            >
+              <template #icon><component :is="EditIcon" /></template>
+            </n-button>
             <n-popconfirm positive-text="删除" negative-text="取消" @positive-click="remove(job)">
               <template #trigger>
-                <n-button size="small" quaternary type="error">删除</n-button>
+                <n-button
+                  size="small"
+                  quaternary
+                  type="error"
+                  :aria-label="`删除 ${job.name}`"
+                  :title="`删除 ${job.name}`"
+                >
+                  <template #icon><component :is="TrashIcon" /></template>
+                </n-button>
               </template>
               删除计划任务不会删除它已经产生的会话。
             </n-popconfirm>

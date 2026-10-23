@@ -10,7 +10,10 @@
     >
       <div class="flex items-center justify-between px-4 py-3">
         <h2 class="text-[15px] font-semibold tracking-tight text-ink">供应商源</h2>
-        <n-button text type="primary" @click="openCreate">添加供应商</n-button>
+        <n-button text type="primary" @click="openCreate">
+          <template #icon><component :is="PlusIcon" /></template>
+          添加供应商
+        </n-button>
       </div>
 
       <!--
@@ -356,6 +359,7 @@ import { icon } from "@/components/shared/icons";
 const providers = useProvidersStore();
 const TrashIcon = icon("trash");
 const TestIcon = icon("terminal");
+const PlusIcon = icon("plus");
 
 const probeResults = ref<Record<string, ProviderProbeResult | null>>({});
 const probeLoading = ref<Record<string, boolean>>({});

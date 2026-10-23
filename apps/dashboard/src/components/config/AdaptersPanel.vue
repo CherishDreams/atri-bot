@@ -44,6 +44,7 @@ const actionError = ref<string | null>(null);
 const TerminalIcon = icon("terminal");
 const EditIcon = icon("edit");
 const TrashIcon = icon("trash");
+const PlusIcon = icon("plus");
 
 const currentTemplate = computed<AdapterTemplate | null>(
   () => templates.value.find((template) => template.type === form.type) ?? null,
@@ -313,6 +314,7 @@ function profileLabel(id: string | null): string {
         </p>
       </div>
       <n-button class="ml-auto shrink-0" type="primary" :disabled="!canAdd" @click="openAdd">
+        <template #icon><component :is="PlusIcon" /></template>
         添加接入平台
       </n-button>
     </header>
@@ -343,7 +345,10 @@ function profileLabel(id: string | null): string {
       >
         <n-empty description="还没有接入平台。点击右上角「添加接入平台」开始。" size="small">
           <template #extra>
-            <n-button v-if="canAdd" size="small" @click="openAdd">添加接入平台</n-button>
+            <n-button v-if="canAdd" size="small" @click="openAdd">
+              <template #icon><component :is="PlusIcon" /></template>
+              添加接入平台
+            </n-button>
           </template>
         </n-empty>
       </div>
