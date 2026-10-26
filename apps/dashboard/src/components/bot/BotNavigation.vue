@@ -97,6 +97,7 @@ const GROUPS: { key: string; label: string; items: NavItem[] }[] = [
         icon: "provider",
       },
       { key: "adapters", label: "接入平台", icon: "chat" },
+      { key: "mcp", label: "MCP", icon: "layers" },
     ],
   },
   {

@@ -25,6 +25,12 @@ import {
   deleteProfile as deleteProfileOp,
   listPlugins as listPluginsOp,
   listCommands as listCommandsOp,
+  listMcpServers as listMcpServersOp,
+  createMcpServer as createMcpServerOp,
+  updateMcpServer as updateMcpServerOp,
+  setMcpServerEnabled as setMcpServerEnabledOp,
+  probeMcpServer as probeMcpServerOp,
+  deleteMcpServer as deleteMcpServerOp,
   listAdapters as listAdaptersOp,
   listAdapterTemplates as listAdapterTemplatesOp,
   listCronJobs as listCronJobsOp,
@@ -376,6 +382,32 @@ export async function setToolEnabled(profile: string, id: string, enabled: boole
 
 export async function listProviders() {
   return body(await listProvidersOp());
+}
+
+// --- MCP 服务器（部署级） ------------------------------------------------------
+
+export async function listMcpServers() {
+  return body(await listMcpServersOp());
+}
+
+export async function createMcpServer(input: Record<string, unknown>) {
+  return body(await createMcpServerOp({ body: input as never }));
+}
+
+export async function updateMcpServer(id: string, input: Record<string, unknown>) {
+  return body(await updateMcpServerOp({ path: { id }, body: input as never }));
+}
+
+export async function setMcpServerEnabled(id: string, enabled: boolean) {
+  return body(await setMcpServerEnabledOp({ path: { id }, body: { enabled } }));
+}
+
+export async function probeMcpServer(id: string) {
+  return body(await probeMcpServerOp({ path: { id } }));
+}
+
+export async function deleteMcpServer(id: string) {
+  return body(await deleteMcpServerOp({ path: { id } }));
 }
 
 export async function createProvider(input: ProviderInput) {

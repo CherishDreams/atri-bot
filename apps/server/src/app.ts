@@ -23,6 +23,8 @@ import { DEFAULT_COMMAND_PREFIX } from "./core/command/types.ts";
 import { BuiltinMemoryProvider } from "./core/memory/builtin.ts";
 import { MemoryService } from "./core/memory/service.ts";
 import { createMemoryTools } from "./core/memory/tools.ts";
+import { McpManager } from "./core/mcp/manager.ts";
+import { McpServerStore } from "./core/mcp/store.ts";
 import { AuthManager } from "./core/auth/manager.ts";
 import { ApiError, errorMessage } from "./core/errors.ts";
 import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
@@ -501,6 +503,8 @@ export async function createApp(config: AppConfig) {
     // 插件工具走动态来源：插件重载/禁用后下一轮请求立刻看到新清单，
     // 不需要在每次启停时重建工具注册表。
     tools.registerSource(() => plugins.tools());
+    // MCP 工具同理：服务器是部署级的，但「这一档开哪些」走档自己的工具开关。
+    tools.registerSource(() => mcp.tools());
     commands.registerSource(() => plugins.commands());
     for (const def of createBuiltinCommands({
       registry: commands,
@@ -1009,6 +1013,17 @@ export async function createApp(config: AppConfig) {
     read: readConfigFileAt,
     write: writeConfigFileAt,
   };
+  /*
+   * MCP 服务器是部署级的另一份运行期清单（data/mcp.json，0600）。
+   * 管理器只认识配置与连接，工具经 registerSource 进各档注册表 ——
+   * 「哪些 MCP 工具交给模型」由各档自己的工具开关决定，MCP 不发明第二套。
+   */
+  const mcpStore = new McpServerStore({
+    filePath: join(config.dataDir, "mcp.json"),
+    logger,
+    io: adapterIo,
+  });
+  const mcp = new McpManager({ store: mcpStore, logger });
   const adapterStore = new AdapterConfigStore({
     filePath: join(config.dataDir, "adapters.json"),
     seed: config.adapters,
@@ -1100,8 +1115,10 @@ export async function createApp(config: AppConfig) {
     onPersonasChanged: syncPersonaPrompts,
     personaUsage,
     scheduler,
+    mcp,
   });
 
+  await mcp.startAll();
   await adapters.startAll();
   scheduler.start();
 
@@ -1124,6 +1141,7 @@ export async function createApp(config: AppConfig) {
     listeners: () => events.listenerCount,
     async stop() {
       scheduler.stop();
+      await mcp.stopAll();
       await adapters.stopAll();
       await http.close();
       // 每一档都要卸：`unloadAll()` 是插件实例的 `teardown()` 的唯一调用点，

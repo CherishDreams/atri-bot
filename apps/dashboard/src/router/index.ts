@@ -60,6 +60,13 @@ export const router = createRouter({
           component: () => import("@/views/AdaptersView.vue"),
           meta: { noProfile: true },
         },
+        // MCP 服务器是部署级的第三页：连接清单与工具桥接不随档变（工具开关在配置文件页）。
+        {
+          path: "mcp",
+          name: "mcp",
+          component: () => import("@/views/McpView.vue"),
+          meta: { noProfile: true },
+        },
         // 计划任务是部署级调度：任务自己保存所用配置档，不跟随 URL 上的档名。
         {
           path: "cron",

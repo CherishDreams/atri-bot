@@ -63,6 +63,10 @@
     {
       "name": "adapters",
       "description": "入站平台适配器。实例保存在 data/adapters.json，控制台负责增删改与启停。"
+    },
+    {
+      "name": "mcp",
+      "description": "MCP 服务器（部署级）"
     }
   ],
   "paths": {
@@ -2371,6 +2375,299 @@
           }
         ]
       }
+    },
+    "/mcp": {
+      "get": {
+        "operationId": "listMcpServers",
+        "summary": "列出 MCP 服务器及其连接状态",
+        "tags": ["mcp"],
+        "responses": {
+          "200": {
+            "description": "全部 MCP 服务器（含禁用与连接失败的）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["servers"],
+                  "properties": {
+                    "servers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/McpServerInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMcpServer",
+        "summary": "新增一台 MCP 服务器并立即按配置连接",
+        "tags": ["mcp"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["id", "transport"],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "小写字母数字与 . _ -，1–32；重复回 409。"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "type": "string",
+                    "enum": ["http", "sse", "stdio"]
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "http/sse 必填，须为 http(s) URL。"
+                  },
+                  "command": {
+                    "type": "string",
+                    "description": "stdio 必填。"
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "env": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "headers": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "stdio 不接受，传了回 400。"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "缺省 true。"
+                  },
+                  "timeoutMs": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "创建后的状态视图（连接失败的 status 为 error、error 带原因，不回滚创建）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["server"],
+                  "properties": {
+                    "server": {
+                      "$ref": "#/components/schemas/McpServerInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/mcp/{id}": {
+      "post": {
+        "operationId": "updateMcpServer",
+        "summary": "更新一台 MCP 服务器的配置并按新配置重连",
+        "tags": ["mcp"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/McpId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerInfo",
+                "description": "整份配置替换；id 以路径为准，body 里的 id 被忽略。"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新并重连后的状态视图。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["server"],
+                  "properties": {
+                    "server": {
+                      "$ref": "#/components/schemas/McpServerInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteMcpServer",
+        "summary": "删除一台 MCP 服务器（断开连接并从配置移除）",
+        "tags": ["mcp"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/McpId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "删除结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["removed"],
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/mcp/{id}/enable": {
+      "post": {
+        "operationId": "setMcpServerEnabled",
+        "summary": "启用或禁用一台 MCP 服务器（禁用即断开）",
+        "tags": ["mcp"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/McpId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["enabled"],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "操作后的状态视图。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["server"],
+                  "properties": {
+                    "server": {
+                      "$ref": "#/components/schemas/McpServerInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/mcp/{id}/probe": {
+      "post": {
+        "operationId": "probeMcpServer",
+        "summary": "用当前配置重新连接一次并返回工具清单",
+        "tags": ["mcp"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/McpId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "probe 后的状态视图（失败时 status=error、error 带原因，仍是 200）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["server"],
+                  "properties": {
+                    "server": {
+                      "$ref": "#/components/schemas/McpServerInfo"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2458,6 +2755,15 @@
           "type": "string"
         },
         "description": "配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。"
+      },
+      "McpId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "MCP 服务器 id"
       }
     },
     "responses": {
@@ -3948,6 +4254,91 @@
           "autoRecord": {
             "type": "boolean",
             "description": "是否把每轮交互自动存为一条记忆。默认 true。"
+          }
+        }
+      },
+      "McpServerInfo": {
+        "type": "object",
+        "description": "一台 MCP 服务器的状态视图。部署级资源（data/mcp.json），工具以 `mcp.<服务器id>.<工具名>` 进各档工具开关。env/headers 是明文密钥：鉴权闸门内原样回给管理员，日志与错误文本里永不出现。",
+        "required": ["id", "name", "transport", "enabled", "timeoutMs", "status", "error", "tools"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "服务器 id，工具 id 的前缀。"
+          },
+          "name": {
+            "type": "string",
+            "description": "显示名；没填时等于 id。"
+          },
+          "transport": {
+            "type": "string",
+            "enum": ["http", "sse", "stdio"],
+            "description": "传输类型。"
+          },
+          "url": {
+            "type": "string",
+            "description": "http/sse 的端点 URL。"
+          },
+          "command": {
+            "type": "string",
+            "description": "stdio 的可执行命令。"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "stdio 的命令参数。"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "stdio 子进程的额外环境变量（可能含密钥）。"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "http/sse 的附加请求头（可能含 token）。"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "禁用的服务器不连接、工具不进注册表。"
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "description": "单次工具调用超时（毫秒），缺省 60000、上限 600000。"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["connected", "error", "disabled", "idle"],
+            "description": "连接状态。`idle` = 配置了但还没试过连接。"
+          },
+          "error": {
+            "type": ["string", "null"],
+            "description": "上一次连接失败的原因；正常为 null。"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "name", "description"],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "这台服务器当前提供的工具（连接成功后非空）。"
           }
         }
       }

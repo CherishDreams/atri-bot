@@ -317,6 +317,14 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
     "getSession",
     "deleteSession",
     "listAdapters",
+    // MCP 服务器是部署级运行期配置（data/mcp.json）：连接清单与工具桥接不随档变，
+    // 「这一档开哪些 MCP 工具」由各档自己的工具开关管（那是 ProfileConfig 的 tools 段）。
+    "listMcpServers",
+    "createMcpServer",
+    "updateMcpServer",
+    "deleteMcpServer",
+    "setMcpServerEnabled",
+    "probeMcpServer",
     // 适配器实例是部署级运行期配置（data/adapters.json），不属于任何一份配置档。
     "listAdapterTemplates",
     "createAdapter",

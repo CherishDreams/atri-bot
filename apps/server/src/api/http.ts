@@ -17,6 +17,7 @@ import type { SessionEvents } from "#core/agent/events.ts";
 import type { AdapterManager } from "#adapters/manager.ts";
 import type { PersonaStore } from "#core/persona/store.ts";
 import type { CronScheduler } from "#core/cron/manager.ts";
+import type { McpManager } from "#core/mcp/manager.ts";
 import type { PluginManager } from "#plugins/manager.ts";
 
 /**
@@ -218,6 +219,8 @@ export interface HttpDeps {
   personaUsage(personaId: string): string[];
   /** 计划任务调度器：CRUD、立即执行与下一次触发视图。 */
   scheduler: CronScheduler;
+  /** MCP 服务器管理器：部署级的连接与工具桥接，`/mcp` 那组端点的数据源。 */
+  mcp: McpManager;
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {

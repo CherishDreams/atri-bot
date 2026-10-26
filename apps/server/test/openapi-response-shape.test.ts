@@ -36,6 +36,9 @@ import { fileURLToPath } from "node:url";
 import { createApp } from "#app.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
+/** MCP 驱动用的 stdio 桩服务器（test/fixtures/，仓库内才能解析 SDK 依赖）。 */
+const MCP_STUB = fileURLToPath(new URL("./fixtures/stub-mcp.mjs", import.meta.url));
+
 const SPEC = JSON.parse(
   readFileSync(fileURLToPath(new URL("../openapi.json", import.meta.url)), "utf8"),
 );
@@ -125,6 +128,12 @@ const ORDER = [
   "listTools",
   "listCommands",
   "setToolEnabled",
+  "createMcpServer",
+  "listMcpServers",
+  "probeMcpServer",
+  "updateMcpServer",
+  "setMcpServerEnabled",
+  "deleteMcpServer",
   "deleteSession",
   "deleteProvider",
   "unloadPlugin",
@@ -847,6 +856,40 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       return at("/adapters");
     case "deleteAdapter":
       return at("/adapters/guard-adapter");
+    case "listMcpServers":
+      // guard-mcp 已由 createMcpServer 造出，清单非空。
+      return at("/mcp");
+    case "createMcpServer": {
+      // 用仓库里的 stdio 桩（test/fixtures/stub-mcp.mjs）：空数组一律算假绿，
+      // 所以驱动必须连上一台**真的**提供工具的服务器，tools 数组才有内容。
+      const created = await at("/mcp", {
+        id: "guard-mcp",
+        transport: "stdio",
+        command: process.execPath,
+        args: [MCP_STUB],
+      });
+      assert.equal(
+        (created.body.server as { status: string }).status,
+        "connected",
+        "桩服务器必须连得上，否则 tools 数组是空的、形状检查假绿",
+      );
+      return created;
+    }
+    case "probeMcpServer":
+      return at("/mcp/guard-mcp/probe");
+    case "updateMcpServer":
+      // 整份配置替换 + 改名；applyConfig 会重连，工具清单仍在。
+      return at("/mcp/guard-mcp", {
+        transport: "stdio",
+        command: process.execPath,
+        args: [MCP_STUB],
+        name: "改名后的 MCP",
+      });
+    case "setMcpServerEnabled":
+      // 传 true 而不是 false：禁用后的响应 tools 是空数组，会让检查假绿。
+      return at("/mcp/guard-mcp/enable", { enabled: true });
+    case "deleteMcpServer":
+      return at("/mcp/guard-mcp");
     case "listTools":
       return at("/tools");
     case "listCommands":

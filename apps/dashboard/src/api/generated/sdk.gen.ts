@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client/index.js';
-import type { AuthStatusData, AuthStatusResponses, CallAdapterActionData, CallAdapterActionErrors, CallAdapterActionResponses, CreateAdapterData, CreateAdapterErrors, CreateAdapterResponses, CreateCronJobData, CreateCronJobErrors, CreateCronJobResponses, CreatePersonaData, CreatePersonaErrors, CreatePersonaResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteAdapterData, DeleteAdapterErrors, DeleteAdapterResponses, DeleteCronJobData, DeleteCronJobErrors, DeleteCronJobResponses, DeletePersonaData, DeletePersonaErrors, DeletePersonaResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetAdapterData, GetAdapterErrors, GetAdapterResponses, GetPluginConfigData, GetPluginConfigErrors, GetPluginConfigResponses, GetProfileConfigData, GetProfileConfigErrors, GetProfileConfigResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListAdapterTemplatesData, ListAdapterTemplatesErrors, ListAdapterTemplatesResponses, ListCommandsData, ListCommandsErrors, ListCommandsResponses, ListCronJobsData, ListCronJobsErrors, ListCronJobsResponses, ListLogsData, ListLogsErrors, ListLogsResponses, ListPersonasData, ListPersonasErrors, ListPersonasResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ProbeProviderData, ProbeProviderErrors, ProbeProviderResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, ReloadProfileData, ReloadProfileErrors, ReloadProfileResponses, RunCronJobData, RunCronJobErrors, RunCronJobResponses, SavePluginConfigData, SavePluginConfigErrors, SavePluginConfigResponses, SaveProfileConfigData, SaveProfileConfigErrors, SaveProfileConfigResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetAdapterEnabledData, SetAdapterEnabledErrors, SetAdapterEnabledResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamLogsData, StreamLogsErrors, StreamLogsResponse, StreamLogsResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateAdapterData, UpdateAdapterErrors, UpdateAdapterResponses, UpdateCronJobData, UpdateCronJobErrors, UpdateCronJobResponses, UpdatePersonaData, UpdatePersonaErrors, UpdatePersonaResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
+import type { AuthStatusData, AuthStatusResponses, CallAdapterActionData, CallAdapterActionErrors, CallAdapterActionResponses, CreateAdapterData, CreateAdapterErrors, CreateAdapterResponses, CreateCronJobData, CreateCronJobErrors, CreateCronJobResponses, CreateMcpServerData, CreateMcpServerErrors, CreateMcpServerResponses, CreatePersonaData, CreatePersonaErrors, CreatePersonaResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteAdapterData, DeleteAdapterErrors, DeleteAdapterResponses, DeleteCronJobData, DeleteCronJobErrors, DeleteCronJobResponses, DeleteMcpServerData, DeleteMcpServerErrors, DeleteMcpServerResponses, DeletePersonaData, DeletePersonaErrors, DeletePersonaResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetAdapterData, GetAdapterErrors, GetAdapterResponses, GetPluginConfigData, GetPluginConfigErrors, GetPluginConfigResponses, GetProfileConfigData, GetProfileConfigErrors, GetProfileConfigResponses, GetSessionData, GetSessionErrors, GetSessionResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListAdapterTemplatesData, ListAdapterTemplatesErrors, ListAdapterTemplatesResponses, ListCommandsData, ListCommandsErrors, ListCommandsResponses, ListCronJobsData, ListCronJobsErrors, ListCronJobsResponses, ListLogsData, ListLogsErrors, ListLogsResponses, ListMcpServersData, ListMcpServersErrors, ListMcpServersResponses, ListPersonasData, ListPersonasErrors, ListPersonasResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ProbeMcpServerData, ProbeMcpServerErrors, ProbeMcpServerResponses, ProbeProviderData, ProbeProviderErrors, ProbeProviderResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, ReloadProfileData, ReloadProfileErrors, ReloadProfileResponses, RunCronJobData, RunCronJobErrors, RunCronJobResponses, SavePluginConfigData, SavePluginConfigErrors, SavePluginConfigResponses, SaveProfileConfigData, SaveProfileConfigErrors, SaveProfileConfigResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetAdapterEnabledData, SetAdapterEnabledErrors, SetAdapterEnabledResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetMcpServerEnabledData, SetMcpServerEnabledErrors, SetMcpServerEnabledResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamLogsData, StreamLogsErrors, StreamLogsResponse, StreamLogsResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateAdapterData, UpdateAdapterErrors, UpdateAdapterResponses, UpdateCronJobData, UpdateCronJobErrors, UpdateCronJobResponses, UpdateMcpServerData, UpdateMcpServerErrors, UpdateMcpServerResponses, UpdatePersonaData, UpdatePersonaErrors, UpdatePersonaResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -687,5 +687,71 @@ export const reloadProfile = <ThrowOnError extends boolean = false>(options: Opt
 export const listCommands = <ThrowOnError extends boolean = false>(options: Options<ListCommandsData, ThrowOnError>): RequestResult<ListCommandsResponses, ListCommandsErrors, ThrowOnError> => (options.client ?? client).get<ListCommandsResponses, ListCommandsErrors, ThrowOnError>({
     responseType: 'json',
     url: '/commands',
+    ...options
+});
+
+/**
+ * 列出 MCP 服务器及其连接状态
+ */
+export const listMcpServers = <ThrowOnError extends boolean = false>(options?: Options<ListMcpServersData, ThrowOnError>): RequestResult<ListMcpServersResponses, ListMcpServersErrors, ThrowOnError> => (options?.client ?? client).get<ListMcpServersResponses, ListMcpServersErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/mcp',
+    ...options
+});
+
+/**
+ * 新增一台 MCP 服务器并立即按配置连接
+ */
+export const createMcpServer = <ThrowOnError extends boolean = false>(options: Options<CreateMcpServerData, ThrowOnError>): RequestResult<CreateMcpServerResponses, CreateMcpServerErrors, ThrowOnError> => (options.client ?? client).post<CreateMcpServerResponses, CreateMcpServerErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/mcp',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 删除一台 MCP 服务器（断开连接并从配置移除）
+ */
+export const deleteMcpServer = <ThrowOnError extends boolean = false>(options: Options<DeleteMcpServerData, ThrowOnError>): RequestResult<DeleteMcpServerResponses, DeleteMcpServerErrors, ThrowOnError> => (options.client ?? client).delete<DeleteMcpServerResponses, DeleteMcpServerErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/mcp/{id}',
+    ...options
+});
+
+/**
+ * 更新一台 MCP 服务器的配置并按新配置重连
+ */
+export const updateMcpServer = <ThrowOnError extends boolean = false>(options: Options<UpdateMcpServerData, ThrowOnError>): RequestResult<UpdateMcpServerResponses, UpdateMcpServerErrors, ThrowOnError> => (options.client ?? client).post<UpdateMcpServerResponses, UpdateMcpServerErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/mcp/{id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 启用或禁用一台 MCP 服务器（禁用即断开）
+ */
+export const setMcpServerEnabled = <ThrowOnError extends boolean = false>(options: Options<SetMcpServerEnabledData, ThrowOnError>): RequestResult<SetMcpServerEnabledResponses, SetMcpServerEnabledErrors, ThrowOnError> => (options.client ?? client).post<SetMcpServerEnabledResponses, SetMcpServerEnabledErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/mcp/{id}/enable',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 用当前配置重新连接一次并返回工具清单
+ */
+export const probeMcpServer = <ThrowOnError extends boolean = false>(options: Options<ProbeMcpServerData, ThrowOnError>): RequestResult<ProbeMcpServerResponses, ProbeMcpServerErrors, ThrowOnError> => (options.client ?? client).post<ProbeMcpServerResponses, ProbeMcpServerErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/mcp/{id}/probe',
     ...options
 });

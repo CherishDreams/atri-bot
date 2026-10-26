@@ -253,6 +253,7 @@ export function createHttpServer(deps: HttpDeps) {
     onPersonasChanged,
     personaUsage,
     scheduler,
+    mcp,
   } = deps;
 
   const cookieName = auth.cookieName;
@@ -1183,6 +1184,71 @@ export function createHttpServer(deps: HttpDeps) {
     const bundle = scopedProfile(req, res);
     if (!bundle) return;
     sendJson(res, 200, { commands: bundle.commands.list().map(viewCommand) });
+  });
+
+  // --- MCP 服务器 ---------------------------------------------------------
+  //
+  // 部署级资源（与 providers / adapters 同一组）：不带 ?profile=，写完立即生效
+  //（applyConfig 断旧连、按新配置重连）。工具进各档注册表后，「开哪些」走档工具
+  // 开关，所以这里没有按档的任何参数。env/headers 是明文密钥，鉴权闸门内原样回。
+
+  router.get(`${API_PREFIX}/mcp`, async (_req, res) => {
+    sendJson(res, 200, { servers: mcp.list() });
+  });
+
+  router.post(`${API_PREFIX}/mcp`, async (req, res) => {
+    const body = await readJson(req);
+    try {
+      mcp.store.create(body);
+      const view = await mcp.applyConfig(String(body.id));
+      sendJson(res, 201, { server: view });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/mcp/:id`, async (req, res, params) => {
+    const body = await readJson(req);
+    try {
+      mcp.store.update(params.id, body);
+      const view = await mcp.applyConfig(params.id);
+      sendJson(res, 200, { server: view });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/mcp/:id/enable`, async (req, res, params) => {
+    const body = await readJson(req);
+    try {
+      if (typeof body.enabled !== "boolean") {
+        return sendError(res, 400, "必须提供 `enabled`（布尔值）");
+      }
+      mcp.store.setEnabled(params.id, body.enabled);
+      const view = await mcp.applyConfig(params.id);
+      sendJson(res, 200, { server: view });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post(`${API_PREFIX}/mcp/:id/probe`, async (_req, res, params) => {
+    try {
+      const view = await mcp.probe(params.id);
+      if (!view) return sendError(res, 404, `没有这个 MCP 服务器: ${params.id}`);
+      sendJson(res, 200, { server: view });
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.delete(`${API_PREFIX}/mcp/:id`, async (_req, res, params) => {
+    try {
+      await mcp.disconnect(params.id);
+      sendJson(res, 200, { removed: mcp.store.remove(params.id) });
+    } catch (err) {
+      fail(res, err);
+    }
   });
 
   // --- 配置档 -------------------------------------------------------------

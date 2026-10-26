@@ -837,6 +837,72 @@ export type MemoryConfig = {
 };
 
 /**
+ * 一台 MCP 服务器的状态视图。部署级资源（data/mcp.json），工具以 `mcp.<服务器id>.<工具名>` 进各档工具开关。env/headers 是明文密钥：鉴权闸门内原样回给管理员，日志与错误文本里永不出现。
+ */
+export type McpServerInfo = {
+    /**
+     * 服务器 id，工具 id 的前缀。
+     */
+    id: string;
+    /**
+     * 显示名；没填时等于 id。
+     */
+    name: string;
+    /**
+     * 传输类型。
+     */
+    transport: 'http' | 'sse' | 'stdio';
+    /**
+     * http/sse 的端点 URL。
+     */
+    url?: string;
+    /**
+     * stdio 的可执行命令。
+     */
+    command?: string;
+    /**
+     * stdio 的命令参数。
+     */
+    args?: Array<string>;
+    /**
+     * stdio 子进程的额外环境变量（可能含密钥）。
+     */
+    env?: {
+        [key: string]: string;
+    };
+    /**
+     * http/sse 的附加请求头（可能含 token）。
+     */
+    headers?: {
+        [key: string]: string;
+    };
+    /**
+     * 禁用的服务器不连接、工具不进注册表。
+     */
+    enabled: boolean;
+    /**
+     * 单次工具调用超时（毫秒），缺省 60000、上限 600000。
+     */
+    timeoutMs: number;
+    /**
+     * 连接状态。`idle` = 配置了但还没试过连接。
+     */
+    status: 'connected' | 'error' | 'disabled' | 'idle';
+    /**
+     * 上一次连接失败的原因；正常为 null。
+     */
+    error: string | null;
+    /**
+     * 这台服务器当前提供的工具（连接成功后非空）。
+     */
+    tools: Array<{
+        id: string;
+        name: string;
+        description: string;
+    }>;
+};
+
+/**
  * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。必须挂在**具体 operation** 上，不要「顺手归位」到 path-item 的 parameters：那里会被同一路径下的每个方法共享，`DELETE /sessions/{id}` 因此在 SDK 里 advertise 两个服务端从不读的参数（handler 压根不看 query），而三道规格守卫谁也看不见这种说谎。
  */
 export type PageLimit = number;
@@ -881,6 +947,11 @@ export type Profile = string;
  * 配置档 id。合法形状见 `config/profiles.ts` 的 `assertProfileId`：小写字母或数字开头，只含 a-z 0-9 . _ -，长 1–64。它**同时是目录名**，所以 `..` 与 `/` 必须在进 `join()` 之前就被拒掉。
  */
 export type ProfileId = string;
+
+/**
+ * MCP 服务器 id
+ */
+export type McpId = string;
 
 export type HealthData = {
     body?: never;
@@ -3011,3 +3082,248 @@ export type ListCommandsResponses = {
 };
 
 export type ListCommandsResponse = ListCommandsResponses[keyof ListCommandsResponses];
+
+export type ListMcpServersData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/mcp';
+};
+
+export type ListMcpServersErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type ListMcpServersError = ListMcpServersErrors[keyof ListMcpServersErrors];
+
+export type ListMcpServersResponses = {
+    /**
+     * 全部 MCP 服务器（含禁用与连接失败的）。
+     */
+    200: {
+        servers: Array<McpServerInfo>;
+    };
+};
+
+export type ListMcpServersResponse = ListMcpServersResponses[keyof ListMcpServersResponses];
+
+export type CreateMcpServerData = {
+    body: {
+        /**
+         * 小写字母数字与 . _ -，1–32；重复回 409。
+         */
+        id: string;
+        name?: string;
+        transport: 'http' | 'sse' | 'stdio';
+        /**
+         * http/sse 必填，须为 http(s) URL。
+         */
+        url?: string;
+        /**
+         * stdio 必填。
+         */
+        command?: string;
+        args?: Array<string>;
+        env?: {
+            [key: string]: string;
+        };
+        /**
+         * stdio 不接受，传了回 400。
+         */
+        headers?: {
+            [key: string]: string;
+        };
+        /**
+         * 缺省 true。
+         */
+        enabled?: boolean;
+        timeoutMs?: number;
+    };
+    path?: never;
+    query?: never;
+    url: '/mcp';
+};
+
+export type CreateMcpServerErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 请求无效
+     */
+    409: ApiError;
+};
+
+export type CreateMcpServerError = CreateMcpServerErrors[keyof CreateMcpServerErrors];
+
+export type CreateMcpServerResponses = {
+    /**
+     * 创建后的状态视图（连接失败的 status 为 error、error 带原因，不回滚创建）。
+     */
+    201: {
+        server: McpServerInfo;
+    };
+};
+
+export type CreateMcpServerResponse = CreateMcpServerResponses[keyof CreateMcpServerResponses];
+
+export type DeleteMcpServerData = {
+    body?: never;
+    path: {
+        /**
+         * MCP 服务器 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/mcp/{id}';
+};
+
+export type DeleteMcpServerErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type DeleteMcpServerError = DeleteMcpServerErrors[keyof DeleteMcpServerErrors];
+
+export type DeleteMcpServerResponses = {
+    /**
+     * 删除结果。
+     */
+    200: {
+        removed: boolean;
+    };
+};
+
+export type DeleteMcpServerResponse = DeleteMcpServerResponses[keyof DeleteMcpServerResponses];
+
+export type UpdateMcpServerData = {
+    /**
+     * 整份配置替换；id 以路径为准，body 里的 id 被忽略。
+     */
+    body: McpServerInfo;
+    path: {
+        /**
+         * MCP 服务器 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/mcp/{id}';
+};
+
+export type UpdateMcpServerErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type UpdateMcpServerError = UpdateMcpServerErrors[keyof UpdateMcpServerErrors];
+
+export type UpdateMcpServerResponses = {
+    /**
+     * 更新并重连后的状态视图。
+     */
+    200: {
+        server: McpServerInfo;
+    };
+};
+
+export type UpdateMcpServerResponse = UpdateMcpServerResponses[keyof UpdateMcpServerResponses];
+
+export type SetMcpServerEnabledData = {
+    body: {
+        enabled: boolean;
+    };
+    path: {
+        /**
+         * MCP 服务器 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/mcp/{id}/enable';
+};
+
+export type SetMcpServerEnabledErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type SetMcpServerEnabledError = SetMcpServerEnabledErrors[keyof SetMcpServerEnabledErrors];
+
+export type SetMcpServerEnabledResponses = {
+    /**
+     * 操作后的状态视图。
+     */
+    200: {
+        server: McpServerInfo;
+    };
+};
+
+export type SetMcpServerEnabledResponse = SetMcpServerEnabledResponses[keyof SetMcpServerEnabledResponses];
+
+export type ProbeMcpServerData = {
+    body?: never;
+    path: {
+        /**
+         * MCP 服务器 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/mcp/{id}/probe';
+};
+
+export type ProbeMcpServerErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type ProbeMcpServerError = ProbeMcpServerErrors[keyof ProbeMcpServerErrors];
+
+export type ProbeMcpServerResponses = {
+    /**
+     * probe 后的状态视图（失败时 status=error、error 带原因，仍是 200）。
+     */
+    200: {
+        server: McpServerInfo;
+    };
+};
+
+export type ProbeMcpServerResponse = ProbeMcpServerResponses[keyof ProbeMcpServerResponses];

@@ -122,6 +122,39 @@ export interface ProviderModelList {
 }
 
 /**
+ * 一台 MCP 服务器的状态视图（`GET /mcp` 的元素）。
+ *
+ * MCP 是**部署级**资源（`data/mcp.json`），工具以 `mcp.<服务器 id>.<工具名>` 的
+ * id 进各档的工具开关 —— 这一族端点因此不带 `?profile=`。「开哪些工具」由配置档
+ * 的工具清单管，这里只管「有哪些服务器、连上没有、各自提供了什么」。
+ */
+export interface McpServerInfo {
+  id: string;
+  /** 显示名；没填时等于 id。 */
+  name: string;
+  /** `http`（Streamable HTTP）| `sse` | `stdio`（本机子进程）。 */
+  transport: string;
+  url?: string;
+  command?: string;
+  args?: string[];
+  /**
+   * 明文密钥可能在这里（stdio 的 env、http 的 headers）。与 providers 的 `apiKey`
+   * 同一条纪律：鉴权闸门内原样回给管理员，日志与错误文本里永远不出现。
+   */
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  enabled: boolean;
+  /** 单次工具调用超时（毫秒），夹取后的生效值。 */
+  timeoutMs: number;
+  /** `connected` | `error` | `disabled` | `idle`（配置了但还没试过连接）。 */
+  status: string;
+  /** 上一次连接失败的原因；正常为 null。 */
+  error: string | null;
+  /** 这台服务器当前提供的工具（连接成功后非空）。 */
+  tools: { id: string; name: string; description: string }[];
+}
+
+/**
  * 适配器把外部界面（HTTP、QQ、Discord、WebSocket…）桥接到内部消息管线。
  * 刻意保持通用，这样纯 agent 部署完全不需要聊天平台。
  */
