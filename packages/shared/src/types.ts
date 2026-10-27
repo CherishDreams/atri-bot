@@ -351,6 +351,23 @@ export interface ProfileRecord {
 }
 
 /**
+ * 一条技能（SKILL.md 文件夹）的目录项。
+ *
+ * 技能是**部署级**的文件资源（`<dataDir>/skills/` 或插件目录捆绑），
+ * 配置档只存「启用了哪些」。运行时渐进式披露：报头里只有名字与说明，
+ * 全文由模型按需用 `read_skill` 工具取。
+ */
+export interface SkillInfo {
+  id: string;
+  /** frontmatter 的 name；缺省用目录名。 */
+  name: string;
+  /** frontmatter 的 description。 */
+  description: string;
+  /** `skills`（部署级目录）或插件目录名。 */
+  source: string;
+}
+
+/**
  * 一份配置档的记忆设置（生效值，缺省已由服务端补齐）。
  *
  * 记忆是「可替换组件」的样板：`provider` 指向 `builtin`（内置实现）或某个插件
@@ -406,6 +423,13 @@ export interface ProfileConfig {
    * 插件启停后跟着变。
    */
   memoryProviders: string[];
+  /**
+   * 这一档启用的技能 id 清单（生效值）。空数组 = 一个都不注入。
+   * 技能本体是部署级文件，`availableSkills` 是给界面画勾选列表的现算目录。
+   */
+  skills: { enabled: string[] };
+  /** 部署级当前可用的全部技能（含插件捆绑的），与 `GET /skills` 同源。 */
+  availableSkills: SkillInfo[];
   tools: ToolInfo[];
   plugins: PluginInfo[];
   /**

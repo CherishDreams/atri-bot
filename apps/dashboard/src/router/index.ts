@@ -60,6 +60,13 @@ export const router = createRouter({
           component: () => import("@/views/AdaptersView.vue"),
           meta: { noProfile: true },
         },
+        // 技能库是部署级内容资产（与人格同类）：这一页只读目录与全文，启停在配置文件页。
+        {
+          path: "skills",
+          name: "skills",
+          component: () => import("@/views/SkillsView.vue"),
+          meta: { noProfile: true },
+        },
         // MCP 服务器是部署级的第三页：连接清单与工具桥接不随档变（工具开关在配置文件页）。
         {
           path: "mcp",

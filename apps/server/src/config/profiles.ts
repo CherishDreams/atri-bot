@@ -112,6 +112,8 @@ export interface ProfileFileConfig {
    * 配置口：内置方案不够用就装一个提供记忆模块的插件，改这里即可切换。
    */
   memory?: unknown;
+  /** 技能启用清单。技能本体是部署级文件（`<dataDir>/skills/`），这里只决定注入哪些。 */
+  skills?: { enabled?: string[] };
   [key: string]: unknown;
 }
 
@@ -278,6 +280,41 @@ export function validateMemoryPatch(raw: unknown): Partial<MemoryConfig> {
     patch.autoRecord = record.autoRecord;
   }
   return patch;
+}
+
+/** 技能目录名同款正则：启用的 id 必须能对上一条真的存在的技能。 */
+const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,63}$/;
+
+/** 读档时归一：enabled 清单只保留合法 id 并去重；段缺失 = 空清单（一个都不注入）。 */
+export function normalizeSkillIds(raw: { enabled?: unknown } | undefined): string[] {
+  if (raw === undefined || raw === null || typeof raw !== "object") return [];
+  const value = (raw as { enabled?: unknown }).enabled;
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string" || !SKILL_ID_PATTERN.test(item)) continue;
+    seen.add(item);
+  }
+  return [...seen];
+}
+
+/** API 写入时的严格校验：未知 id 在组合根对照现算目录拒绝（那里知道哪些真的存在）。 */
+export function validateSkillsPatch(raw: unknown): { enabled: string[] } {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ApiError("skills 必须是对象（键是 enabled）", 400);
+  }
+  const enabled = (raw as { enabled?: unknown }).enabled;
+  if (!Array.isArray(enabled) || !enabled.every((item) => typeof item === "string")) {
+    throw new ApiError("skills.enabled 必须是字符串数组", 400);
+  }
+  const seen = new Set<string>();
+  for (const item of enabled) {
+    if (!SKILL_ID_PATTERN.test(item)) {
+      throw new ApiError(`技能 id「${String(item)}」不合法（小写字母数字与 . _ : -）`, 400);
+    }
+    seen.add(item);
+  }
+  return { enabled: [...seen] };
 }
 
 /** API 写入时的严格校验：形状不对直接 400，不静默丢条目。 */

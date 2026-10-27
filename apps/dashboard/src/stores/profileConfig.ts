@@ -39,6 +39,8 @@ interface Draft {
   access: AdapterAccessControl;
   /** 记忆设置（生效值）。服务端是补丁语义：只发改过的键。 */
   memory: MemoryConfig;
+  /** 启用的技能 id 清单。服务端是整体替换语义。 */
+  skills: { enabled: string[] };
 }
 
 function draftOf(config: ProfileConfig): Draft {
@@ -53,6 +55,7 @@ function draftOf(config: ProfileConfig): Draft {
       adminIds: [...config.access.adminIds],
     },
     memory: { ...config.memory },
+    skills: { enabled: [...config.skills.enabled] },
   };
 }
 
@@ -89,6 +92,7 @@ function copyDraft(draft: Draft): Draft {
       adminIds: [...draft.access.adminIds],
     },
     memory: { ...draft.memory },
+    skills: { enabled: [...draft.skills.enabled] },
   };
 }
 
@@ -135,6 +139,13 @@ function patchOf(original: Draft, draft: Draft): ProfileConfigPatch {
     memory.autoRecord = draft.memory.autoRecord;
   }
   if (Object.keys(memory).length > 0) patch.memory = memory;
+  // skills 是整体替换：长度不同或有差集就整份发（服务端对未知 id 会 400）。
+  if (
+    original.skills.enabled.length !== draft.skills.enabled.length ||
+    original.skills.enabled.some((id) => !draft.skills.enabled.includes(id))
+  ) {
+    patch.skills = { enabled: [...draft.skills.enabled] };
+  }
   return patch;
 }
 
@@ -262,6 +273,14 @@ export const useProfileConfigStore = defineStore("profileConfig", {
 
     setMemoryAutoRecord(autoRecord: boolean): void {
       if (this.draft) this.draft.memory = { ...this.draft.memory, autoRecord };
+    },
+
+    /** 勾选/取消一条技能。启用清单整体替换，这里维护整份。 */
+    setSkill(id: string, enabled: boolean): void {
+      if (!this.draft) return;
+      const next = this.draft.skills.enabled.filter((existing) => existing !== id);
+      if (enabled) next.push(id);
+      this.draft.skills = { enabled: next };
     },
 
     /** 丢掉草稿：只在「确认放弃未保存改动」之后调用，所以它必须显式存在。 */

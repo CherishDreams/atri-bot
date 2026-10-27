@@ -83,6 +83,8 @@ const GROUPS: { key: string; label: string; items: NavItem[] }[] = [
       { key: "config", label: "配置文件", icon: "settings" },
       // 人格库是全局资源；配置档只在配置文件页的「人格」分类里选用。
       { key: "personas", label: "人格配置", icon: "persona" },
+      // 技能库是部署级内容资产（data/skills/），与人格同类：独立整页，档里只做引用。
+      { key: "skills", label: "技能", icon: "memory" },
       // 插件页：每份档各有一套启用清单与配置值，所以链接要带 `?profile=`。
       { key: "plugins", label: "插件", icon: "plugin" },
     ],

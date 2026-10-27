@@ -25,6 +25,8 @@ import { MemoryService } from "./core/memory/service.ts";
 import { createMemoryTools } from "./core/memory/tools.ts";
 import { McpManager } from "./core/mcp/manager.ts";
 import { McpServerStore } from "./core/mcp/store.ts";
+import { SkillStore } from "./core/skill/store.ts";
+import { createSkillTools, skillDirectoryBlock } from "./core/skill/tools.ts";
 import { AuthManager } from "./core/auth/manager.ts";
 import { ApiError, errorMessage } from "./core/errors.ts";
 import { PluginManager, pluginRuntimeConfig } from "./plugins/manager.ts";
@@ -62,6 +64,8 @@ import {
   migrateProvidersToGlobal,
   normalizeAccess,
   normalizeMemoryConfig,
+  normalizeSkillIds,
+  validateSkillsPatch,
   profileConfigPath,
   profileDir,
   profilesRoot,
@@ -101,6 +105,7 @@ const PROFILE_PATCH_KEYS = [
   "access",
   "wakePrefix",
   "memory",
+  "skills",
 ] as const;
 
 /**
@@ -251,6 +256,17 @@ export async function createApp(config: AppConfig) {
    * 是一次不必要的重构，而 WAL + 5s busy timeout 下两条短同步事务的连接互不碍事。
    */
   const builtinMemory = new BuiltinMemoryProvider({ dataDir: config.dataDir, logger });
+  /*
+   * 技能是部署级文件资源（data/skills/ + 各插件目录捆绑），没有运行期状态：
+   * store 每次现扫文件系统，增删技能就是增删目录。必须在配置档装配**之前**创建
+   * —— buildBundle 里的技能目录 provider 与 updateConfig 的存在性校验都引用它，
+   * 放在装配之后就是一次「Cannot access before initialization」的 TDZ（实测）。
+   */
+  const skills = new SkillStore({
+    skillsDir: join(config.dataDir, "skills"),
+    pluginDirs: config.pluginDirs,
+    logger,
+  });
 
   // 「跑法」住在配置档文件里，供应商住在 `providers.json`，都不在 `atri.config.json`。
   // 顺序是有意的：先建目录、再一次性 seed、**然后**才构造任何对象图 —— 存储拿到的一直是
@@ -521,6 +537,7 @@ export async function createApp(config: AppConfig) {
       pluginProviders: () => plugins.memoryProviders(),
     });
     for (const tool of createMemoryTools(memory)) tools.register(tool);
+    for (const tool of createSkillTools(skills)) tools.register(tool);
     // 群聊唤醒前缀：读文件时容忍坏形状（手写配置退回缺省并 warn，不让服务起不来），
     // 写接口上才严格要求。
     const fileWakePrefix = coerceWakePrefix(profile.wakePrefix);
@@ -547,7 +564,12 @@ export async function createApp(config: AppConfig) {
       resolveAccess: () => profiles.get(id)?.access ?? emptyAccess(),
       wakePrefix,
       // 记忆召回进报头、interaction 自动记录在轮末：都由服务自己按配置决定做不做。
-      contextProviders: [(turn) => memory.contextFor(turn)],
+      contextProviders: [
+        (turn) => memory.contextFor(turn),
+        // 技能目录：启用的 id 现读档文件，目录现扫技能库（装了新技能下一轮就在）。
+        async () =>
+          skillDirectoryBlock(normalizeSkillIds(readProfileConfig(path).skills), skills.list()),
+      ],
       onTurnEnd: (turn, reply) => memory.recordInteraction(turn, reply.content),
     });
     return {
@@ -802,6 +824,20 @@ export async function createApp(config: AppConfig) {
       let memoryPatch: ReturnType<typeof validateMemoryPatch> | undefined;
       if (body.memory !== undefined) memoryPatch = validateMemoryPatch(body.memory);
 
+      let nextSkills: ReturnType<typeof validateSkillsPatch> | undefined;
+      if (body.skills !== undefined) {
+        nextSkills = validateSkillsPatch(body.skills);
+        // 启用的 id 必须对得上**此刻**的技能目录：写一个不存在的 id 不会有任何效果，
+        // 而界面会显示「已启用」—— 那是本仓最恨的形状（成功回执在说谎）。
+        // 技能可能之后才装上，但那应该由用户重新保存一次，而不是留一个哑引用。
+        const known = new Set(skills.list().map((skill) => skill.id));
+        for (const sid of nextSkills.enabled) {
+          if (!known.has(sid)) {
+            throw new ApiError(`技能「${sid}」不存在（目录里没有它的 SKILL.md）`, 400);
+          }
+        }
+      }
+
       // --- 到这里全部验完了，下面才开始动磁盘与运行态 -----------------------
       if (
         nextDefault !== undefined ||
@@ -810,6 +846,7 @@ export async function createApp(config: AppConfig) {
         nextAccess !== undefined ||
         nextWakePrefix !== undefined ||
         memoryPatch !== undefined ||
+        nextSkills !== undefined ||
         tools.length > 0
       ) {
         updateProfileConfig(profileConfigPath(profilesDir, id), (file) => {
@@ -825,6 +862,7 @@ export async function createApp(config: AppConfig) {
           if (nextSteps !== undefined) file.maxToolSteps = nextSteps;
           if (nextAccess !== undefined) file.access = nextAccess;
           if (nextWakePrefix !== undefined) file.wakePrefix = nextWakePrefix;
+          if (nextSkills !== undefined) file.skills = nextSkills;
           if (memoryPatch !== undefined) {
             // memory 段是补丁合并：只覆盖给出的键，文件里手写的其它键原样保留
             //（键是开放类型，读时逐键兜默认，所以部分写入永远合法）。
@@ -1116,6 +1154,7 @@ export async function createApp(config: AppConfig) {
     personaUsage,
     scheduler,
     mcp,
+    skills,
   });
 
   await mcp.startAll();

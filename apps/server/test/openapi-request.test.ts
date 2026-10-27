@@ -325,6 +325,9 @@ test("配置档作用域：标记的端点缺 profile 必须 400，且标记集�
     "deleteMcpServer",
     "setMcpServerEnabled",
     "probeMcpServer",
+    // 技能是部署级文件资源（data/skills/），启停属于配置档的 skills 段。
+    "listSkills",
+    "getSkill",
     // 适配器实例是部署级运行期配置（data/adapters.json），不属于任何一份配置档。
     "listAdapterTemplates",
     "createAdapter",

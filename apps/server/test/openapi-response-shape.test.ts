@@ -134,6 +134,8 @@ const ORDER = [
   "updateMcpServer",
   "setMcpServerEnabled",
   "deleteMcpServer",
+  "listSkills",
+  "getSkill",
   "deleteSession",
   "deleteProvider",
   "unloadPlugin",
@@ -361,6 +363,23 @@ async function setup(t: TestContext): Promise<Harness> {
   const pluginsRoot = join(root, "plugins");
   writePluginFixture(pluginsRoot, "fixture");
   writeBrokenPluginFixture(pluginsRoot, "fixture-broken");
+
+  // 技能 fixture：写进部署级 skills 目录（availableSkills / GET /skills 的数据源）；
+  // 同时在档文件里启用它 —— skills.enabled 是数组，空数组会让形状检查假绿。
+  // seedProfile 的幂等判据是「目标文件在不在」，预写了它就不再搬 bootstrap。
+  const skillDir = join(root, "data", "skills", "echo-guide");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(
+    join(skillDir, "SKILL.md"),
+    "---\nname: 回声指南\ndescription: 教你把一句话原样回给对方\n---\n# 回声指南\n把用户的话原样重复一遍。\n",
+    "utf8",
+  );
+  mkdirSync(join(root, "data", "profiles", "default"), { recursive: true });
+  writeFileSync(
+    join(root, "data", "profiles", "default", "config.json"),
+    `${JSON.stringify({ skills: { enabled: ["echo-guide"] } }, null, 2)}\n`,
+    "utf8",
+  );
 
   const app = await createApp(
     makeTestConfig({
@@ -638,6 +657,8 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       // 形状检查的「元素形状根本没被检查」判据把这一层判成假绿。
       await call("POST", `/profiles/${ids.profileId}/config`, {
         access: { whitelistEnabled: true, allowedIds: ["10001"], adminIds: ["10002"] },
+        // skills.enabled 也是数组：echo-guide 在 setup 里写进了部署级目录，这里启用它。
+        skills: { enabled: ["echo-guide"] },
       });
       return call("GET", `/profiles/${ids.profileId}/config`);
     }
@@ -647,6 +668,8 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       // 必须有内容 —— 空数组会让这一层的形状检查假绿（见 checkShape 的注释）。
       return call("POST", `/profiles/${ids.profileId}/config`, {
         maxToolSteps: 7,
+        // skills 是整体替换语义：把 setup 预置的那条换成一个仍在目录里的 id。
+        skills: { enabled: ["echo-guide"] },
         plugins: { "fixture-broken": { enabled: true } },
         access: {
           whitelistEnabled: true,
@@ -890,6 +913,11 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       return at("/mcp/guard-mcp/enable", { enabled: true });
     case "deleteMcpServer":
       return at("/mcp/guard-mcp");
+    case "listSkills":
+      // echo-guide 在 setup() 里就写进盘了（availableSkills / getSkill 都靠它非空）。
+      return at("/skills");
+    case "getSkill":
+      return at("/skills/echo-guide");
     case "listTools":
       return at("/tools");
     case "listCommands":

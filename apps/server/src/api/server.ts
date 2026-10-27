@@ -7,6 +7,7 @@ import type { WebSocket } from "ws";
 import type { CommandInfo, ServerFrame, ToolInfo } from "@atri/shared";
 import { API_PREFIX, APP_NAME, WS_PATH } from "@atri/shared";
 import type { CommandEntry } from "#core/command/types.ts";
+import type { SkillStore } from "#core/skill/store.ts";
 import { createProviders } from "#core/provider/factory.ts";
 import {
   PROVIDER_PROBE_KINDS,
@@ -36,7 +37,7 @@ import { SESSION_BUSY_MESSAGE, SESSION_BUSY_DELETE_MESSAGE } from "#core/session
 import type { AdapterUpdateInput } from "#adapters/manager.ts";
 import { ADAPTER_TEMPLATES } from "#adapters/templates.ts";
 import { configFilePath } from "#config/file.ts";
-import { normalizeMemoryConfig, readProfileConfig } from "#config/profiles.ts";
+import { normalizeMemoryConfig, normalizeSkillIds, readProfileConfig } from "#config/profiles.ts";
 import type { AppConfig } from "#config/index.ts";
 
 /**
@@ -105,7 +106,7 @@ function viewTool(tool: ToolDefinition, enabled: boolean): ToolInfo {
  * 而不是它自己发出去的那份草稿 —— 而"回读"与"读"若是两份实现，保存就会开始说谎。
  * 每一段仍由各自的存储现算，这里只做搬运（与 `GET /tools` 共用 `viewTool`）。
  */
-function profileConfigView(bundle: ProfileBundle) {
+function profileConfigView(bundle: ProfileBundle, skills: SkillStore) {
   return {
     id: bundle.id,
     name: bundle.name,
@@ -120,6 +121,9 @@ function profileConfigView(bundle: ProfileBundle) {
     // 供应商清单让界面直接画出下拉框（builtin 恒在，插件 provider 现读）。
     memory: normalizeMemoryConfig(readProfileConfig(bundle.path).memory),
     memoryProviders: ["builtin", ...bundle.plugins.memoryProviders().map((p) => p.id)],
+    // 技能启用的生效清单现读档文件；availableSkills 与 GET /skills 同源（现扫）。
+    skills: { enabled: normalizeSkillIds(readProfileConfig(bundle.path).skills) },
+    availableSkills: skills.list(),
     // 内部工具（系统插件提供）不进用户的工具开关；它们由引擎始终声明。
     tools: bundle.tools
       .list()
@@ -254,6 +258,7 @@ export function createHttpServer(deps: HttpDeps) {
     personaUsage,
     scheduler,
     mcp,
+    skills,
   } = deps;
 
   const cookieName = auth.cookieName;
@@ -1251,6 +1256,21 @@ export function createHttpServer(deps: HttpDeps) {
     }
   });
 
+  // --- 技能 ---------------------------------------------------------------
+  //
+  // 只读的部署级资源：增删改就是文件操作（放/删 SKILL.md 目录），没有写端点。
+  // 「这一档启用哪些」在配置档的 skills 段（工作台的「技能」分类）。
+
+  router.get(`${API_PREFIX}/skills`, async (_req, res) => {
+    sendJson(res, 200, { skills: skills.list() });
+  });
+
+  router.get(`${API_PREFIX}/skills/:id`, async (_req, res, params) => {
+    const content = skills.read(params.id);
+    if (content === null) return sendError(res, 404, `没有这个技能: ${params.id}`);
+    sendJson(res, 200, { content });
+  });
+
   // --- 配置档 -------------------------------------------------------------
   //
   // 这一组**不带 `profile` 参数**：它们操作的是「有哪些档」以及「档与全局清单之间的
@@ -1284,7 +1304,7 @@ export function createHttpServer(deps: HttpDeps) {
   router.get(`${API_PREFIX}/profiles/:id/config`, async (_req, res, params) => {
     const bundle = profileById(res, params.id);
     if (!bundle) return;
-    sendJson(res, 200, profileConfigView(bundle));
+    sendJson(res, 200, profileConfigView(bundle, skills));
   });
 
   /**
@@ -1303,7 +1323,7 @@ export function createHttpServer(deps: HttpDeps) {
       // 之后这份档可能已经不在了，那时要说的是「这份档当前不可用」，不是一个 null 字段。
       const bundle = profileById(res, params.id);
       if (!bundle) return;
-      sendJson(res, 200, { config: profileConfigView(bundle), failed });
+      sendJson(res, 200, { config: profileConfigView(bundle, skills), failed });
     } catch (err) {
       fail(res, err);
     }

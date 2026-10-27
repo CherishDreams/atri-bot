@@ -504,6 +504,19 @@ export type ProfileConfig = {
      * 这一档可选的记忆供应商 id 清单：恒含 `builtin`，其余是当前运行中的插件声明的。界面用它画 provider 下拉框。
      */
     memoryProviders: Array<string>;
+    /**
+     * 这一档启用的技能（生效清单，现读档文件）。
+     */
+    skills: {
+        /**
+         * 这一档启用的技能 id。空数组 = 一个都不注入。
+         */
+        enabled: Array<string>;
+    };
+    /**
+     * 部署级当前可用的全部技能（与 GET /skills 同源，现扫）。
+     */
+    availableSkills: Array<SkillInfo>;
 };
 
 /**
@@ -555,6 +568,12 @@ export type ProfileConfigPatch = {
         provider?: string;
         topK?: number;
         autoRecord?: boolean;
+    };
+    /**
+     * 这一档启用的技能 id 清单（整体替换，不是 diff）。含不存在的 id 回 400。
+     */
+    skills?: {
+        enabled: Array<string>;
     };
 };
 
@@ -903,6 +922,28 @@ export type McpServerInfo = {
 };
 
 /**
+ * 一条技能（SKILL.md 文件夹）的目录项。技能是部署级文件资源（data/skills/ 或插件目录捆绑），配置档只存启用了哪些；运行时渐进式披露（报头只有目录，全文用 read_skill 工具取）。
+ */
+export type SkillInfo = {
+    /**
+     * 技能 id：目录名，插件捆绑的带 `插件目录名:` 前缀。
+     */
+    id: string;
+    /**
+     * frontmatter 的 name；缺省用目录名。
+     */
+    name: string;
+    /**
+     * frontmatter 的 description。
+     */
+    description: string;
+    /**
+     * `skills`（部署级目录）或插件目录名。
+     */
+    source: string;
+};
+
+/**
  * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。必须挂在**具体 operation** 上，不要「顺手归位」到 path-item 的 parameters：那里会被同一路径下的每个方法共享，`DELETE /sessions/{id}` 因此在 SDK 里 advertise 两个服务端从不读的参数（handler 压根不看 query），而三道规格守卫谁也看不见这种说谎。
  */
 export type PageLimit = number;
@@ -952,6 +993,11 @@ export type ProfileId = string;
  * MCP 服务器 id
  */
 export type McpId = string;
+
+/**
+ * 技能 id
+ */
+export type SkillId = string;
 
 export type HealthData = {
     body?: never;
@@ -3327,3 +3373,66 @@ export type ProbeMcpServerResponses = {
 };
 
 export type ProbeMcpServerResponse = ProbeMcpServerResponses[keyof ProbeMcpServerResponses];
+
+export type ListSkillsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/skills';
+};
+
+export type ListSkillsErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+};
+
+export type ListSkillsError = ListSkillsErrors[keyof ListSkillsErrors];
+
+export type ListSkillsResponses = {
+    /**
+     * 全部技能（部署级目录 + 插件捆绑），frontmatter 解析失败的跳过。
+     */
+    200: {
+        skills: Array<SkillInfo>;
+    };
+};
+
+export type ListSkillsResponse = ListSkillsResponses[keyof ListSkillsResponses];
+
+export type GetSkillData = {
+    body?: never;
+    path: {
+        /**
+         * 技能 id
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/skills/{id}';
+};
+
+export type GetSkillErrors = {
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 资源不存在
+     */
+    404: ApiError;
+};
+
+export type GetSkillError = GetSkillErrors[keyof GetSkillErrors];
+
+export type GetSkillResponses = {
+    /**
+     * SKILL.md 原文（frontmatter 含在内）。
+     */
+    200: {
+        content: string;
+    };
+};
+
+export type GetSkillResponse = GetSkillResponses[keyof GetSkillResponses];

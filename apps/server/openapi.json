@@ -67,6 +67,10 @@
     {
       "name": "mcp",
       "description": "MCP 服务器（部署级）"
+    },
+    {
+      "name": "skills",
+      "description": "技能（部署级）"
     }
   ],
   "paths": {
@@ -2668,6 +2672,76 @@
           }
         }
       }
+    },
+    "/skills": {
+      "get": {
+        "operationId": "listSkills",
+        "summary": "列出可用的技能（部署级，现扫文件系统）",
+        "tags": ["skills"],
+        "responses": {
+          "200": {
+            "description": "全部技能（部署级目录 + 插件捆绑），frontmatter 解析失败的跳过。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["skills"],
+                  "properties": {
+                    "skills": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SkillInfo"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        }
+      }
+    },
+    "/skills/{id}": {
+      "get": {
+        "operationId": "getSkill",
+        "summary": "读一条技能的 SKILL.md 全文",
+        "tags": ["skills"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SkillId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SKILL.md 原文（frontmatter 含在内）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["content"],
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2764,6 +2838,15 @@
           "type": "string"
         },
         "description": "MCP 服务器 id"
+      },
+      "SkillId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "技能 id"
       }
     },
     "responses": {
@@ -3615,7 +3698,9 @@
           "access",
           "wakePrefix",
           "memory",
-          "memoryProviders"
+          "memoryProviders",
+          "skills",
+          "availableSkills"
         ],
         "properties": {
           "id": {
@@ -3668,6 +3753,27 @@
               "type": "string"
             },
             "description": "这一档可选的记忆供应商 id 清单：恒含 `builtin`，其余是当前运行中的插件声明的。界面用它画 provider 下拉框。"
+          },
+          "skills": {
+            "type": "object",
+            "required": ["enabled"],
+            "properties": {
+              "enabled": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "这一档启用的技能 id。空数组 = 一个都不注入。"
+              }
+            },
+            "description": "这一档启用的技能（生效清单，现读档文件）。"
+          },
+          "availableSkills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillInfo"
+            },
+            "description": "部署级当前可用的全部技能（与 GET /skills 同源，现扫）。"
           }
         }
       },
@@ -3739,6 +3845,19 @@
               }
             },
             "additionalProperties": false
+          },
+          "skills": {
+            "type": "object",
+            "required": ["enabled"],
+            "properties": {
+              "enabled": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "这一档启用的技能 id 清单（整体替换，不是 diff）。含不存在的 id 回 400。"
           }
         }
       },
@@ -4339,6 +4458,29 @@
               }
             },
             "description": "这台服务器当前提供的工具（连接成功后非空）。"
+          }
+        }
+      },
+      "SkillInfo": {
+        "type": "object",
+        "description": "一条技能（SKILL.md 文件夹）的目录项。技能是部署级文件资源（data/skills/ 或插件目录捆绑），配置档只存启用了哪些；运行时渐进式披露（报头只有目录，全文用 read_skill 工具取）。",
+        "required": ["id", "name", "description", "source"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "技能 id：目录名，插件捆绑的带 `插件目录名:` 前缀。"
+          },
+          "name": {
+            "type": "string",
+            "description": "frontmatter 的 name；缺省用目录名。"
+          },
+          "description": {
+            "type": "string",
+            "description": "frontmatter 的 description。"
+          },
+          "source": {
+            "type": "string",
+            "description": "`skills`（部署级目录）或插件目录名。"
           }
         }
       }

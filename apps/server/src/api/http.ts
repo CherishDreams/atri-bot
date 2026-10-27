@@ -18,6 +18,7 @@ import type { AdapterManager } from "#adapters/manager.ts";
 import type { PersonaStore } from "#core/persona/store.ts";
 import type { CronScheduler } from "#core/cron/manager.ts";
 import type { McpManager } from "#core/mcp/manager.ts";
+import type { SkillStore } from "#core/skill/store.ts";
 import type { PluginManager } from "#plugins/manager.ts";
 
 /**
@@ -221,6 +222,8 @@ export interface HttpDeps {
   scheduler: CronScheduler;
   /** MCP 服务器管理器：部署级的连接与工具桥接，`/mcp` 那组端点的数据源。 */
   mcp: McpManager;
+  /** 技能目录（部署级文件资源的现扫视图），`/skills` 与档技能清单的数据源。 */
+  skills: SkillStore;
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {

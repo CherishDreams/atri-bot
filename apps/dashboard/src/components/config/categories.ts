@@ -54,6 +54,12 @@ export const CATEGORIES: Category[] = [
     icon: "memory",
   },
   {
+    key: "skills",
+    label: "技能",
+    hint: "这一档注入模型的任务手册。技能本体在「技能」页维护，这里只勾选启用哪些。",
+    icon: "memory",
+  },
+  {
     key: "access",
     label: "访问控制",
     hint: "这一档的白名单与管理员名单；绑定到这一档的接入平台共用它。",

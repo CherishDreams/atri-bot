@@ -31,6 +31,8 @@ import {
   setMcpServerEnabled as setMcpServerEnabledOp,
   probeMcpServer as probeMcpServerOp,
   deleteMcpServer as deleteMcpServerOp,
+  listSkills as listSkillsOp,
+  getSkill as getSkillOp,
   listAdapters as listAdaptersOp,
   listAdapterTemplates as listAdapterTemplatesOp,
   listCronJobs as listCronJobsOp,
@@ -408,6 +410,16 @@ export async function probeMcpServer(id: string) {
 
 export async function deleteMcpServer(id: string) {
   return body(await deleteMcpServerOp({ path: { id } }));
+}
+
+// --- 技能（部署级） ------------------------------------------------------------
+
+export async function listSkills() {
+  return body(await listSkillsOp());
+}
+
+export async function getSkill(id: string) {
+  return body(await getSkillOp({ path: { id } }));
 }
 
 export async function createProvider(input: ProviderInput) {

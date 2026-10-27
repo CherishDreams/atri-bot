@@ -155,9 +155,13 @@ test("启用工具后：一次对话真的跑完「调用 → 执行 → 回喂 
   // 上游确实被打了两次，且第一次带着工具声明
   assert.equal(upstream.seen.length, 2, "应当问了两次：要求调用 + 拿到结果后再答");
   const first = upstream.seen[0]?.body;
+  // read_skill 是 internal 工具（技能目录契约的另一半），恒声明排在内置清单之后。
   assert.deepEqual(
     first?.tools?.map((tool) => [tool.type, tool.function?.name]),
-    [["function", "current_time"]],
+    [
+      ["function", "current_time"],
+      ["function", "read_skill"],
+    ],
   );
   const second = upstream.seen[1]?.body;
   const assistantTurn = second?.messages?.find((m) => m.role === "assistant");
@@ -206,8 +210,14 @@ test("工具关闭时：不发 tools 键，模型硬要调用也不执行", asyn
 
   const frames = await readSse(origin, cookie, sessionId);
 
-  // 第一次请求必须不带 tools 键（默认关闭 ⇒ 报文与今天逐字节相同）。
-  assert.equal(Object.hasOwn(upstream.seen[0]?.body ?? {}, "tools"), false);
+  // 第一次请求的 tools 里只应有 internal 工具（read_skill 恒声明），
+  // 用户开关里的 current_time 必须缺席 —— 「关掉的开关被模型远程打开」就是从这里防的。
+  assert.deepEqual(
+    (upstream.seen[0]?.body.tools as { function?: { name: string } }[] | undefined)?.map(
+      (tool) => tool.function?.name,
+    ),
+    ["read_skill"],
+  );
   // 桩上游不管有没有声明工具都回一个 tool_calls，这正是「模型硬要调用」的那一种。
   assert.equal(upstream.seen.length, 2, "拒绝执行也要把结果回喂，所以还会再问一次");
   const toolTurn = upstream.seen[1]?.body.messages?.find((m) => m.role === "tool");
