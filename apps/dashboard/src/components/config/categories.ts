@@ -60,6 +60,12 @@ export const CATEGORIES: Category[] = [
     icon: "memory",
   },
   {
+    key: "humanizer",
+    label: "拟人化",
+    hint: "怎么收消息、怎么发出去：防抖、智能分段、去机器味、时间感知与作息。",
+    icon: "persona",
+  },
+  {
     key: "access",
     label: "访问控制",
     hint: "这一档的白名单与管理员名单；绑定到这一档的接入平台共用它。",

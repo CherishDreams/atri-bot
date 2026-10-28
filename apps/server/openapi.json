@@ -3700,7 +3700,8 @@
           "memory",
           "memoryProviders",
           "skills",
-          "availableSkills"
+          "availableSkills",
+          "humanizer"
         ],
         "properties": {
           "id": {
@@ -3774,6 +3775,9 @@
               "$ref": "#/components/schemas/SkillInfo"
             },
             "description": "部署级当前可用的全部技能（与 GET /skills 同源，现扫）。"
+          },
+          "humanizer": {
+            "$ref": "#/components/schemas/HumanizerConfig"
           }
         }
       },
@@ -3858,6 +3862,59 @@
               }
             },
             "description": "这一档启用的技能 id 清单（整体替换，不是 diff）。含不存在的 id 回 400。"
+          },
+          "humanizer": {
+            "type": "object",
+            "description": "拟人化设置的**补丁**（只覆盖给出的键）。debounceSeconds 0–300 整数、napMinutes 0–240、时间为 HH:MM 或空串；越界回 400。",
+            "properties": {
+              "debounceSeconds": {
+                "type": "integer"
+              },
+              "smartChunk": {
+                "type": "boolean"
+              },
+              "stripMarkdown": {
+                "type": "boolean"
+              },
+              "timeAwareness": {
+                "type": "boolean"
+              },
+              "schedule": {
+                "type": "object",
+                "properties": {
+                  "sleepStart": {
+                    "type": "string"
+                  },
+                  "sleepEnd": {
+                    "type": "string"
+                  },
+                  "napMinutes": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "proactive": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "idleMinutes": {
+                    "type": "number"
+                  },
+                  "maxPerDay": {
+                    "type": "integer"
+                  },
+                  "quietStart": {
+                    "type": "string"
+                  },
+                  "quietEnd": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "additionalProperties": false
           }
         }
       },
@@ -4481,6 +4538,80 @@
           "source": {
             "type": "string",
             "description": "`skills`（部署级目录）或插件目录名。"
+          }
+        }
+      },
+      "HumanizerConfig": {
+        "type": "object",
+        "description": "一份配置档的拟人化设置（生效值）。只调节「怎么收消息、怎么发出去」，不改变回复内容的生产方式。",
+        "required": [
+          "debounceSeconds",
+          "smartChunk",
+          "stripMarkdown",
+          "timeAwareness",
+          "schedule",
+          "proactive"
+        ],
+        "properties": {
+          "debounceSeconds": {
+            "type": "integer",
+            "description": "连续输入防抖的沉默窗口（秒），0 = 关闭。窗口内同会话多条消息合并成一轮再回复。"
+          },
+          "smartChunk": {
+            "type": "boolean",
+            "description": "发送到平台前按句子智能分段（多条短消息更像人）。"
+          },
+          "stripMarkdown": {
+            "type": "boolean",
+            "description": "发送前剥掉 markdown 标记（只影响平台路径，控制台不受影响）。"
+          },
+          "timeAwareness": {
+            "type": "boolean",
+            "description": "每轮注入当前时间/星期/作息状态。"
+          },
+          "schedule": {
+            "type": "object",
+            "required": ["sleepStart", "sleepEnd", "napMinutes"],
+            "properties": {
+              "sleepStart": {
+                "type": "string",
+                "description": "入睡时间 HH:MM；空串 = 不睡觉。"
+              },
+              "sleepEnd": {
+                "type": "string",
+                "description": "起床时间 HH:MM。"
+              },
+              "napMinutes": {
+                "type": "integer",
+                "description": "午休分钟数（从 13:00 起）；0 = 不午休。"
+              }
+            }
+          },
+          "proactive": {
+            "type": "object",
+            "required": ["enabled", "idleMinutes", "maxPerDay", "quietStart", "quietEnd"],
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "是否启用主动消息。默认关。"
+              },
+              "idleMinutes": {
+                "type": "integer",
+                "description": "私聊空闲多久后可以主动问候（分钟）。"
+              },
+              "maxPerDay": {
+                "type": "integer",
+                "description": "每天最多主动发几条。"
+              },
+              "quietStart": {
+                "type": "string",
+                "description": "免打扰时段起点 HH:MM。"
+              },
+              "quietEnd": {
+                "type": "string",
+                "description": "免打扰时段终点 HH:MM。"
+              }
+            }
           }
         }
       }

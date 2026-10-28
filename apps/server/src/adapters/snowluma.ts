@@ -91,6 +91,8 @@ export class SnowLumaAdapter extends OneBot11Adapter {
   async stop(): Promise<void> {
     this.#running = false;
     this.#stopping = true;
+    // 先把防抖窗口里攒着的消息发出去，再关连接（否则用户最后几句话会静默消失）。
+    await this.flushIntake();
     if (this.#reconnectTimer !== null) {
       clearTimeout(this.#reconnectTimer);
       this.#reconnectTimer = null;

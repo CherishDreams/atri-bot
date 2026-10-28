@@ -37,7 +37,12 @@ import { SESSION_BUSY_MESSAGE, SESSION_BUSY_DELETE_MESSAGE } from "#core/session
 import type { AdapterUpdateInput } from "#adapters/manager.ts";
 import { ADAPTER_TEMPLATES } from "#adapters/templates.ts";
 import { configFilePath } from "#config/file.ts";
-import { normalizeMemoryConfig, normalizeSkillIds, readProfileConfig } from "#config/profiles.ts";
+import {
+  normalizeHumanizerConfig,
+  normalizeMemoryConfig,
+  normalizeSkillIds,
+  readProfileConfig,
+} from "#config/profiles.ts";
 import type { AppConfig } from "#config/index.ts";
 
 /**
@@ -124,6 +129,7 @@ function profileConfigView(bundle: ProfileBundle, skills: SkillStore) {
     // 技能启用的生效清单现读档文件；availableSkills 与 GET /skills 同源（现扫）。
     skills: { enabled: normalizeSkillIds(readProfileConfig(bundle.path).skills) },
     availableSkills: skills.list(),
+    humanizer: normalizeHumanizerConfig(readProfileConfig(bundle.path).humanizer),
     // 内部工具（系统插件提供）不进用户的工具开关；它们由引擎始终声明。
     tools: bundle.tools
       .list()

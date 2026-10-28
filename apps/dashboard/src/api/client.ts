@@ -547,6 +547,7 @@ export function connect(
 
 export type {
   AdapterAccessControl,
+  HumanizerConfig,
   AdapterActionResult,
   AdapterDetail,
   AdapterInfo,

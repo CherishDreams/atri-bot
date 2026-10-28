@@ -23,6 +23,7 @@ import { DEFAULT_COMMAND_PREFIX } from "./core/command/types.ts";
 import { BuiltinMemoryProvider } from "./core/memory/builtin.ts";
 import { MemoryService } from "./core/memory/service.ts";
 import { createMemoryTools } from "./core/memory/tools.ts";
+import { awarenessBlock } from "./core/companion/awareness.ts";
 import { McpManager } from "./core/mcp/manager.ts";
 import { McpServerStore } from "./core/mcp/store.ts";
 import { SkillStore } from "./core/skill/store.ts";
@@ -63,8 +64,10 @@ import {
   listProfileDirs,
   migrateProvidersToGlobal,
   normalizeAccess,
+  normalizeHumanizerConfig,
   normalizeMemoryConfig,
   normalizeSkillIds,
+  validateHumanizerPatch,
   validateSkillsPatch,
   profileConfigPath,
   profileDir,
@@ -106,6 +109,7 @@ const PROFILE_PATCH_KEYS = [
   "wakePrefix",
   "memory",
   "skills",
+  "humanizer",
 ] as const;
 
 /**
@@ -569,6 +573,13 @@ export async function createApp(config: AppConfig) {
         // 技能目录：启用的 id 现读档文件，目录现扫技能库（装了新技能下一轮就在）。
         async () =>
           skillDirectoryBlock(normalizeSkillIds(readProfileConfig(path).skills), skills.list()),
+        // 时间/作息感知：拟人化的第一段背景知识（深夜说早安是最刺眼的穿帮）。
+        async (turn) =>
+          awarenessBlock(turn, {
+            config: normalizeHumanizerConfig(readProfileConfig(path).humanizer),
+            now: () => new Date(),
+            lastActivityAt: (sessionId) => sessions.get(sessionId)?.updatedAt ?? null,
+          }),
       ],
       onTurnEnd: (turn, reply) => memory.recordInteraction(turn, reply.content),
     });
@@ -824,6 +835,9 @@ export async function createApp(config: AppConfig) {
       let memoryPatch: ReturnType<typeof validateMemoryPatch> | undefined;
       if (body.memory !== undefined) memoryPatch = validateMemoryPatch(body.memory);
 
+      let humanizerPatch: ReturnType<typeof validateHumanizerPatch> | undefined;
+      if (body.humanizer !== undefined) humanizerPatch = validateHumanizerPatch(body.humanizer);
+
       let nextSkills: ReturnType<typeof validateSkillsPatch> | undefined;
       if (body.skills !== undefined) {
         nextSkills = validateSkillsPatch(body.skills);
@@ -846,6 +860,7 @@ export async function createApp(config: AppConfig) {
         nextAccess !== undefined ||
         nextWakePrefix !== undefined ||
         memoryPatch !== undefined ||
+        humanizerPatch !== undefined ||
         nextSkills !== undefined ||
         tools.length > 0
       ) {
@@ -863,6 +878,15 @@ export async function createApp(config: AppConfig) {
           if (nextAccess !== undefined) file.access = nextAccess;
           if (nextWakePrefix !== undefined) file.wakePrefix = nextWakePrefix;
           if (nextSkills !== undefined) file.skills = nextSkills;
+          if (humanizerPatch !== undefined) {
+            // humanizer 是补丁合并（与 memory 同一条），文件里手写的其它键原样保留。
+            file.humanizer = {
+              ...(typeof file.humanizer === "object" && file.humanizer !== null
+                ? file.humanizer
+                : {}),
+              ...humanizerPatch,
+            };
+          }
           if (memoryPatch !== undefined) {
             // memory 段是补丁合并：只覆盖给出的键，文件里手写的其它键原样保留
             //（键是开放类型，读时逐键兜默认，所以部分写入永远合法）。
@@ -1104,6 +1128,11 @@ export async function createApp(config: AppConfig) {
       // 唤醒门槛同一条现读语义：只对群聊生效；档不可用时退缺省（门槛照设，
       // 与 resolveAccess 退「全部放行」不同 —— 挡消息宁可错杀，放消息不可错放）。
       resolveWakePrefix: () => profiles.get(entry.profile)?.wakePrefix ?? DEFAULT_COMMAND_PREFIX,
+      // 拟人化设置（防抖/分段/去机器味）同一条现读：保存后下一条消息生效。
+      resolveHumanizer: () => {
+        const configPath = profileConfigPath(profilesDir, entry.profile);
+        return normalizeHumanizerConfig(readProfileConfig(configPath).humanizer);
+      },
     };
     switch (entry.type) {
       case ADAPTER_TYPES.napcat:

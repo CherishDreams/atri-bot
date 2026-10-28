@@ -368,6 +368,50 @@ export interface SkillInfo {
 }
 
 /**
+ * 一份配置档的拟人化设置（生效值）。
+ *
+ * 这些是**被动**的对话行为调节：不改变回复内容的生产方式（那仍是引擎的事），
+ * 只调节「怎么收消息、怎么发出去」。主动消息（proactive）是另一段，见下。
+ */
+export interface HumanizerConfig {
+  /**
+   * 连续输入防抖的沉默窗口（秒）。窗口内同会话的多条消息合并成一轮再回复；
+   * 0 = 关闭。默认 0（不改变既有行为）。
+   */
+  debounceSeconds: number;
+  /** 发送到平台前按句子智能分段（多条短消息更像人）。默认 true。 */
+  smartChunk: boolean;
+  /** 发送到平台前剥掉 markdown 标记（**、#、` 等，IM 里它们看着像机器）。默认 false。 */
+  stripMarkdown: boolean;
+  /** 每轮注入当前时间/星期/日程状态。默认 true。 */
+  timeAwareness: boolean;
+  /** 作息日程：时间感知与主动消息都按它判断此刻的状态。 */
+  schedule: {
+    /** 入睡时间（HH:MM，服务器本地时区）。空串 = 不睡觉。 */
+    sleepStart: string;
+    /** 起床时间（HH:MM）。 */
+    sleepEnd: string;
+    /** 午休分钟数（从 13:00 开始）；0 = 不午休。 */
+    napMinutes: number;
+  };
+  /**
+   * 主动消息（拟人化的另一半，见 core/companion/proactive.ts）：空闲/日程触发，
+   * 经免打扰时段、每日上限等闸门后才发送。默认整体关闭。
+   */
+  proactive: {
+    enabled: boolean;
+    /** 私聊空闲多久后可以主动问候（分钟）。 */
+    idleMinutes: number;
+    /** 每天最多主动发几条（每份档全局计数）。 */
+    maxPerDay: number;
+    /** 免打扰时段起点（HH:MM）——此段内不发任何主动消息。 */
+    quietStart: string;
+    /** 免打扰时段终点（HH:MM）。 */
+    quietEnd: string;
+  };
+}
+
+/**
  * 一份配置档的记忆设置（生效值，缺省已由服务端补齐）。
  *
  * 记忆是「可替换组件」的样板：`provider` 指向 `builtin`（内置实现）或某个插件
@@ -430,6 +474,8 @@ export interface ProfileConfig {
   skills: { enabled: string[] };
   /** 部署级当前可用的全部技能（含插件捆绑的），与 `GET /skills` 同源。 */
   availableSkills: SkillInfo[];
+  /** 这一档的拟人化设置（生效值）。 */
+  humanizer: HumanizerConfig;
   tools: ToolInfo[];
   plugins: PluginInfo[];
   /**

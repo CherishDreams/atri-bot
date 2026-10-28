@@ -1,6 +1,7 @@
-import type { AdapterAccessControl, MessageImage } from "@atri/shared";
+import type { AdapterAccessControl, HumanizerConfig, MessageImage } from "@atri/shared";
 import { ApiError, errorMessage, errorStack } from "#core/errors.ts";
 import { DEFAULT_COMMAND_PREFIX } from "#core/command/types.ts";
+import { smartChunk, stripMarkdown } from "#core/companion/chunk.ts";
 import type { Logger } from "#core/logger.ts";
 import type { AdapterTarget } from "./manager.ts";
 
@@ -69,11 +70,32 @@ export interface MessageAdapterDeps {
    * 下一条消息生效，不必重启长连接）。缺省为 `/`。只对群聊生效；空串关闭门槛。
    */
   resolveWakePrefix?: () => string;
+  /**
+   * 拟人化设置现读（防抖窗口 / 智能分段 / 去机器味），**属于绑定的配置档**。
+   * 缺省为全默认值（防抖关闭、智能分段开）。
+   */
+  resolveHumanizer?: () => HumanizerConfig;
   /** 单条平台消息的最大长度，默认 1500。 */
   maxMessageLength?: number;
 }
 
 export const DEFAULT_MAX_MESSAGE_LENGTH = 1500;
+
+/** 拟人化设置的缺省值：与 `config/profiles.ts` 的 `DEFAULT_HUMANIZER_CONFIG` 同值。 */
+const DEFAULT_HUMANIZER: HumanizerConfig = {
+  debounceSeconds: 0,
+  smartChunk: true,
+  stripMarkdown: false,
+  timeAwareness: true,
+  schedule: { sleepStart: "23:30", sleepEnd: "07:30", napMinutes: 0 },
+  proactive: {
+    enabled: false,
+    idleMinutes: 180,
+    maxPerDay: 3,
+    quietStart: "23:30",
+    quietEnd: "08:00",
+  },
+};
 
 /** 日志里的一行字段：换行收成空格，避免平台侧的昵称伪造出新的日志行。 */
 function oneLine(value: string, max = 120): string {
@@ -165,8 +187,23 @@ export abstract class MessageAdapter {
   #conversations: ConversationSessions;
   #resolveAccess: () => AdapterAccessControl;
   #resolveWakePrefix: () => string;
+  #resolveHumanizer: () => HumanizerConfig;
   #maxMessageLength: number;
   #queues = new Map<string, Promise<void>>();
+  /**
+   * 防抖缓冲：`会话键 -> { timer, messages, done }`。窗口内同会话的消息攒起来，
+   * 沉默到点合并成一轮再进队列。`done` 让后到的消息 await 与首条相同的 Promise
+   *（receive 的调用方约定是「处理完成后 resolve」）。
+   */
+  #debouncing = new Map<
+    string,
+    {
+      timer: NodeJS.Timeout;
+      messages: InboundMessage[];
+      resolveDone: () => void;
+      done: Promise<void>;
+    }
+  >();
 
   constructor({
     id,
@@ -176,6 +213,7 @@ export abstract class MessageAdapter {
     conversations,
     resolveAccess = () => ({ whitelistEnabled: false, allowedIds: [], adminIds: [] }),
     resolveWakePrefix = () => DEFAULT_COMMAND_PREFIX,
+    resolveHumanizer,
     maxMessageLength = DEFAULT_MAX_MESSAGE_LENGTH,
   }: MessageAdapterDeps) {
     this.id = id;
@@ -185,6 +223,7 @@ export abstract class MessageAdapter {
     this.#conversations = conversations;
     this.#resolveAccess = resolveAccess;
     this.#resolveWakePrefix = resolveWakePrefix;
+    this.#resolveHumanizer = resolveHumanizer ?? (() => DEFAULT_HUMANIZER);
     this.#maxMessageLength = maxMessageLength;
   }
 
@@ -218,6 +257,14 @@ export abstract class MessageAdapter {
         return Promise.resolve();
       }
     }
+    // 连续输入防抖（拟人化）：沉默窗口内同会话的多条消息攒起来，到点合并成一轮。
+    // 「对方还在打字」时逐条回复既吵又不合常理 —— companion 的同一条观察。
+    // 窗口为 0 走原有直通路径，行为不变。防抖在日志之后：被挡下的消息不占窗口。
+    const debounceSeconds = this.#resolveHumanizer().debounceSeconds;
+    if (debounceSeconds > 0 && Number.isFinite(debounceSeconds)) {
+      return this.#debounce(message, debounceSeconds * 1000);
+    }
+
     const sender = oneLine(message.sender.name, 60) || message.sender.id;
     const messageId =
       message.messageId === undefined ? "" : ` message_id=${oneLine(message.messageId, 40)}`;
@@ -226,8 +273,11 @@ export abstract class MessageAdapter {
       `${label} sender=${message.sender.id}(${sender})${messageId}` +
         `${hasImages ? ` images=${message.images?.length ?? 0}` : ""}`,
     );
+    return this.#enqueue(message);
+  }
 
-    // 队列键不含 profile：一个适配器实例固定绑定一份配置档。
+  /** 按会话排队、逐条处理。队列键不含 profile：一个适配器实例固定绑定一份配置档。 */
+  #enqueue(message: InboundMessage): Promise<void> {
     const key = `${message.conversation.kind}:${message.conversation.id}`;
     const previous = this.#queues.get(key) ?? Promise.resolve();
     const task = previous.then(() => this.#process(message));
@@ -240,6 +290,88 @@ export abstract class MessageAdapter {
       if (this.#queues.get(key) === settled) this.#queues.delete(key);
     });
     return settled;
+  }
+
+  /**
+   * 防抖缓冲。同一会话的第一条消息起一个定时器并返回它的 Promise；窗口内的
+   * 后续消息只追加、共享同一个 Promise（调用方「处理完才 resolve」的约定不变）。
+   * 到点把攒下的消息**合并成一轮**走队列。合并时窗口内的重复日志不再逐条打：
+   * 第一条已经打过，合并只会说「攒了几条」。
+   */
+  #debounce(message: InboundMessage, windowMs: number): Promise<void> {
+    const key = `${message.conversation.kind}:${message.conversation.id}`;
+    const pending = this.#debouncing.get(key);
+    if (pending) {
+      pending.messages.push(message);
+      return pending.done;
+    }
+    let resolveDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    const entry: {
+      timer: NodeJS.Timeout;
+      messages: InboundMessage[];
+      resolveDone: () => void;
+      done: Promise<void>;
+    } = {
+      timer: setTimeout(() => {
+        this.#debouncing.delete(key);
+        entry.resolveDone();
+        const batch = entry.messages;
+        const label = eventLabel(this.id, batch[0]!.conversation);
+        if (batch.length > 1) {
+          this.logger.debug(`${label} 防抖窗口攒了 ${batch.length} 条，合并处理`);
+        }
+        const merged = batch.length === 1 ? batch[0]! : this.#mergeBatch(batch);
+        void this.#enqueue(merged);
+      }, windowMs),
+      messages: [message],
+      resolveDone,
+      done,
+    };
+    this.#debouncing.set(key, entry);
+    return done;
+  }
+
+  /** 把窗口内攒下的多条消息并成一条：正文按到达顺序换行拼接，图片合并（上限 4 张）。 */
+  #mergeBatch(batch: InboundMessage[]): InboundMessage {
+    const first = batch[0]!;
+    const last = batch[batch.length - 1]!;
+    const text = batch
+      .map((m) => m.text.trim())
+      .filter((t) => t !== "")
+      .join("\n");
+    const images = batch.flatMap((m) => m.images ?? []).slice(0, 4);
+    return {
+      sender: last.sender,
+      conversation: first.conversation,
+      text,
+      ...(images.length > 0 ? { images } : {}),
+      ...(last.messageId === undefined ? {} : { messageId: last.messageId }),
+      sessionTitle: first.sessionTitle,
+    };
+  }
+
+  /**
+   * 停止前把防抖窗口里还攒着的消息**立刻**发出。具体适配器的 `stop()` 应在关
+   * 连接之前调用它 —— 否则用户最后几句话会静默消失，比处理失败更糟。
+   * 每一批的等待者在这里放行（到点回调不会再跑，timer 已清）。
+   */
+  protected async flushIntake(): Promise<void> {
+    const pending = [...this.#debouncing.values()];
+    this.#debouncing.clear();
+    for (const entry of pending) {
+      clearTimeout(entry.timer);
+      const batch = entry.messages;
+      const merged = batch.length === 1 ? batch[0]! : this.#mergeBatch(batch);
+      const settle = this.#enqueue(merged).then(
+        () => undefined,
+        () => undefined,
+      );
+      entry.resolveDone();
+      await settle;
+    }
   }
 
   /**
@@ -279,9 +411,14 @@ export abstract class MessageAdapter {
         source: "platform",
         ...(message.images && message.images.length > 0 ? { images: message.images } : {}),
       });
-      const text = reply.content.trim();
-      if (text === "") return;
-      const chunks = chunkText(text, this.#maxMessageLength);
+      const replyText = reply.content.trim();
+      if (replyText === "") return;
+      // 发送侧拟人化（只影响平台，控制台不受影响）：先剥标记、再智能分段。
+      const humanizer = this.#resolveHumanizer();
+      const text = humanizer.stripMarkdown ? stripMarkdown(replyText) : replyText;
+      const chunks = humanizer.smartChunk
+        ? smartChunk(text, this.#maxMessageLength)
+        : chunkText(text, this.#maxMessageLength);
       for (const chunk of chunks) {
         await this.sendText(message.conversation, chunk);
         this.logger.info(`发送${label}:${oneLine(chunk, 1000)}`);

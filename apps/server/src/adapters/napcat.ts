@@ -133,6 +133,8 @@ export class NapCatAdapter extends OneBot11Adapter {
   }
 
   async stop(): Promise<void> {
+    // 先把防抖窗口里攒着的消息发出去，再关连接（否则用户最后几句话会静默消失）。
+    await this.flushIntake();
     this.#running = false;
     this.#stopping = true;
     this.resetPending("NapCat 适配器已停止");

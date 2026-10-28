@@ -517,6 +517,7 @@ export type ProfileConfig = {
      * 部署级当前可用的全部技能（与 GET /skills 同源，现扫）。
      */
     availableSkills: Array<SkillInfo>;
+    humanizer: HumanizerConfig;
 };
 
 /**
@@ -574,6 +575,27 @@ export type ProfileConfigPatch = {
      */
     skills?: {
         enabled: Array<string>;
+    };
+    /**
+     * 拟人化设置的**补丁**（只覆盖给出的键）。debounceSeconds 0–300 整数、napMinutes 0–240、时间为 HH:MM 或空串；越界回 400。
+     */
+    humanizer?: {
+        debounceSeconds?: number;
+        smartChunk?: boolean;
+        stripMarkdown?: boolean;
+        timeAwareness?: boolean;
+        schedule?: {
+            sleepStart?: string;
+            sleepEnd?: string;
+            napMinutes?: number;
+        };
+        proactive?: {
+            enabled?: boolean;
+            idleMinutes?: number;
+            maxPerDay?: number;
+            quietStart?: string;
+            quietEnd?: string;
+        };
     };
 };
 
@@ -941,6 +963,64 @@ export type SkillInfo = {
      * `skills`（部署级目录）或插件目录名。
      */
     source: string;
+};
+
+/**
+ * 一份配置档的拟人化设置（生效值）。只调节「怎么收消息、怎么发出去」，不改变回复内容的生产方式。
+ */
+export type HumanizerConfig = {
+    /**
+     * 连续输入防抖的沉默窗口（秒），0 = 关闭。窗口内同会话多条消息合并成一轮再回复。
+     */
+    debounceSeconds: number;
+    /**
+     * 发送到平台前按句子智能分段（多条短消息更像人）。
+     */
+    smartChunk: boolean;
+    /**
+     * 发送前剥掉 markdown 标记（只影响平台路径，控制台不受影响）。
+     */
+    stripMarkdown: boolean;
+    /**
+     * 每轮注入当前时间/星期/作息状态。
+     */
+    timeAwareness: boolean;
+    schedule: {
+        /**
+         * 入睡时间 HH:MM；空串 = 不睡觉。
+         */
+        sleepStart: string;
+        /**
+         * 起床时间 HH:MM。
+         */
+        sleepEnd: string;
+        /**
+         * 午休分钟数（从 13:00 起）；0 = 不午休。
+         */
+        napMinutes: number;
+    };
+    proactive: {
+        /**
+         * 是否启用主动消息。默认关。
+         */
+        enabled: boolean;
+        /**
+         * 私聊空闲多久后可以主动问候（分钟）。
+         */
+        idleMinutes: number;
+        /**
+         * 每天最多主动发几条。
+         */
+        maxPerDay: number;
+        /**
+         * 免打扰时段起点 HH:MM。
+         */
+        quietStart: string;
+        /**
+         * 免打扰时段终点 HH:MM。
+         */
+        quietEnd: string;
+    };
 };
 
 /**

@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import type {
   AdapterAccessControl,
+  HumanizerConfig,
   MemoryConfig,
   ProfileConfig,
   ProfileConfigPatch,
@@ -41,6 +42,10 @@ interface Draft {
   memory: MemoryConfig;
   /** 启用的技能 id 清单。服务端是整体替换语义。 */
   skills: { enabled: string[] };
+  /** 拟人化设置（生效值）。服务端是补丁语义。 */
+  humanizer: HumanizerConfig;
+  /** 群聊唤醒前缀（空串关闭门槛）。 */
+  wakePrefix: string;
 }
 
 function draftOf(config: ProfileConfig): Draft {
@@ -56,6 +61,8 @@ function draftOf(config: ProfileConfig): Draft {
     },
     memory: { ...config.memory },
     skills: { enabled: [...config.skills.enabled] },
+    humanizer: JSON.parse(JSON.stringify(config.humanizer)) as HumanizerConfig,
+    wakePrefix: config.wakePrefix,
   };
 }
 
@@ -93,6 +100,8 @@ function copyDraft(draft: Draft): Draft {
     },
     memory: { ...draft.memory },
     skills: { enabled: [...draft.skills.enabled] },
+    humanizer: JSON.parse(JSON.stringify(draft.humanizer)) as HumanizerConfig,
+    wakePrefix: draft.wakePrefix,
   };
 }
 
@@ -146,6 +155,20 @@ function patchOf(original: Draft, draft: Draft): ProfileConfigPatch {
   ) {
     patch.skills = { enabled: [...draft.skills.enabled] };
   }
+  // humanizer 与 wakePrefix 是补丁：只发改过的键。
+  if (draft.wakePrefix !== original.wakePrefix) patch.wakePrefix = draft.wakePrefix;
+  const h0 = original.humanizer;
+  const h1 = draft.humanizer;
+  const hPatch: ProfileConfigPatch["humanizer"] = {};
+  if (h0.debounceSeconds !== h1.debounceSeconds) hPatch.debounceSeconds = h1.debounceSeconds;
+  if (h0.smartChunk !== h1.smartChunk) hPatch.smartChunk = h1.smartChunk;
+  if (h0.stripMarkdown !== h1.stripMarkdown) hPatch.stripMarkdown = h1.stripMarkdown;
+  if (h0.timeAwareness !== h1.timeAwareness) hPatch.timeAwareness = h1.timeAwareness;
+  if (JSON.stringify(h0.schedule) !== JSON.stringify(h1.schedule))
+    hPatch.schedule = { ...h1.schedule };
+  if (JSON.stringify(h0.proactive) !== JSON.stringify(h1.proactive))
+    hPatch.proactive = { ...h1.proactive };
+  if (Object.keys(hPatch).length > 0) patch.humanizer = hPatch;
   return patch;
 }
 
@@ -281,6 +304,32 @@ export const useProfileConfigStore = defineStore("profileConfig", {
       const next = this.draft.skills.enabled.filter((existing) => existing !== id);
       if (enabled) next.push(id);
       this.draft.skills = { enabled: next };
+    },
+
+    setWakePrefix(prefix: string): void {
+      if (this.draft) this.draft.wakePrefix = prefix;
+    },
+
+    setHumanizer<K extends keyof HumanizerConfig>(key: K, value: HumanizerConfig[K]): void {
+      if (this.draft) this.draft.humanizer = { ...this.draft.humanizer, [key]: value };
+    },
+
+    setHumanizerSchedule(patch: Partial<HumanizerConfig["schedule"]>): void {
+      if (this.draft) {
+        this.draft.humanizer = {
+          ...this.draft.humanizer,
+          schedule: { ...this.draft.humanizer.schedule, ...patch },
+        };
+      }
+    },
+
+    setHumanizerProactive(patch: Partial<HumanizerConfig["proactive"]>): void {
+      if (this.draft) {
+        this.draft.humanizer = {
+          ...this.draft.humanizer,
+          proactive: { ...this.draft.humanizer.proactive, ...patch },
+        };
+      }
     },
 
     /** 丢掉草稿：只在「确认放弃未保存改动」之后调用，所以它必须显式存在。 */

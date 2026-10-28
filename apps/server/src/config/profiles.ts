@@ -16,7 +16,7 @@
  */
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AdapterAccessControl, MemoryConfig } from "@atri/shared";
+import type { AdapterAccessControl, HumanizerConfig, MemoryConfig } from "@atri/shared";
 import { ApiError } from "#core/errors.ts";
 import {
   ensurePrivateDir,
@@ -114,6 +114,8 @@ export interface ProfileFileConfig {
   memory?: unknown;
   /** 技能启用清单。技能本体是部署级文件（`<dataDir>/skills/`），这里只决定注入哪些。 */
   skills?: { enabled?: string[] };
+  /** 拟人化设置（防抖/分段/去机器味/时间感知/作息/主动消息），读时逐键兜默认。 */
+  humanizer?: unknown;
   [key: string]: unknown;
 }
 
@@ -315,6 +317,262 @@ export function validateSkillsPatch(raw: unknown): { enabled: string[] } {
     seen.add(item);
   }
   return { enabled: [...seen] };
+}
+
+/** 作息与免打扰的缺省日程。时间感知开着但没有日程时，只报时间不报状态。 */
+export const DEFAULT_HUMANIZER_CONFIG: HumanizerConfig = {
+  debounceSeconds: 0,
+  smartChunk: true,
+  stripMarkdown: false,
+  timeAwareness: true,
+  schedule: { sleepStart: "23:30", sleepEnd: "07:30", napMinutes: 0 },
+  proactive: {
+    enabled: false,
+    idleMinutes: 180,
+    maxPerDay: 3,
+    quietStart: "23:30",
+    quietEnd: "08:00",
+  },
+};
+
+/**
+ * 读盘时的归一：逐键兜默认（与 memory 同一条判据 —— 坏形状的后果只是「拟人化
+ * 效果打折扣」，退默认即可，但要让 onMalformed 说一声）。
+ */
+export function normalizeHumanizerConfig(raw: unknown, onMalformed?: () => void): HumanizerConfig {
+  const fallback = DEFAULT_HUMANIZER_CONFIG;
+  if (raw === undefined) return structuredCloneFallback();
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    onMalformed?.();
+    return structuredCloneFallback();
+  }
+  const record = raw as Record<string, unknown>;
+  let malformed = false;
+  const pickBoolean = (key: string, dflt: boolean): boolean => {
+    const value = record[key];
+    if (value === undefined) return dflt;
+    if (typeof value !== "boolean") {
+      malformed = true;
+      return dflt;
+    }
+    return value;
+  };
+  const pickSeconds = (key: string, dflt: number): number => {
+    const value = record[key];
+    if (value === undefined) return dflt;
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 300) {
+      malformed = true;
+      return dflt;
+    }
+    return Math.trunc(value);
+  };
+  const pickTime = (value: unknown, dflt: string): string => {
+    if (value === undefined) return dflt;
+    // 空串是合法值（「不睡觉」）；其余必须是 HH:MM。
+    if (value === "") return "";
+    if (
+      typeof value !== "string" ||
+      !new RegExp(String.raw`^([01]\d|2[0-3]):[0-5]\d$`).test(value)
+    ) {
+      malformed = true;
+      return dflt;
+    }
+    return value;
+  };
+
+  const scheduleRaw =
+    record.schedule !== undefined &&
+    record.schedule !== null &&
+    typeof record.schedule === "object" &&
+    !Array.isArray(record.schedule)
+      ? (record.schedule as Record<string, unknown>)
+      : record.schedule === undefined
+        ? {}
+        : ((malformed = true), {});
+  const proactiveRaw =
+    record.proactive !== undefined &&
+    record.proactive !== null &&
+    typeof record.proactive === "object" &&
+    !Array.isArray(record.proactive)
+      ? (record.proactive as Record<string, unknown>)
+      : record.proactive === undefined
+        ? {}
+        : ((malformed = true), {});
+  const napRaw = scheduleRaw.napMinutes;
+  const napMinutes =
+    napRaw === undefined
+      ? fallback.schedule.napMinutes
+      : typeof napRaw === "number" && Number.isInteger(napRaw) && napRaw >= 0 && napRaw <= 240
+        ? napRaw
+        : ((malformed = true), fallback.schedule.napMinutes);
+  const idleRaw = proactiveRaw.idleMinutes;
+  const idleMinutes =
+    idleRaw === undefined
+      ? fallback.proactive.idleMinutes
+      : typeof idleRaw === "number" && Number.isFinite(idleRaw) && idleRaw > 0
+        ? Math.trunc(idleRaw)
+        : ((malformed = true), fallback.proactive.idleMinutes);
+  const maxRaw = proactiveRaw.maxPerDay;
+  const maxPerDay =
+    maxRaw === undefined
+      ? fallback.proactive.maxPerDay
+      : typeof maxRaw === "number" && Number.isInteger(maxRaw) && maxRaw >= 0
+        ? maxRaw
+        : ((malformed = true), fallback.proactive.maxPerDay);
+
+  if (malformed) onMalformed?.();
+  return {
+    debounceSeconds: pickSeconds("debounceSeconds", fallback.debounceSeconds),
+    smartChunk: pickBoolean("smartChunk", fallback.smartChunk),
+    stripMarkdown: pickBoolean("stripMarkdown", fallback.stripMarkdown),
+    timeAwareness: pickBoolean("timeAwareness", fallback.timeAwareness),
+    schedule: {
+      sleepStart: pickTime(scheduleRaw.sleepStart, fallback.schedule.sleepStart),
+      sleepEnd: pickTime(scheduleRaw.sleepEnd, fallback.schedule.sleepEnd),
+      napMinutes,
+    },
+    proactive: {
+      enabled: pickBoolean2(proactiveRaw.enabled, fallback.proactive.enabled),
+      idleMinutes,
+      maxPerDay,
+      quietStart: pickTime(proactiveRaw.quietStart, fallback.proactive.quietStart),
+      quietEnd: pickTime(proactiveRaw.quietEnd, fallback.proactive.quietEnd),
+    },
+  };
+
+  function pickBoolean2(value: unknown, dflt: boolean): boolean {
+    if (value === undefined) return dflt;
+    if (typeof value !== "boolean") {
+      malformed = true;
+      return dflt;
+    }
+    return value;
+  }
+
+  function structuredCloneFallback(): HumanizerConfig {
+    return JSON.parse(JSON.stringify(fallback)) as HumanizerConfig;
+  }
+}
+
+/**
+ * API 写入时的严格校验：返回「要合并进档文件的补丁」（只含给出的键）。
+ * 越界回 400 不夹取，与 maxToolSteps / memory.topK 同一条判据。
+ */
+export function validateHumanizerPatch(raw: unknown): Record<string, unknown> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ApiError("humanizer 必须是对象", 400);
+  }
+  const record = raw as Record<string, unknown>;
+  const patch: Record<string, unknown> = {};
+  const num = (key: string, min: number, max: number, integer: boolean): number | undefined => {
+    const value = record[key];
+    if (value === undefined) return undefined;
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      (integer && !Number.isInteger(value)) ||
+      value < min ||
+      value > max
+    ) {
+      throw new ApiError(`humanizer.${key} 必须是 ${min}–${max}${integer ? " 的整数" : ""}`, 400);
+    }
+    return value;
+  };
+  const bool = (key: string): boolean | undefined => {
+    const value = record[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== "boolean") throw new ApiError(`humanizer.${key} 必须是布尔值`, 400);
+    return value;
+  };
+
+  for (const [key, value] of Object.entries({
+    debounceSeconds: num("debounceSeconds", 0, 300, true),
+    smartChunk: bool("smartChunk"),
+    stripMarkdown: bool("stripMarkdown"),
+    timeAwareness: bool("timeAwareness"),
+  })) {
+    if (value !== undefined) patch[key] = value;
+  }
+  if (record.schedule !== undefined) {
+    if (
+      record.schedule === null ||
+      typeof record.schedule !== "object" ||
+      Array.isArray(record.schedule)
+    ) {
+      throw new ApiError("humanizer.schedule 必须是对象", 400);
+    }
+    const schedule = record.schedule as Record<string, unknown>;
+    const nap = schedule.napMinutes;
+    const schedulePatch: Record<string, unknown> = {};
+    if (schedule.sleepStart !== undefined) {
+      schedulePatch.sleepStart = validateHhmm(schedule.sleepStart, "schedule.sleepStart");
+    }
+    if (schedule.sleepEnd !== undefined) {
+      schedulePatch.sleepEnd = validateHhmm(schedule.sleepEnd, "schedule.sleepEnd");
+    }
+    if (nap !== undefined) {
+      if (typeof nap !== "number" || !Number.isInteger(nap) || nap < 0 || nap > 240) {
+        throw new ApiError("humanizer.schedule.napMinutes 必须是 0–240 的整数", 400);
+      }
+      schedulePatch.napMinutes = nap;
+    }
+    patch.schedule = schedulePatch;
+  }
+  if (record.proactive !== undefined) {
+    if (
+      record.proactive === null ||
+      typeof record.proactive !== "object" ||
+      Array.isArray(record.proactive)
+    ) {
+      throw new ApiError("humanizer.proactive 必须是对象", 400);
+    }
+    const proactive = record.proactive as Record<string, unknown>;
+    const proactivePatch: Record<string, unknown> = {};
+    if (proactive.enabled !== undefined) {
+      if (typeof proactive.enabled !== "boolean") {
+        throw new ApiError("humanizer.proactive.enabled 必须是布尔值", 400);
+      }
+      proactivePatch.enabled = proactive.enabled;
+    }
+    if (proactive.idleMinutes !== undefined) {
+      if (
+        typeof proactive.idleMinutes !== "number" ||
+        !Number.isFinite(proactive.idleMinutes) ||
+        proactive.idleMinutes <= 0
+      ) {
+        throw new ApiError("humanizer.proactive.idleMinutes 必须是正数（分钟）", 400);
+      }
+      proactivePatch.idleMinutes = proactive.idleMinutes;
+    }
+    if (proactive.maxPerDay !== undefined) {
+      if (
+        typeof proactive.maxPerDay !== "number" ||
+        !Number.isInteger(proactive.maxPerDay) ||
+        proactive.maxPerDay < 0
+      ) {
+        throw new ApiError("humanizer.proactive.maxPerDay 必须是非负整数", 400);
+      }
+      proactivePatch.maxPerDay = proactive.maxPerDay;
+    }
+    if (proactive.quietStart !== undefined) {
+      proactivePatch.quietStart = validateHhmm(proactive.quietStart, "proactive.quietStart");
+    }
+    if (proactive.quietEnd !== undefined) {
+      proactivePatch.quietEnd = validateHhmm(proactive.quietEnd, "proactive.quietEnd");
+    }
+    patch.proactive = proactivePatch;
+  }
+  return patch;
+}
+
+/** HH:MM 的唯一判定。空串合法（「不设限」）；正则在模块级编译一次。 */
+const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function validateHhmm(value: unknown, label: string): string {
+  if (value !== "" && (typeof value !== "string" || !HHMM_PATTERN.test(value))) {
+    throw new ApiError(`humanizer.${label} 必须是 HH:MM（或空串）`, 400);
+  }
+  return value as string;
 }
 
 /** API 写入时的严格校验：形状不对直接 400，不静默丢条目。 */
