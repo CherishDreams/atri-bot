@@ -234,6 +234,26 @@ export abstract class MessageAdapter {
   protected abstract sendText(conversation: InboundConversation, text: string): Promise<void>;
 
   /**
+   * 主动消息的发送入口（框架经 AdapterManager 调用）。与回复同一条 sendText
+   * 通道，但不属于「一次对话的回复」—— 去重、日志由调用方（主动消息引擎）负责。
+   */
+  async sendTo(conversation: InboundConversation, text: string): Promise<void> {
+    await this.sendText(conversation, text);
+  }
+
+  /**
+   * 这一适配器已知的「外部会话 -> 内部会话」映射。主动消息引擎靠它发现可以
+   * 主动说话的会话；只给键与内部会话 id。具体实现没有 entries()（嵌入式注入
+   * 的最小会话表）时返回空 —— 引擎只是没有候选，不算错误。
+   */
+  conversationEntries(): { key: string; sessionId: string }[] {
+    const sessions = this.#conversations as {
+      entries?: () => { key: string; sessionId: string }[];
+    };
+    return sessions.entries?.() ?? [];
+  }
+
+  /**
    * 平台适配器解析出一条消息后调用这里。返回的 Promise 在这一次处理（含回复发送）
    * 结束后 resolve；适配器通常 `void this.receive(...)`，不阻塞事件循环。
    */

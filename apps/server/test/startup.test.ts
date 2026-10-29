@@ -34,6 +34,9 @@ async function occupyPort(t: TestContext): Promise<number> {
 test("端口被占用时 start() 给出中文错误，而不是永久挂起", async (t) => {
   const port = await occupyPort(t);
   const app = await createApp({ ...makeTestConfig({ root: tempRoot(t) }), port });
+  // createApp 会启动后台引擎（调度器、主动消息的分钟级定时器）；这条用例的 start()
+  // 注定失败，但**引擎已经在跑了** —— 不 stop 的话事件循环被定时器挂住，整个文件超时。
+  t.after(() => app.stop().catch(() => undefined));
 
   // 这条的**失败形态是「不失败」**：`server.listen` 的错误是一个事件而不是异常，
   // 没有接住它的 promise 就永不 settle，`main().catch` 抓不到东西，测试只能挂到整个文件超时。

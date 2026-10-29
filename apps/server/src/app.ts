@@ -24,6 +24,7 @@ import { BuiltinMemoryProvider } from "./core/memory/builtin.ts";
 import { MemoryService } from "./core/memory/service.ts";
 import { createMemoryTools } from "./core/memory/tools.ts";
 import { awarenessBlock } from "./core/companion/awareness.ts";
+import { ProactiveEngine } from "./core/companion/proactive.ts";
 import { McpManager } from "./core/mcp/manager.ts";
 import { McpServerStore } from "./core/mcp/store.ts";
 import { SkillStore } from "./core/skill/store.ts";
@@ -1049,6 +1050,46 @@ export async function createApp(config: AppConfig) {
     return [...users].toSorted();
   }
 
+  /*
+   * 主动消息引擎：扫描启用了 humanizer.proactive 的档，找空闲的私聊会话，
+   * 经人格复核生成一句问候后经适配器发出。发送与发现都走 AdapterManager
+   * 的新通道（档边界在那里校验）；每日计数在内存里，重启清零由上限兜底。
+   */
+  const proactive = new ProactiveEngine({
+    logger,
+    targets: () =>
+      [...bundles.values()].flatMap((bundle) => {
+        const humanizer = normalizeHumanizerConfig(readProfileConfig(bundle.path).humanizer);
+        if (humanizer.proactive.enabled === false) return [];
+        return [
+          {
+            profileId: bundle.id,
+            config: humanizer.proactive,
+            // 生成走「人格提示 + 情境」的一次直调：不落库、不进会话历史 ——
+            // 模型的自言自语不该出现在对话记录里（与引擎的用户消息路径完全分开）。
+            generate: async (situation: string) => {
+              const prompt = [bundle.engine.systemPrompt.trim(), situation]
+                .filter((part) => part !== "")
+                .join("\n\n");
+              const result = await providers.chat({
+                model: bundle.defaultProviderId ?? undefined,
+                messages:
+                  prompt === ""
+                    ? [{ role: "user", content: situation }]
+                    : [{ role: "system", content: prompt }],
+                signal: AbortSignal.timeout(30_000),
+              });
+              return result?.content ?? "";
+            },
+          },
+        ];
+      }),
+    conversationsOf: (profileId) => adapters.conversationEntries(profileId),
+    lastActivityAt: (sessionId) => sessions.get(sessionId)?.updatedAt ?? null,
+    send: (profileId, ref, text) =>
+      adapters.sendToConversation(ref.adapterId ?? "", ref.conversation, text, profileId),
+  });
+
   const cronStore = new CronStore({ filePath: join(config.dataDir, "cron.json"), logger });
   const scheduler = new CronScheduler({
     store: cronStore,
@@ -1189,6 +1230,7 @@ export async function createApp(config: AppConfig) {
   await mcp.startAll();
   await adapters.startAll();
   scheduler.start();
+  proactive.start();
 
   return {
     async start() {
@@ -1209,6 +1251,7 @@ export async function createApp(config: AppConfig) {
     listeners: () => events.listenerCount,
     async stop() {
       scheduler.stop();
+      proactive.stop();
       await mcp.stopAll();
       await adapters.stopAll();
       await http.close();

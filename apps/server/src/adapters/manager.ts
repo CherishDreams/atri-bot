@@ -4,6 +4,7 @@ import { ApiError, errorMessage } from "#core/errors.ts";
 import type { Logger } from "#core/logger.ts";
 import { ADAPTER_ACTION_LIMITS } from "./constants.ts";
 import type { AdapterConfigStore, AdapterEntryConfig } from "./store.ts";
+import type { InboundConversation, MessageAdapter } from "./message.ts";
 import {
   adapterTemplate,
   assertAdapterId,
@@ -229,6 +230,65 @@ export class AdapterManager {
    * 未运行 / 上游失败 / 平台不支持都返回 `ok: false` 的 200 结果，而不是抛 5xx：
    * 这是一次「探测 + 执行」的开发者动作，界面与插件需要拿到原因本身。
    */
+  /**
+   * 主动消息引擎的会话发现：这一档**正在运行**的 MessageAdapter 各自上报
+   * 「外部会话 -> 内部会话」映射，键按 `<profileId>:<kind>:<id>` 解析回外部坐标。
+   */
+  conversationEntries(profileId: string): {
+    adapterId: string;
+    conversation: InboundConversation;
+    sessionId: string;
+  }[] {
+    const out: { adapterId: string; conversation: InboundConversation; sessionId: string }[] = [];
+    for (const [id, record] of this.#records) {
+      if (record.config.profile !== profileId || !record.running) continue;
+      const adapter = record.adapter;
+      if (
+        adapter === null ||
+        typeof (adapter as MessageAdapter).conversationEntries !== "function"
+      ) {
+        continue;
+      }
+      for (const entry of (adapter as MessageAdapter).conversationEntries()) {
+        // 键由基类拼出（`<profileId>:<kind>:<id>`）；解析失败的一律跳过。
+        const parts = entry.key.split(":");
+        if (parts.length < 3 || parts[0] !== profileId) continue;
+        const kind = parts[1] === "group" ? "group" : "private";
+        out.push({
+          adapterId: id,
+          conversation: { kind, id: parts.slice(2).join(":") },
+          sessionId: entry.sessionId,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 主动消息引擎的发送通道。与 `callAction` 同一条边界纪律：必须属于声明的
+   * 配置档、实例在跑、且必须是 MessageAdapter（有会话语义）—— 三者都验。
+   * 长度上限按适配器自己的设置走（与回复切块同一份）。
+   */
+  async sendToConversation(
+    id: string,
+    conversation: InboundConversation,
+    text: string,
+    expectedProfile?: string,
+  ): Promise<void> {
+    const record = this.#record(id);
+    if (expectedProfile !== undefined && record.config.profile !== expectedProfile) {
+      throw new ApiError(`适配器「${id}」不属于这份配置档`, 403);
+    }
+    if (!record.running || record.adapter === null) {
+      throw new ApiError(`适配器「${id}」当前没有在运行`, 409);
+    }
+    const adapter = record.adapter;
+    if (!("sendTo" in adapter) || typeof (adapter as MessageAdapter).sendTo !== "function") {
+      throw new ApiError(`适配器「${id}」不支持会话消息发送`, 400);
+    }
+    await (adapter as MessageAdapter).sendTo(conversation, text);
+  }
+
   async callAction(
     id: string,
     action: string,

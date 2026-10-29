@@ -95,4 +95,13 @@ export class JsonConversationSessions implements ConversationSessions {
   get size(): number {
     return this.#map.size;
   }
+
+  /**
+   * 全部映射（键 = `<profileId>:<kind>:<id>`）。主动消息引擎靠它发现
+   * 「这一档有哪些外部会话可以主动说话」；只给键与内部会话 id，
+   * 不给任何消息内容。
+   */
+  entries(): { key: string; sessionId: string }[] {
+    return [...this.#map.entries()].map(([key, sessionId]) => ({ key, sessionId }));
+  }
 }
