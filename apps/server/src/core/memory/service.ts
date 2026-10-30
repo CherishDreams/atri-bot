@@ -120,6 +120,41 @@ export class MemoryService {
     }
   }
 
+  /**
+   * 日记巩固用：按时间窗读原始条目。provider 不支持（协议可选）或失败时
+   * 返回 `null` —— 与「缺失的供应商不降级」同一条判据。
+   */
+  async readRecent(profileId: string, since: string, limit = 200): Promise<MemoryItem[] | null> {
+    const provider = this.providerFor(profileId);
+    if (provider === null || provider.readRecent === undefined) return null;
+    try {
+      return await provider.readRecent({ profileId, since, limit });
+    } catch (err) {
+      this.#logger.warn(`按时间读取记忆失败（provider ${provider.id}）: ${errorMessage(err)}`);
+      return null;
+    }
+  }
+
+  /**
+   * 宿主侧的写入（日记巩固用）。与 `remember` 的差别：kind 与来源由调用方给定，
+   * 会话坐标为空 —— 巩固产物属于整份档，不属于某一次对话。
+   */
+  async writeAs(
+    profileId: string,
+    kind: "diary" | "fact",
+    content: string,
+    source: string,
+  ): Promise<boolean> {
+    const provider = this.providerFor(profileId);
+    if (provider === null) return false;
+    try {
+      return await provider.write({ profileId, sessionId: "", kind, content, source });
+    } catch (err) {
+      this.#logger.warn(`记忆写入失败（provider ${provider.id}）: ${errorMessage(err)}`);
+      return false;
+    }
+  }
+
   /** 模型工具 `memory_write` 的入口。返回给模型看的回执文本。 */
   async remember(turn: MemoryTurn, content: string): Promise<string> {
     const provider = this.providerFor(turn.profileId);

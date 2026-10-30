@@ -95,6 +95,7 @@ const DEFAULT_HUMANIZER: HumanizerConfig = {
     quietStart: "23:30",
     quietEnd: "08:00",
   },
+  diary: { enabled: true, hour: 22 },
 };
 
 /** 日志里的一行字段：换行收成空格，避免平台侧的昵称伪造出新的日志行。 */

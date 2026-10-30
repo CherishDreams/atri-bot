@@ -333,6 +333,7 @@ export const DEFAULT_HUMANIZER_CONFIG: HumanizerConfig = {
     quietStart: "23:30",
     quietEnd: "08:00",
   },
+  diary: { enabled: true, hour: 22 },
 };
 
 /**
@@ -438,7 +439,38 @@ export function normalizeHumanizerConfig(raw: unknown, onMalformed?: () => void)
       quietStart: pickTime(proactiveRaw.quietStart, fallback.proactive.quietStart),
       quietEnd: pickTime(proactiveRaw.quietEnd, fallback.proactive.quietEnd),
     },
+    diary: pickDiary(record.diary),
   };
+
+  function pickDiary(value: unknown): HumanizerConfig["diary"] {
+    if (
+      value === undefined ||
+      value === null ||
+      typeof value !== "object" ||
+      Array.isArray(value)
+    ) {
+      if (value !== undefined) malformed = true;
+      return { ...fallback.diary };
+    }
+    // 外层的 `record` 是整段 humanizer；这里是 diary 子对象，换个名字免遮蔽。
+    const fields = value as Record<string, unknown>;
+    const enabled = pickBoolean2(fields.enabled, fallback.diary.enabled);
+    const hourRaw = fields.hour;
+    let hour = fallback.diary.hour;
+    if (hourRaw !== undefined) {
+      if (
+        typeof hourRaw !== "number" ||
+        !Number.isInteger(hourRaw) ||
+        hourRaw < 0 ||
+        hourRaw > 23
+      ) {
+        malformed = true;
+      } else {
+        hour = hourRaw;
+      }
+    }
+    return { enabled, hour };
+  }
 
   function pickBoolean2(value: unknown, dflt: boolean): boolean {
     if (value === undefined) return dflt;
@@ -561,6 +593,31 @@ export function validateHumanizerPatch(raw: unknown): Record<string, unknown> {
       proactivePatch.quietEnd = validateHhmm(proactive.quietEnd, "proactive.quietEnd");
     }
     patch.proactive = proactivePatch;
+  }
+  if (record.diary !== undefined) {
+    if (record.diary === null || typeof record.diary !== "object" || Array.isArray(record.diary)) {
+      throw new ApiError("humanizer.diary 必须是对象", 400);
+    }
+    const diary = record.diary as Record<string, unknown>;
+    const diaryPatch: Record<string, unknown> = {};
+    if (diary.enabled !== undefined) {
+      if (typeof diary.enabled !== "boolean") {
+        throw new ApiError("humanizer.diary.enabled 必须是布尔值", 400);
+      }
+      diaryPatch.enabled = diary.enabled;
+    }
+    if (diary.hour !== undefined) {
+      if (
+        typeof diary.hour !== "number" ||
+        !Number.isInteger(diary.hour) ||
+        diary.hour < 0 ||
+        diary.hour > 23
+      ) {
+        throw new ApiError("humanizer.diary.hour 必须是 0–23 的整数", 400);
+      }
+      diaryPatch.hour = diary.hour;
+    }
+    patch.diary = diaryPatch;
   }
   return patch;
 }

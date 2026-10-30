@@ -25,6 +25,7 @@ import { MemoryService } from "./core/memory/service.ts";
 import { createMemoryTools } from "./core/memory/tools.ts";
 import { awarenessBlock } from "./core/companion/awareness.ts";
 import { ProactiveEngine } from "./core/companion/proactive.ts";
+import { DiaryEngine } from "./core/companion/diary.ts";
 import { McpManager } from "./core/mcp/manager.ts";
 import { McpServerStore } from "./core/mcp/store.ts";
 import { SkillStore } from "./core/skill/store.ts";
@@ -596,6 +597,7 @@ export async function createApp(config: AppConfig) {
       toolConfig,
       plugins,
       commands,
+      memory,
       engine,
     };
   }
@@ -1090,6 +1092,58 @@ export async function createApp(config: AppConfig) {
       adapters.sendToConversation(ref.adapterId ?? "", ref.conversation, text, profileId),
   });
 
+  /*
+   * 日记与记忆巩固：每天到点把当天的交互记录交给模型提炼成日记与事实，
+   * 写回记忆（kind = diary/fact）。生成走「人格提示 + 指令」的两段直调；
+   * 写入走档自己的记忆服务 —— 内置与插件供应商在同一套协议下被巩固。
+   */
+  const diary = new DiaryEngine({
+    logger,
+    targets: () =>
+      [...bundles.values()].flatMap((bundle) => {
+        const humanizer = normalizeHumanizerConfig(readProfileConfig(bundle.path).humanizer);
+        if (humanizer.diary.enabled === false) return [];
+        const chatOneShot = async (instruction: string, data: string): Promise<string> => {
+          const persona = bundle.engine.systemPrompt.trim();
+          const result = await providers.chat({
+            model: bundle.defaultProviderId ?? undefined,
+            messages: [
+              ...(persona === "" ? [] : [{ role: "system" as const, content: persona }]),
+              { role: "user" as const, content: `${instruction}\n\n${data}` },
+            ],
+            signal: AbortSignal.timeout(60_000),
+          });
+          return result?.content ?? "";
+        };
+        return [
+          {
+            profileId: bundle.id,
+            enabled: true,
+            hour: humanizer.diary.hour,
+            interactions: async () => {
+              const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+              const items = await bundle.memory.readRecent(bundle.id, since);
+              return items === null ? null : items.map((item) => item.content);
+            },
+            composeDiary: (dateKey: string, list: readonly string[]) =>
+              chatOneShot(
+                `以下是你在 ${dateKey} 这一天与对方的互动记录。请以第一人称写一篇简短的日记（100 字以内），像你在复盘今天：提到了什么、有什么情绪、记住了什么。只输出日记正文。`,
+                list.map((line) => `- ${line}`).join("\n"),
+              ),
+            composeFacts: async (list: readonly string[]) => {
+              const text = await chatOneShot(
+                "从下面的互动记录里提炼值得长期记住的事实（对方的偏好、背景、约定）。" +
+                  "每行一条，最多 5 条；一条都没有就输出空内容。",
+                list.map((line) => `- ${line}`).join("\n"),
+              );
+              return text.split("\n").map((line) => line.trim().replace(/^[-*\d.、\s]+/, ""));
+            },
+            write: (kind, content) => bundle.memory.writeAs(bundle.id, kind, content, "diary"),
+          },
+        ];
+      }),
+  });
+
   const cronStore = new CronStore({ filePath: join(config.dataDir, "cron.json"), logger });
   const scheduler = new CronScheduler({
     store: cronStore,
@@ -1231,6 +1285,7 @@ export async function createApp(config: AppConfig) {
   await adapters.startAll();
   scheduler.start();
   proactive.start();
+  diary.start();
 
   return {
     async start() {
@@ -1252,6 +1307,7 @@ export async function createApp(config: AppConfig) {
     async stop() {
       scheduler.stop();
       proactive.stop();
+      diary.stop();
       await mcp.stopAll();
       await adapters.stopAll();
       await http.close();

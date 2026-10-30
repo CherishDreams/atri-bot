@@ -60,6 +60,7 @@ const config = (): HumanizerConfig => ({
     quietStart: "23:30",
     quietEnd: "08:00",
   },
+  diary: { enabled: true, hour: 22 },
 });
 
 const turn = {

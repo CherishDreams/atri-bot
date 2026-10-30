@@ -3912,6 +3912,18 @@
                     "type": "string"
                   }
                 }
+              },
+              "diary": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "hour": {
+                    "type": "integer"
+                  }
+                },
+                "description": "日记巩固的补丁（hour 为 0–23 整数）。"
               }
             },
             "additionalProperties": false
@@ -4550,7 +4562,8 @@
           "stripMarkdown",
           "timeAwareness",
           "schedule",
-          "proactive"
+          "proactive",
+          "diary"
         ],
         "properties": {
           "debounceSeconds": {
@@ -4612,6 +4625,21 @@
                 "description": "免打扰时段终点 HH:MM。"
               }
             }
+          },
+          "diary": {
+            "type": "object",
+            "required": ["enabled", "hour"],
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "每天到点把当日交互提炼成日记与事实写回记忆。默认开。"
+              },
+              "hour": {
+                "type": "integer",
+                "description": "每天从几点起可以写日记（0–23，服务器本地时区）。默认 22。"
+              }
+            },
+            "description": "日记与记忆巩固。"
           }
         }
       }

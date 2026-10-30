@@ -18,6 +18,7 @@ import type { AdapterManager } from "#adapters/manager.ts";
 import type { PersonaStore } from "#core/persona/store.ts";
 import type { CronScheduler } from "#core/cron/manager.ts";
 import type { McpManager } from "#core/mcp/manager.ts";
+import type { MemoryService } from "#core/memory/service.ts";
 import type { SkillStore } from "#core/skill/store.ts";
 import type { PluginManager } from "#plugins/manager.ts";
 
@@ -63,6 +64,8 @@ export interface ProfileBundle {
   plugins: PluginManager;
   /** 这一档的指令注册表（内置 + 插件指令）。`GET /commands` 的数据源。 */
   commands: CommandRegistry;
+  /** 这一档的记忆服务（日记巩固与工作台配置都从这里走）。 */
+  memory: MemoryService;
   engine: AgentEngine;
 }
 

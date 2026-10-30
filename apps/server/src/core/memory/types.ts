@@ -50,4 +50,16 @@ export interface MemoryProvider {
   recall(query: MemoryQuery): Promise<MemoryItem[]>;
   /** 返回 false 表示没写进去（宿主不重试，只记 warn）。 */
   write(record: MemoryWrite): Promise<boolean>;
+  /**
+   * 按时间窗读取原始条目（日记任务用，与 recall 的「按相关性」是两回事）。
+   * **可选**：插件 provider 不实现时，日记巩固对它不可用（引擎记一条日志跳过，
+   * 不降级到 recall —— 两种读法产出东西的形状不一样，静默换用会说谎）。
+   */
+  readRecent?(query: {
+    profileId: string;
+    /** 只返回 created_at >= since 的条目（ISO）。 */
+    since: string;
+    kinds?: MemoryKind[];
+    limit: number;
+  }): Promise<MemoryItem[]>;
 }

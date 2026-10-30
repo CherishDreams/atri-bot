@@ -196,6 +196,31 @@ export class BuiltinMemoryProvider implements MemoryProvider {
     return true;
   }
 
+  async readRecent(query: {
+    profileId: string;
+    since: string;
+    kinds?: MemoryItem["kind"][];
+    limit: number;
+  }): Promise<MemoryItem[]> {
+    // kind 过滤在 JS 里做：条目数有保留上限兜底，SQLite 端少一个 IN 动态拼接。
+    const rows = this.#db
+      .prepare(
+        `SELECT seq, id, kind, content, created_at FROM memories
+          WHERE profile_id = ? AND created_at >= ? ORDER BY seq DESC`,
+      )
+      .all(query.profileId, query.since) as unknown as MemoryRow[];
+    const wanted = query.kinds === undefined ? null : new Set(query.kinds);
+    return rows
+      .filter((row) => wanted === null || wanted.has(row.kind as MemoryItem["kind"]))
+      .slice(0, query.limit)
+      .map((row) => ({
+        id: row.id,
+        content: row.content,
+        kind: row.kind as MemoryItem["kind"],
+        occurredAt: row.created_at,
+      }));
+  }
+
   /** FIFO 淘汰到保留上限。失败只记日志：多留几条旧记忆无害。 */
   #trim(profileId: string): void {
     try {

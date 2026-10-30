@@ -596,6 +596,13 @@ export type ProfileConfigPatch = {
             quietStart?: string;
             quietEnd?: string;
         };
+        /**
+         * 日记巩固的补丁（hour 为 0–23 整数）。
+         */
+        diary?: {
+            enabled?: boolean;
+            hour?: number;
+        };
     };
 };
 
@@ -1020,6 +1027,19 @@ export type HumanizerConfig = {
          * 免打扰时段终点 HH:MM。
          */
         quietEnd: string;
+    };
+    /**
+     * 日记与记忆巩固。
+     */
+    diary: {
+        /**
+         * 每天到点把当日交互提炼成日记与事实写回记忆。默认开。
+         */
+        enabled: boolean;
+        /**
+         * 每天从几点起可以写日记（0–23，服务器本地时区）。默认 22。
+         */
+        hour: number;
     };
 };
 

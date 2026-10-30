@@ -332,6 +332,15 @@ export const useProfileConfigStore = defineStore("profileConfig", {
       }
     },
 
+    setHumanizerDiary(patch: Partial<HumanizerConfig["diary"]>): void {
+      if (this.draft) {
+        this.draft.humanizer = {
+          ...this.draft.humanizer,
+          diary: { ...this.draft.humanizer.diary, ...patch },
+        };
+      }
+    },
+
     /** 丢掉草稿：只在「确认放弃未保存改动」之后调用，所以它必须显式存在。 */
     discard(): void {
       if (this.original) this.draft = copyDraft(this.original);

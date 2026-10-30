@@ -188,8 +188,37 @@ const wakePrefix = computed<string>({
       </template>
     </ConfigItem>
 
+    <ConfigItem
+      label="日记与记忆巩固"
+      code="humanizer.diary.enabled"
+      hint="每天到点把当天的互动记录交给模型提炼成一篇日记与几条事实，写回记忆 —— 交互原文是糙的，提炼后的才好召回。"
+      :dirty="leafDirty('humanizer.diary.enabled')"
+    >
+      <template #control>
+        <div class="flex items-center gap-2">
+          <n-switch
+            :value="draft.draft?.humanizer.diary.enabled ?? true"
+            aria-label="日记巩固"
+            @update:value="(v: boolean) => draft.setHumanizerDiary({ enabled: v })"
+          />
+          <n-input-number
+            :value="draft.draft?.humanizer.diary.hour ?? 22"
+            :min="0"
+            :max="23"
+            :step="1"
+            size="small"
+            class="w-[7rem]"
+            aria-label="日记时间"
+            @update:value="(v: number | null) => draft.setHumanizerDiary({ hour: v ?? 22 })"
+          />
+          <span class="text-12px text-ink-faint">点起写</span>
+        </div>
+      </template>
+    </ConfigItem>
+
     <template #footer>
-      改完要点「保存」：防抖与分段对下一条平台消息生效，时间感知对下一轮对话生效。
+      改完要点「保存」：防抖与分段对下一条平台消息生效，时间感知对下一轮对话生效，
+      日记在每天设定的小时之后由后台任务写一次。
     </template>
   </ConfigCard>
 </template>

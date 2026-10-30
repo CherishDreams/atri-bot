@@ -409,6 +409,15 @@ export interface HumanizerConfig {
     /** 免打扰时段终点（HH:MM）。 */
     quietEnd: string;
   };
+  /**
+   * 日记与记忆巩固（core/companion/diary.ts）：每天到点把当天的交互记录交给
+   * 模型提炼成一篇日记与若干条值得长期记住的事实，写回记忆。默认开启。
+   */
+  diary: {
+    enabled: boolean;
+    /** 每天从几点起可以写日记（0–23，服务器本地时区）。 */
+    hour: number;
+  };
 }
 
 /**
