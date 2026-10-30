@@ -26,6 +26,7 @@ import { createMemoryTools } from "./core/memory/tools.ts";
 import { awarenessBlock } from "./core/companion/awareness.ts";
 import { ProactiveEngine } from "./core/companion/proactive.ts";
 import { DiaryEngine } from "./core/companion/diary.ts";
+import { StickerStore, createStickerTool } from "./core/companion/sticker.ts";
 import { McpManager } from "./core/mcp/manager.ts";
 import { McpServerStore } from "./core/mcp/store.ts";
 import { SkillStore } from "./core/skill/store.ts";
@@ -544,6 +545,23 @@ export async function createApp(config: AppConfig) {
     });
     for (const tool of createMemoryTools(memory)) tools.register(tool);
     for (const tool of createSkillTools(skills)) tools.register(tool);
+    // 表情包工具：素材按档隔离（data/profiles/<id>/stickers/<标签>/），发送经
+    // 适配器管理器（会话反查 + 档边界在那里校验）。默认关闭，进档工具开关。
+    tools.register(
+      createStickerTool({
+        storeFor: (profileId) =>
+          new StickerStore({ dir: join(profileDir(profilesDir, profileId), "stickers"), logger }),
+        resolveTarget: (profileId, sessionId) => {
+          const entry = adapters
+            .conversationEntries(profileId)
+            .find((item) => item.sessionId === sessionId);
+          if (entry === undefined) return null;
+          return { adapterId: entry.adapterId, conversation: entry.conversation };
+        },
+        send: (adapterId, conversation, image, profileId) =>
+          adapters.sendImageTo(adapterId, conversation, image, profileId),
+      }),
+    );
     // 群聊唤醒前缀：读文件时容忍坏形状（手写配置退回缺省并 warn，不让服务起不来），
     // 写接口上才严格要求。
     const fileWakePrefix = coerceWakePrefix(profile.wakePrefix);

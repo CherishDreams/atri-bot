@@ -84,11 +84,11 @@ test("GET /tools 列出内置工具，且默认全部关闭", async (t) => {
   // 注册顺序就是 `createBuiltinTools()` + `createMemoryTools()` 的数组顺序，map 成对。
   assert.deepEqual(
     list.map((tool) => tool.id),
-    ["current_time", "memory_write", "memory_search"],
+    ["current_time", "memory_write", "memory_search", "send_sticker"],
   );
   assert.deepEqual(
     list.map((tool) => tool.enabled),
-    [false, false, false],
+    [false, false, false, false],
     "工具是能力授予，默认必须关闭",
   );
   const tool = list[0] as ToolInfo;
@@ -197,7 +197,7 @@ test("系统插件的 internal 工具不出现在工具开关里", async (t) => 
   assert.equal(tools.status, 200);
   assert.deepEqual(
     toolsOf(tools.json).map((tool) => tool.id),
-    ["current_time", "memory_write", "memory_search"],
+    ["current_time", "memory_write", "memory_search", "send_sticker"],
     "internal 工具必须从用户的工具列表里消失",
   );
 
@@ -205,7 +205,7 @@ test("系统插件的 internal 工具不出现在工具开关里", async (t) => 
   assert.equal(config.status, 200);
   assert.deepEqual(
     (config.json.tools as ToolInfo[]).map((tool) => tool.id),
-    ["current_time", "memory_write", "memory_search"],
+    ["current_time", "memory_write", "memory_search", "send_sticker"],
     "配置工作台也不该展示 internal 工具",
   );
 

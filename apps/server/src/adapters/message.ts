@@ -235,11 +235,25 @@ export abstract class MessageAdapter {
   protected abstract sendText(conversation: InboundConversation, text: string): Promise<void>;
 
   /**
+   * 发送一张图片（表情包用）。**默认实现直接抛**：不是每个平台都能发图
+   *（或值得为它实现），能发的平台 override 这一个方法即可 —— 调用方
+   *（send_sticker 工具）把失败转成给模型的文本，模型可以改用文字回答。
+   */
+  protected sendImage(_conversation: InboundConversation, _image: MessageImage): Promise<void> {
+    return Promise.reject(new Error("此适配器不支持发送图片"));
+  }
+
+  /**
    * 主动消息的发送入口（框架经 AdapterManager 调用）。与回复同一条 sendText
    * 通道，但不属于「一次对话的回复」—— 去重、日志由调用方（主动消息引擎）负责。
    */
   async sendTo(conversation: InboundConversation, text: string): Promise<void> {
     await this.sendText(conversation, text);
+  }
+
+  /** 表情包工具的发送入口：sendImage 的公共包装（失败文本由调用方组织）。 */
+  async sendImageTo(conversation: InboundConversation, image: MessageImage): Promise<void> {
+    await this.sendImage(conversation, image);
   }
 
   /**

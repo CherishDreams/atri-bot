@@ -289,6 +289,30 @@ export class AdapterManager {
     await (adapter as MessageAdapter).sendTo(conversation, text);
   }
 
+  /**
+   * 表情包工具的发送通道（与 `sendToConversation` 同一条边界纪律）。
+   * 平台不支持发图时把错误原样抛给调用方 —— 工具层会转成给模型的文本。
+   */
+  async sendImageTo(
+    id: string,
+    conversation: InboundConversation,
+    image: { data: string; mediaType: string },
+    expectedProfile?: string,
+  ): Promise<void> {
+    const record = this.#record(id);
+    if (expectedProfile !== undefined && record.config.profile !== expectedProfile) {
+      throw new ApiError(`适配器「${id}」不属于这份配置档`, 403);
+    }
+    if (!record.running || record.adapter === null) {
+      throw new ApiError(`适配器「${id}」当前没有在运行`, 409);
+    }
+    const adapter = record.adapter;
+    if (typeof (adapter as MessageAdapter).sendImageTo !== "function") {
+      throw new ApiError(`适配器「${id}」不支持会话消息发送`, 400);
+    }
+    await (adapter as MessageAdapter).sendImageTo(conversation, image);
+  }
+
   async callAction(
     id: string,
     action: string,

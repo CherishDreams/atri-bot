@@ -656,4 +656,24 @@ export abstract class OneBot11Adapter extends MessageAdapter {
     }
     await this.callAction(ONEBOT_ACTIONS.sendPrivateMsg, { user_id: target, message });
   }
+
+  /**
+   * 发送图片（表情包）。OneBot 11 的图片段用 `base64://` 协议内联图片字节，
+   * 不需要先上传拿到文件 id —— 表情包本来就是本地素材。
+   */
+  protected override async sendImage(
+    conversation: InboundConversation,
+    image: MessageImage,
+  ): Promise<void> {
+    const target = Number(conversation.id);
+    if (!Number.isSafeInteger(target) || target <= 0) {
+      throw new Error(`${this.name} 会话 id 不是有效数字：${conversation.id}`);
+    }
+    const message = [{ type: ONEBOT_SEGMENTS.image, data: { file: `base64://${image.data}` } }];
+    if (conversation.kind === "group") {
+      await this.callAction(ONEBOT_ACTIONS.sendGroupMsg, { group_id: target, message });
+      return;
+    }
+    await this.callAction(ONEBOT_ACTIONS.sendPrivateMsg, { user_id: target, message });
+  }
 }
