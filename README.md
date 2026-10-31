@@ -305,6 +305,69 @@ docker compose logs -f napcat
 任务可以在控制台「立即执行」，也可以禁用后保留配置。今天的版本不把结果主动发到 QQ/其他平台：
 主动发送需要平台侧寻址与额外权限，先把「按时跑一轮、结果可查」做对。
 
+## 指令、记忆、MCP、技能与拟人化
+
+这一章是「AstrBot 式扩展能力」在本仓的对应物。消息进来后的次序是：
+**准入（白名单）→ 群聊唤醒门槛 → 指令匹配（命中即短路，完全不经过模型）→ 上下文装配（人格 + 记忆召回 + 技能目录 + 时间状态）→ 模型与工具循环 → 发送侧装饰（去机器味、智能分段）**。
+
+### 指令（/help 这类文本协议）
+
+- 指令以**唤醒前缀 + 指令名**触发（群聊必须带前缀，私聊不要求），命中后直接执行并回复，
+  不调用模型；带前缀但不是任何指令名的消息照常交给模型。
+- 前缀与门槛是同一个键：配置档的 `wakePrefix`（默认 `/`）。配成空串关闭群聊唤醒门槛
+  （恢复「所有白名单消息都回复」的旧行为），此时指令仍按 `/` 识别 —— 关门槛不该顺手关掉指令系统。
+- 内置 `/help`（别名 帮助）与 `/plugins`（别名 插件）；插件在定义里声明
+  `commands: [{ name, aliases?, description, usage?, permission?, run(args, ctx) }]` 即可注册指令。
+  `permission: "admin"` 只允许档的管理员名单与控制台使用；名字/别名撞内置或其它活跃插件的指令时
+  **该插件加载失败**（冲突要在加载期看得见，而不是留一条永不响应的指令）。
+- 指令不做按档开关：要关一条指令就禁用提供它的插件。`GET /commands?profile=` 列出全部；
+  插件页有「已注册指令」区块。cron 来源不做指令匹配 —— 定时提示词是写给模型的。
+
+### 记忆（可替换组件的样板）
+
+- 每轮对话自动把「用户说了什么、机器人答了什么」存为一条交互记忆（`autoRecord`），
+  召回按关键词命中 + 时间衰减打分，取 topK 条注入 system 报头（不落库、不进历史）。
+  内置实现存在会话库的 `memories` 表里，零外部调用、开箱即用。
+- 模型还可以用 `memory_write` / `memory_search` 工具显式记事实、查记忆（这两颗默认关闭，
+  在工具分类里启用）。每天到点（默认 22 点）后台会把当天的交互提炼成一篇日记与几条事实写回
+  记忆（`humanizer.diary`）。
+- **方案可替换**：`memory.provider` 指向 `builtin` 或某个插件声明的记忆模块
+  （`memoryProviders: [{ id, recall(), write() }]`）。一次请求只选一个供应商，
+  指到不存在的 id 时**不降级**（静默换方案的症状是「记忆忽好忽坏而配置没变」）。
+
+### MCP 服务器
+
+「MCP」页（部署级，与供应商同级）维护 MCP 服务器：Streamable HTTP / SSE / stdio 三种传输。
+连接成功后它的工具以 `mcp.<服务器id>.<工具名>` 进各档的工具开关，启用与否在配置文件页的
+「工具」分类。远端名字拼不出合法工具 id 时跳过并 warn（改名硬塞会让排查说谎）。
+`env` / `headers` 是明文密钥：配置接口在鉴权闸门内原样回给管理员，日志与错误文本永不携带。
+
+### 技能（SKILL.md）
+
+- 装一个技能：把 `<技能名>/SKILL.md` 放进 `data/skills/`（frontmatter 写 `name` 与
+  `description`），或随插件目录捆绑（`<插件目录>/skills/<名>/SKILL.md`）。删 = 删目录。
+- 启用的技能只把「名字 + 说明」注入报头，全文由模型按需用 `read_skill` 工具取
+  （渐进式披露：全塞进报头的话几个技能就能吃满上下文）。启用清单在配置文件页的
+  「技能」分类，属于配置档。
+
+### 拟人化（companion 的内置最小集）
+
+配置档的 `humanizer` 段（配置文件页的「拟人化」分类）：
+
+| 键                | 作用                                                                                                            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `debounceSeconds` | 连续输入防抖：沉默窗口内的多条消息合并成一轮再回复（0 = 关）。                                                  |
+| `smartChunk`      | 发送到平台前按句子智能分段：短句各成一条气泡，显式换行立即分段。                                                |
+| `stripMarkdown`   | 发送前剥 markdown 标记。只影响平台路径，控制台是渲染器不受影响。                                                |
+| `timeAwareness`   | 每轮注入当前时间与作息状态（深夜说早安是最刺眼的穿帮）。                                                        |
+| `schedule`        | 作息：入睡/起床时刻与午休分钟，时间感知与主动消息都按它判断。                                                   |
+| `proactive`       | 主动消息：私聊空闲超 `idleMinutes` 分钟后主动问候，经免打扰时段、每日上限、冷却三道闸。生成走人格复核，不落库。 |
+| `diary`           | 日记巩固：每天 `hour` 点后把当日交互提炼成日记与事实写回记忆。                                                  |
+
+表情包：`data/profiles/<档 id>/stickers/<标签>/<图片文件>`（标签可用中文），
+工具开关里启用 `send_sticker` 后，模型会按情绪选标签随机发一张；
+平台不支持发图时它会改用文字。素材管理与技能一样是文件操作。
+
 ## 登录鉴权
 
 控制台使用**单一管理员账号**保护。默认不配任何东西也能跑：未提供口令时，
@@ -559,9 +622,10 @@ pnpm start            # 或 node apps/server/src/index.ts
 ## 扩展方式
 
 - **插件** —— 一个目录，内含 `index.js`，默认导出
-  `{ id, name, version, description?, config?, tools?, setup(ctx), teardown?() }`
-  （也支持默认导出工厂函数 `(shared) => 上述对象`）。`tools` 可以是数组，也可以是
-  `(ctx) => 工具数组`；目录来自配置中的 `pluginDirs`。
+  `{ id, name, version, description?, config?, tools?, commands?, memoryProviders?, setup(ctx), teardown?() }`
+  （也支持默认导出工厂函数 `(shared) => 上述对象`）。`tools` / `commands` /
+  `memoryProviders` 都可以是数组，也可以是 `(ctx) => 数组`；目录来自配置中的 `pluginDirs`。
+  插件还可以捆绑技能：`<插件目录>/skills/<名>/SKILL.md` 会以 `插件目录名:技能名` 进技能目录。
   目录里还可以放一份可选的 `_conf_schema.json`：它声明这个插件有哪些用户可配置项，
   控制台按它渲染表单，值落在插件自己的数据目录（见[插件配置](#插件配置)）。
   要存数据用 `ctx.dataDir`（见[插件的动态加载](#插件的动态加载)），**不要**写进插件自己那个目录 ——
@@ -751,6 +815,11 @@ pnpm start            # 或 node apps/server/src/index.ts
 | GET             | `/plugins/:id/config`                           | 读这个插件的 schema 与当前生效值；schema / 配置坏了也会返回原因（`schemaError` / `configError`）    |
 | POST            | `/plugins/:id/config`                           | 保存插件配置，body `{ values: [{ key, value }] }`；保存后尝试重载，失败原因在 `reloadError`         |
 | POST            | `/tools/:id/enable`                             | 启用 / 禁用工具，body `{ "enabled": true }`（必填）                                                 |
+| GET             | `/commands`                                     | 列出这一档已注册的指令（内置 + 插件；只读）                                                         |
+| GET / POST      | `/mcp`                                          | 列出 / 新增 MCP 服务器（部署级；新增即连接）                                                        |
+| POST / DELETE   | `/mcp/{id}`                                     | 更新（按新配置重连）/ 删除 MCP 服务器                                                               |
+| POST            | `/mcp/{id}/enable`、`/mcp/{id}/probe`           | 启停（禁用即断开）/ 用当前配置重连并返回工具清单                                                    |
+| GET             | `/skills`、`/skills/{id}`                       | 列出可用技能 / 读一条技能的 SKILL.md 全文（部署级只读）                                             |
 | GET             | `/profiles`                                     | 列出全部配置档及其加载状态（含 `failed` 与它的原因）                                                |
 | POST            | `/profiles`                                     | 新建配置档，body `{ id, name? }`                                                                    |
 | GET             | `/profiles/:id/config`                          | 读一份配置档的可编辑内容（工作台草稿起点：默认模型 / 人格 / 步数 / 工具 / 插件 / 准入名单一次读回） |
@@ -761,7 +830,7 @@ pnpm start            # 或 node apps/server/src/index.ts
 
 除标注「公开」的路径外，其余接口都需要登录（未登录返回 401）。
 
-**下面这些路径还必须带 `?profile=<配置档 id>`**：`/tools*`、`/plugins*`、
+**下面这些路径还必须带 `?profile=<配置档 id>`**：`/tools*`、`/plugins*`、`/commands`、
 `/sessions/:id/messages[/stream]`。缺了它一律 **400**，
 不会回落到 `default` —— 「界面在 B、写进 A、还回 201」这类错只有在服务端拒绝猜的时候才可能被发现。
 `/health`、`/auth/*`、`/sessions*`（列表与增删会话本身）、`/adapters*`、`/logs*`、
