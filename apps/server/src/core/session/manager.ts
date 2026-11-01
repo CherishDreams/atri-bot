@@ -95,6 +95,11 @@ export interface PageOptions {
   limit?: number | undefined;
   /** 不透明游标（上一次响应的 `nextCursor`）。给出时只返回**比它更早**的条目。 */
   before?: string | null | undefined;
+  /**
+   * 从结果里剔除的会话 id（`GET /sessions?scope=chat` 用它把适配器的外部会话
+   * 从聊天列表里剔掉）。id 集合来自适配器的会话映射，调用方现取。
+   */
+  excludeIds?: Set<string> | undefined;
 }
 
 export interface SessionPage {
@@ -281,11 +286,24 @@ export class SessionManager {
    */
   list(opts: PageOptions = {}): SessionPage {
     const page = this.#page(opts, "sessions");
-    const rows = this.#allNamed(
-      SQL_SESSION_WITH_COUNT +
-        " WHERE (:before IS NULL OR s.seq < :before) ORDER BY s.seq DESC LIMIT :limit",
-      { before: page.beforeSeq, limit: page.limit + 1 },
-    ) as SessionRowWithCount[];
+    // excludeIds：把适配器的外部会话从「聊天」列表里剔掉（两边的读者不同，
+    // 见 GET /sessions 的 scope=chat）。参数个数有限（适配器数 × 每档会话数），
+    // 动态拼占位符即可；空集合不拼，避免生成 `NOT IN ()` 这种语法错误。
+    const excluded = opts.excludeIds;
+    const params: Record<string, string | number | null> = {
+      before: page.beforeSeq,
+      limit: page.limit + 1,
+    };
+    let sql = SQL_SESSION_WITH_COUNT + " WHERE (:before IS NULL OR s.seq < :before)";
+    if (excluded !== undefined && excluded.size > 0) {
+      const ids = [...excluded];
+      sql += ` AND s.id NOT IN (${ids.map((_, index) => `:ex${index}`).join(", ")})`;
+      ids.forEach((id, index) => {
+        params[`ex${index}`] = id;
+      });
+    }
+    sql += " ORDER BY s.seq DESC LIMIT :limit";
+    const rows = this.#allNamed(sql, params) as SessionRowWithCount[];
     const { items, nextCursor } = this.#pageOf(rows, page.limit, "sessions");
     return { sessions: items.map((row) => this.#toSession(row)), nextCursor };
   }

@@ -1297,6 +1297,7 @@ export async function createApp(config: AppConfig) {
     scheduler,
     mcp,
     skills,
+    builtinMemory,
   });
 
   await mcp.startAll();

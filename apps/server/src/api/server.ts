@@ -265,6 +265,7 @@ export function createHttpServer(deps: HttpDeps) {
     scheduler,
     mcp,
     skills,
+    builtinMemory,
   } = deps;
 
   const cookieName = auth.cookieName;
@@ -586,8 +587,56 @@ export function createHttpServer(deps: HttpDeps) {
   // 判据（默认值、上限、非法值 400）全在 `core/session/manager.ts`，这里只做搬运 ——
   // 范围在这里再判一次就会变成两处数字，而规格只有一处能写对。
   router.get(`${API_PREFIX}/sessions`, async (req, res) => {
-    const page = sessions.list(pageOptions(searchOf(req)));
+    // scope=chat：把适配器的外部会话从聊天列表里剔掉 —— 平台会话有自己的页面
+    // （AstrBot 的「平台消息」与 WebChat 同一条分界），两边的读者不该混在一张清单里。
+    const scope = searchOf(req).get("scope");
+    const excludeIds = scope === "chat" ? adapters.allAdapterSessionIds() : undefined;
+    const page = sessions.list({ ...pageOptions(searchOf(req)), excludeIds });
     sendJson(res, 200, page);
+  });
+
+  /**
+   * 平台会话页的数据源：这一档**正在运行**的适配器各自上报已知的外部会话，
+   * 与会话摘要（标题/时间/条数）拼成组。适配器没在跑就没有组 —— 空列表是
+   * 「没有可看的平台会话」，不是错误。
+   */
+  router.get(`${API_PREFIX}/adapters/conversations`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    const groups: {
+      adapterId: string;
+      name: string;
+      conversations: {
+        sessionId: string;
+        kind: string;
+        externalId: string;
+        title: string;
+        updatedAt: string;
+        messageCount: number;
+      }[];
+    }[] = [];
+    for (const entry of adapters.conversationEntries(bundle.id)) {
+      const summary = sessions.get(entry.sessionId);
+      if (summary === null) continue; // 映射里的会话已被删：跳过（下次收消息会重建）
+      let group = groups.find((g) => g.adapterId === entry.adapterId);
+      if (group === undefined) {
+        const name = adapters.list().find((a) => a.id === entry.adapterId)?.name ?? entry.adapterId;
+        group = { adapterId: entry.adapterId, name, conversations: [] };
+        groups.push(group);
+      }
+      group.conversations.push({
+        sessionId: entry.sessionId,
+        kind: entry.conversation.kind,
+        externalId: entry.conversation.id,
+        title: summary.title,
+        updatedAt: summary.updatedAt,
+        messageCount: summary.messageCount,
+      });
+    }
+    for (const group of groups) {
+      group.conversations.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    }
+    sendJson(res, 200, { groups });
   });
 
   router.post(`${API_PREFIX}/sessions`, async (req, res) => {
@@ -1275,6 +1324,65 @@ export function createHttpServer(deps: HttpDeps) {
     const content = skills.read(params.id);
     if (content === null) return sendError(res, 404, `没有这个技能: ${params.id}`);
     sendJson(res, 200, { content });
+  });
+
+  // --- 记忆页 ---------------------------------------------------------------
+  //
+  // 召回测试走**当前生效**的供应商（测的就是真实注入的那条路）；
+  // 浏览 / 图谱 / 删除只有内置供应商支持（它们依赖 memos 表的形状，
+  // 插件供应商的存储自决，页面会如实标注「不支持」）。
+
+  router.post(`${API_PREFIX}/memory/test`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    const body = await readJson(req);
+    try {
+      if (typeof body.query !== "string") {
+        return sendError(res, 400, "必须提供 `query`（字符串）");
+      }
+      const limit = typeof body.limit === "number" ? body.limit : undefined;
+      sendJson(res, 200, await bundle.memory.testRecall(bundle.id, body.query, limit ?? 10));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.get(`${API_PREFIX}/memory/overview`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    if (bundle.memory.providerFor(bundle.id) !== builtinMemory) {
+      sendJson(res, 200, { supported: false });
+      return;
+    }
+    sendJson(res, 200, { supported: true, ...(await builtinMemory.overview(bundle.id)) });
+  });
+
+  router.get(`${API_PREFIX}/memory/entries`, async (req, res) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    const kind = searchOf(req).get("kind") ?? undefined;
+    const limitRaw = searchOf(req).get("limit");
+    const limit = limitRaw === null ? undefined : Number(limitRaw);
+    if (bundle.memory.providerFor(bundle.id) !== builtinMemory) {
+      sendJson(res, 200, { supported: false, entries: [] });
+      return;
+    }
+    sendJson(res, 200, {
+      supported: true,
+      entries: await builtinMemory.entries(bundle.id, {
+        ...(kind === undefined || kind === "" ? {} : { kind }),
+        ...(limit === undefined || !Number.isFinite(limit) ? {} : { limit }),
+      }),
+    });
+  });
+
+  router.delete(`${API_PREFIX}/memory/entries/:id`, async (req, res, params) => {
+    const bundle = scopedProfile(req, res);
+    if (!bundle) return;
+    if (bundle.memory.providerFor(bundle.id) !== builtinMemory) {
+      return sendError(res, 400, "当前记忆供应商不支持删除（只有内置方案支持）");
+    }
+    sendJson(res, 200, { removed: await builtinMemory.remove(params.id) });
   });
 
   // --- 配置档 -------------------------------------------------------------

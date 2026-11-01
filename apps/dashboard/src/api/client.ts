@@ -32,6 +32,11 @@ import {
   probeMcpServer as probeMcpServerOp,
   deleteMcpServer as deleteMcpServerOp,
   listSkills as listSkillsOp,
+  listAdapterConversations as listAdapterConversationsOp,
+  testMemoryRecall as testMemoryRecallOp,
+  getMemoryOverview as getMemoryOverviewOp,
+  listMemoryEntries as listMemoryEntriesOp,
+  deleteMemoryEntry as deleteMemoryEntryOp,
   getSkill as getSkillOp,
   listAdapters as listAdaptersOp,
   listAdapterTemplates as listAdapterTemplatesOp,
@@ -252,10 +257,17 @@ export async function* streamLogs(after: number, signal?: AbortSignal): AsyncGen
 export interface PageQuery {
   limit?: number;
   before?: string;
+  /** `chat` = 剔除适配器的外部会话（它们在平台会话页展示）。 */
+  scope?: "chat";
 }
 
 export async function listSessions(query?: PageQuery) {
   return body(await listSessionsOp({ query }));
+}
+
+/** 平台会话页的数据源：按适配器分组的外部会话（含会话摘要）。 */
+export async function listAdapterConversations(profile: string) {
+  return body(await listAdapterConversationsOp({ query: { profile } }));
 }
 
 export async function createSession(title?: string) {
@@ -410,6 +422,36 @@ export async function probeMcpServer(id: string) {
 
 export async function deleteMcpServer(id: string) {
   return body(await deleteMcpServerOp({ path: { id } }));
+}
+
+// --- 记忆页（档级） ------------------------------------------------------------
+
+/** 召回测试：与真实注入同一条路径。`error` 非空时 items 为 null。 */
+export async function testMemoryRecall(profile: string, query: string, limit?: number) {
+  return body(
+    await testMemoryRecallOp({
+      query: { profile },
+      body: { query, ...(limit === undefined ? {} : { limit }) },
+    }),
+  );
+}
+
+/** 记忆总览（计数 + 关键词共现图谱数据）。supported=false 表示当前供应商不支持。 */
+export async function getMemoryOverview(profile: string) {
+  return body(await getMemoryOverviewOp({ query: { profile } }));
+}
+
+export interface MemoryEntryQuery {
+  kind?: "interaction" | "fact" | "diary";
+  limit?: number;
+}
+
+export async function listMemoryEntries(profile: string, query?: MemoryEntryQuery) {
+  return body(await listMemoryEntriesOp({ query: { profile, ...query } }));
+}
+
+export async function deleteMemoryEntry(profile: string, id: string) {
+  return body(await deleteMemoryEntryOp({ path: { id }, query: { profile } }));
 }
 
 // --- 技能（部署级） ------------------------------------------------------------

@@ -71,6 +71,10 @@
     {
       "name": "skills",
       "description": "技能（部署级）"
+    },
+    {
+      "name": "memory",
+      "description": "记忆页（召回测试 / 总览 / 浏览）"
     }
   ],
   "paths": {
@@ -644,6 +648,15 @@
           },
           {
             "$ref": "#/components/parameters/BeforeCursor"
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["chat"]
+            },
+            "description": "chat = 剔除适配器的外部会话（它们在平台会话页展示，两边读者不同）。缺省返回全部。"
           }
         ]
       },
@@ -2742,6 +2755,236 @@
           }
         }
       }
+    },
+    "/memory/test": {
+      "post": {
+        "operationId": "testMemoryRecall",
+        "summary": "召回测试：用一段文本走真实的记忆召回路径",
+        "tags": ["memory"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "最多返回几条（1–10，缺省 10）。"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "召回结果或可读的失败原因。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryRecallTest"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
+      }
+    },
+    "/memory/overview": {
+      "get": {
+        "operationId": "getMemoryOverview",
+        "summary": "记忆总览（计数与关键词共现图谱数据，内置供应商专属）",
+        "tags": ["memory"],
+        "responses": {
+          "200": {
+            "description": "supported=false 表示当前供应商不支持（页面据此隐藏图谱）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOverview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
+      }
+    },
+    "/memory/entries": {
+      "get": {
+        "operationId": "listMemoryEntries",
+        "summary": "浏览记忆条目（内置供应商专属，按时间倒序）",
+        "tags": ["memory"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["interaction", "fact", "diary"]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "1–500，缺省 100"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "条目清单。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryEntryList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true
+      }
+    },
+    "/memory/entries/{id}": {
+      "delete": {
+        "operationId": "deleteMemoryEntry",
+        "summary": "删除一条记忆（内置供应商专属）",
+        "tags": ["memory"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "条目 id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "删除结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["removed"],
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true
+      }
+    },
+    "/adapters/conversations": {
+      "get": {
+        "operationId": "listAdapterConversations",
+        "summary": "按适配器列出平台会话（含会话摘要）",
+        "tags": ["adapters"],
+        "responses": {
+          "200": {
+            "description": "按适配器分组的外部会话；映射里指向已删会话的条目被跳过。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["groups"],
+                  "properties": {
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdapterConversationGroup"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProfileUnavailable"
+          }
+        },
+        "x-profile-scoped": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Profile"
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -4640,6 +4883,183 @@
               }
             },
             "description": "日记与记忆巩固。"
+          }
+        }
+      },
+      "MemoryRecallTest": {
+        "type": "object",
+        "description": "召回测试结果。`error` 非空时 items 为 null —— 失败要可读，不能伪装成「没有召回」。",
+        "required": ["items", "error"],
+        "properties": {
+          "items": {
+            "type": ["array", "null"],
+            "items": {
+              "$ref": "#/components/schemas/MemoryItemView"
+            },
+            "description": "召回命中的记忆条目（与真实注入同一条路径）。"
+          },
+          "error": {
+            "type": ["string", "null"],
+            "description": "未启用 / 供应商缺失 / 召回失败的原因。"
+          }
+        }
+      },
+      "MemoryItemView": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["interaction", "fact", "diary"]
+          },
+          "occurredAt": {
+            "type": "string",
+            "description": "ISO 时间；provider 给不出时缺省。"
+          }
+        }
+      },
+      "MemoryOverview": {
+        "type": "object",
+        "description": "记忆总览（内置供应商专属：浏览/图谱依赖 memos 表的形状）。supported=false 表示当前供应商不支持。",
+        "required": ["supported"],
+        "properties": {
+          "supported": {
+            "type": "boolean"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "byKind": {
+            "type": "object",
+            "description": "kind -> 条数。只可能出现 interaction / fact / diary 三种。",
+            "properties": {
+              "interaction": {
+                "type": "integer"
+              },
+              "fact": {
+                "type": "integer"
+              },
+              "diary": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["keyword", "count", "peers"],
+              "properties": {
+                "keyword": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "description": "包含该关键词的记忆条数（权重）。"
+                },
+                "peers": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["keyword", "count"],
+                    "properties": {
+                      "keyword": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer"
+                      }
+                    }
+                  },
+                  "description": "共现关键词（同一条记忆里同时出现），按共现次数排。"
+                }
+              }
+            },
+            "description": "权重最高的前 30 个关键词（图谱的节点与边）。"
+          }
+        }
+      },
+      "MemoryEntry": {
+        "type": "object",
+        "required": ["id", "kind", "content", "createdAt"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["interaction", "fact", "diary"]
+          },
+          "content": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        }
+      },
+      "MemoryEntryList": {
+        "type": "object",
+        "required": ["supported", "entries"],
+        "properties": {
+          "supported": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemoryEntry"
+            }
+          }
+        }
+      },
+      "AdapterConversationGroup": {
+        "type": "object",
+        "description": "一台适配器下的外部会话组（平台会话页）。适配器没在运行时没有组。",
+        "required": ["adapterId", "name", "conversations"],
+        "properties": {
+          "adapterId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "conversations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["sessionId", "kind", "externalId", "title", "updatedAt", "messageCount"],
+              "properties": {
+                "sessionId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": ["private", "group"]
+                },
+                "externalId": {
+                  "type": "string",
+                  "description": "平台侧坐标（QQ 号 / 群号）。"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "messageCount": {
+                  "type": "integer"
+                }
+              }
+            },
+            "description": "按最近活跃排序。"
           }
         }
       }

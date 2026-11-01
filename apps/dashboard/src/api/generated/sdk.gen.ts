@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client/index.js';
-import type { AuthStatusData, AuthStatusResponses, CallAdapterActionData, CallAdapterActionErrors, CallAdapterActionResponses, CreateAdapterData, CreateAdapterErrors, CreateAdapterResponses, CreateCronJobData, CreateCronJobErrors, CreateCronJobResponses, CreateMcpServerData, CreateMcpServerErrors, CreateMcpServerResponses, CreatePersonaData, CreatePersonaErrors, CreatePersonaResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteAdapterData, DeleteAdapterErrors, DeleteAdapterResponses, DeleteCronJobData, DeleteCronJobErrors, DeleteCronJobResponses, DeleteMcpServerData, DeleteMcpServerErrors, DeleteMcpServerResponses, DeletePersonaData, DeletePersonaErrors, DeletePersonaResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetAdapterData, GetAdapterErrors, GetAdapterResponses, GetPluginConfigData, GetPluginConfigErrors, GetPluginConfigResponses, GetProfileConfigData, GetProfileConfigErrors, GetProfileConfigResponses, GetSessionData, GetSessionErrors, GetSessionResponses, GetSkillData, GetSkillErrors, GetSkillResponses, HealthData, HealthResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListAdapterTemplatesData, ListAdapterTemplatesErrors, ListAdapterTemplatesResponses, ListCommandsData, ListCommandsErrors, ListCommandsResponses, ListCronJobsData, ListCronJobsErrors, ListCronJobsResponses, ListLogsData, ListLogsErrors, ListLogsResponses, ListMcpServersData, ListMcpServersErrors, ListMcpServersResponses, ListPersonasData, ListPersonasErrors, ListPersonasResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListSkillsData, ListSkillsErrors, ListSkillsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ProbeMcpServerData, ProbeMcpServerErrors, ProbeMcpServerResponses, ProbeProviderData, ProbeProviderErrors, ProbeProviderResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, ReloadProfileData, ReloadProfileErrors, ReloadProfileResponses, RunCronJobData, RunCronJobErrors, RunCronJobResponses, SavePluginConfigData, SavePluginConfigErrors, SavePluginConfigResponses, SaveProfileConfigData, SaveProfileConfigErrors, SaveProfileConfigResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetAdapterEnabledData, SetAdapterEnabledErrors, SetAdapterEnabledResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetMcpServerEnabledData, SetMcpServerEnabledErrors, SetMcpServerEnabledResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamLogsData, StreamLogsErrors, StreamLogsResponse, StreamLogsResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateAdapterData, UpdateAdapterErrors, UpdateAdapterResponses, UpdateCronJobData, UpdateCronJobErrors, UpdateCronJobResponses, UpdateMcpServerData, UpdateMcpServerErrors, UpdateMcpServerResponses, UpdatePersonaData, UpdatePersonaErrors, UpdatePersonaResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
+import type { AuthStatusData, AuthStatusResponses, CallAdapterActionData, CallAdapterActionErrors, CallAdapterActionResponses, CreateAdapterData, CreateAdapterErrors, CreateAdapterResponses, CreateCronJobData, CreateCronJobErrors, CreateCronJobResponses, CreateMcpServerData, CreateMcpServerErrors, CreateMcpServerResponses, CreatePersonaData, CreatePersonaErrors, CreatePersonaResponses, CreateProfileData, CreateProfileErrors, CreateProfileResponses, CreateProviderData, CreateProviderErrors, CreateProviderResponses, CreateProviderSourceData, CreateProviderSourceErrors, CreateProviderSourceResponses, CreateSessionData, CreateSessionErrors, CreateSessionResponses, DeleteAdapterData, DeleteAdapterErrors, DeleteAdapterResponses, DeleteCronJobData, DeleteCronJobErrors, DeleteCronJobResponses, DeleteMcpServerData, DeleteMcpServerErrors, DeleteMcpServerResponses, DeleteMemoryEntryData, DeleteMemoryEntryErrors, DeleteMemoryEntryResponses, DeletePersonaData, DeletePersonaErrors, DeletePersonaResponses, DeleteProfileData, DeleteProfileErrors, DeleteProfileResponses, DeleteProviderData, DeleteProviderErrors, DeleteProviderResponses, DeleteProviderSourceData, DeleteProviderSourceErrors, DeleteProviderSourceResponses, DeleteSessionData, DeleteSessionErrors, DeleteSessionResponses, FetchProviderModelsData, FetchProviderModelsErrors, FetchProviderModelsResponses, GetAdapterData, GetAdapterErrors, GetAdapterResponses, GetMemoryOverviewData, GetMemoryOverviewErrors, GetMemoryOverviewResponses, GetPluginConfigData, GetPluginConfigErrors, GetPluginConfigResponses, GetProfileConfigData, GetProfileConfigErrors, GetProfileConfigResponses, GetSessionData, GetSessionErrors, GetSessionResponses, GetSkillData, GetSkillErrors, GetSkillResponses, HealthData, HealthResponses, ListAdapterConversationsData, ListAdapterConversationsErrors, ListAdapterConversationsResponses, ListAdaptersData, ListAdaptersErrors, ListAdaptersResponses, ListAdapterTemplatesData, ListAdapterTemplatesErrors, ListAdapterTemplatesResponses, ListCommandsData, ListCommandsErrors, ListCommandsResponses, ListCronJobsData, ListCronJobsErrors, ListCronJobsResponses, ListLogsData, ListLogsErrors, ListLogsResponses, ListMcpServersData, ListMcpServersErrors, ListMcpServersResponses, ListMemoryEntriesData, ListMemoryEntriesErrors, ListMemoryEntriesResponses, ListPersonasData, ListPersonasErrors, ListPersonasResponses, ListPluginsData, ListPluginsErrors, ListPluginsResponses, ListProfilesData, ListProfilesErrors, ListProfilesResponses, ListProvidersData, ListProvidersErrors, ListProviderSourcesData, ListProviderSourcesErrors, ListProviderSourcesResponses, ListProvidersResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListSkillsData, ListSkillsErrors, ListSkillsResponses, ListToolsData, ListToolsErrors, ListToolsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, ProbeMcpServerData, ProbeMcpServerErrors, ProbeMcpServerResponses, ProbeProviderData, ProbeProviderErrors, ProbeProviderResponses, ReloadPluginData, ReloadPluginErrors, ReloadPluginResponses, ReloadProfileData, ReloadProfileErrors, ReloadProfileResponses, RunCronJobData, RunCronJobErrors, RunCronJobResponses, SavePluginConfigData, SavePluginConfigErrors, SavePluginConfigResponses, SaveProfileConfigData, SaveProfileConfigErrors, SaveProfileConfigResponses, SendMessageData, SendMessageErrors, SendMessageResponses, SetAdapterEnabledData, SetAdapterEnabledErrors, SetAdapterEnabledResponses, SetDefaultProviderData, SetDefaultProviderErrors, SetDefaultProviderResponses, SetMcpServerEnabledData, SetMcpServerEnabledErrors, SetMcpServerEnabledResponses, SetPluginEnabledData, SetPluginEnabledErrors, SetPluginEnabledResponses, SetToolEnabledData, SetToolEnabledErrors, SetToolEnabledResponses, StreamLogsData, StreamLogsErrors, StreamLogsResponse, StreamLogsResponses, StreamMessageData, StreamMessageErrors, StreamMessageResponse, StreamMessageResponses, TestMemoryRecallData, TestMemoryRecallErrors, TestMemoryRecallResponses, UnloadPluginData, UnloadPluginErrors, UnloadPluginResponses, UpdateAdapterData, UpdateAdapterErrors, UpdateAdapterResponses, UpdateCronJobData, UpdateCronJobErrors, UpdateCronJobResponses, UpdateMcpServerData, UpdateMcpServerErrors, UpdateMcpServerResponses, UpdatePersonaData, UpdatePersonaErrors, UpdatePersonaResponses, UpdateProviderData, UpdateProviderErrors, UpdateProviderResponses, UpdateProviderSourceData, UpdateProviderSourceErrors, UpdateProviderSourceResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -771,5 +771,54 @@ export const listSkills = <ThrowOnError extends boolean = false>(options?: Optio
 export const getSkill = <ThrowOnError extends boolean = false>(options: Options<GetSkillData, ThrowOnError>): RequestResult<GetSkillResponses, GetSkillErrors, ThrowOnError> => (options.client ?? client).get<GetSkillResponses, GetSkillErrors, ThrowOnError>({
     responseType: 'json',
     url: '/skills/{id}',
+    ...options
+});
+
+/**
+ * 召回测试：用一段文本走真实的记忆召回路径
+ */
+export const testMemoryRecall = <ThrowOnError extends boolean = false>(options: Options<TestMemoryRecallData, ThrowOnError>): RequestResult<TestMemoryRecallResponses, TestMemoryRecallErrors, ThrowOnError> => (options.client ?? client).post<TestMemoryRecallResponses, TestMemoryRecallErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/memory/test',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * 记忆总览（计数与关键词共现图谱数据，内置供应商专属）
+ */
+export const getMemoryOverview = <ThrowOnError extends boolean = false>(options: Options<GetMemoryOverviewData, ThrowOnError>): RequestResult<GetMemoryOverviewResponses, GetMemoryOverviewErrors, ThrowOnError> => (options.client ?? client).get<GetMemoryOverviewResponses, GetMemoryOverviewErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/memory/overview',
+    ...options
+});
+
+/**
+ * 浏览记忆条目（内置供应商专属，按时间倒序）
+ */
+export const listMemoryEntries = <ThrowOnError extends boolean = false>(options: Options<ListMemoryEntriesData, ThrowOnError>): RequestResult<ListMemoryEntriesResponses, ListMemoryEntriesErrors, ThrowOnError> => (options.client ?? client).get<ListMemoryEntriesResponses, ListMemoryEntriesErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/memory/entries',
+    ...options
+});
+
+/**
+ * 删除一条记忆（内置供应商专属）
+ */
+export const deleteMemoryEntry = <ThrowOnError extends boolean = false>(options: Options<DeleteMemoryEntryData, ThrowOnError>): RequestResult<DeleteMemoryEntryResponses, DeleteMemoryEntryErrors, ThrowOnError> => (options.client ?? client).delete<DeleteMemoryEntryResponses, DeleteMemoryEntryErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/memory/entries/{id}',
+    ...options
+});
+
+/**
+ * 按适配器列出平台会话（含会话摘要）
+ */
+export const listAdapterConversations = <ThrowOnError extends boolean = false>(options: Options<ListAdapterConversationsData, ThrowOnError>): RequestResult<ListAdapterConversationsResponses, ListAdapterConversationsErrors, ThrowOnError> => (options.client ?? client).get<ListAdapterConversationsResponses, ListAdapterConversationsErrors, ThrowOnError>({
+    responseType: 'json',
+    url: '/adapters/conversations',
     ...options
 });

@@ -221,6 +221,89 @@ export class BuiltinMemoryProvider implements MemoryProvider {
       }));
   }
 
+  /**
+   * 记忆页的总览：按 kind 计数 + 关键词共现（图谱用）。
+   * 图谱的语义：关键词是节点，共现（同一条记忆里同时出现）是边，命中条数是权重。
+   * 只在内存里聚合（每档 ≤ 5000 条），返回前 30 个关键词、每个至多 5 个同伴。
+   */
+  async overview(profileId: string): Promise<{
+    total: number;
+    byKind: Record<string, number>;
+    keywords: { keyword: string; count: number; peers: { keyword: string; count: number }[] }[];
+  }> {
+    const rows = this.#db
+      .prepare("SELECT kind, keywords FROM memories WHERE profile_id = ? ORDER BY seq DESC")
+      .all(profileId) as unknown as { kind: string; keywords: string }[];
+    const byKind: Record<string, number> = {};
+    const counts = new Map<string, number>();
+    const peersOf = new Map<string, Map<string, number>>();
+    for (const row of rows) {
+      byKind[row.kind] = (byKind[row.kind] ?? 0) + 1;
+      const keywords = [...new Set(row.keywords.split(" ").filter(Boolean))];
+      for (const keyword of keywords) {
+        counts.set(keyword, (counts.get(keyword) ?? 0) + 1);
+        let peers = peersOf.get(keyword);
+        if (peers === undefined) {
+          peers = new Map();
+          peersOf.set(keyword, peers);
+        }
+        for (const other of keywords) {
+          if (other === keyword) continue;
+          peers.set(other, (peers.get(other) ?? 0) + 1);
+        }
+      }
+    }
+    const keywords = [...counts.entries()]
+      .toSorted((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+      .slice(0, 30)
+      .map(([keyword, count]) => ({
+        keyword,
+        count,
+        peers: [...(peersOf.get(keyword) ?? new Map<string, number>())]
+          .filter(([peer]) => counts.has(peer))
+          .toSorted((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([peer, peerCount]) => ({ keyword: peer, count: peerCount })),
+      }));
+    return { total: rows.length, byKind, keywords };
+  }
+
+  /** 记忆页的浏览：按时间倒序，可选按 kind 过滤。 */
+  async entries(
+    profileId: string,
+    opts: { kind?: string; limit?: number } = {},
+  ): Promise<{ id: string; kind: string; content: string; createdAt: string }[]> {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+    const rows = this.#db
+      .prepare(
+        "SELECT id, kind, content, created_at FROM memories WHERE profile_id = ? ORDER BY seq DESC LIMIT ?",
+      )
+      .all(profileId, limit) as unknown as {
+      id: string;
+      kind: string;
+      content: string;
+      created_at: string;
+    }[];
+    return rows
+      .filter((row) => opts.kind === undefined || row.kind === opts.kind)
+      .map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        content: row.content,
+        createdAt: row.created_at,
+      }));
+  }
+
+  /** 记忆页的删除（按条目 id）。不存在返回 false。 */
+  async remove(id: string): Promise<boolean> {
+    try {
+      return this.#db.prepare("DELETE FROM memories WHERE id = ?").run(id).changes > 0;
+    } catch (err) {
+      this.#logger.warn(`删除记忆失败: ${errorMessage(err)}`);
+      return false;
+    }
+  }
+
   /** FIFO 淘汰到保留上限。失败只记日志：多留几条旧记忆无害。 */
   #trim(profileId: string): void {
     try {

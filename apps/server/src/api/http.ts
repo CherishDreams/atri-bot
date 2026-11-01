@@ -19,6 +19,7 @@ import type { PersonaStore } from "#core/persona/store.ts";
 import type { CronScheduler } from "#core/cron/manager.ts";
 import type { McpManager } from "#core/mcp/manager.ts";
 import type { MemoryService } from "#core/memory/service.ts";
+import type { BuiltinMemoryProvider } from "#core/memory/builtin.ts";
 import type { SkillStore } from "#core/skill/store.ts";
 import type { PluginManager } from "#plugins/manager.ts";
 
@@ -227,6 +228,8 @@ export interface HttpDeps {
   mcp: McpManager;
   /** 技能目录（部署级文件资源的现扫视图），`/skills` 与档技能清单的数据源。 */
   skills: SkillStore;
+  /** 内置记忆供应商（部署级一份）：记忆页的浏览/图谱/删除只由它支持。 */
+  builtinMemory: BuiltinMemoryProvider;
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {

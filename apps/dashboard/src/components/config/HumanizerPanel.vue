@@ -30,6 +30,33 @@ const wakePrefix = computed<string>({
   get: () => draft.draft?.wakePrefix ?? "/",
   set: (next) => draft.setWakePrefix(next.trim()),
 });
+
+// n-time-picker 的值是时间戳（毫秒），档文件里存的是 "HH:MM" 字符串，两边各做一次换算。
+// 基准日期随意：只有「同一天内的时间差」是有意义的部分。
+const BASE_DAY = new Date(2000, 0, 1).getTime();
+
+function hhmmToTimestamp(value: string | undefined): number | null {
+  if (value === undefined || value === "") return null;
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+  if (!m) return null;
+  return BASE_DAY + Number(m[1]) * 3600_000 + Number(m[2]) * 60_000;
+}
+
+function timestampToHhmm(ts: number | null): string {
+  if (ts === null) return "";
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+const sleepStart = computed<number | null>({
+  get: () => hhmmToTimestamp(draft.draft?.humanizer.schedule.sleepStart),
+  set: (next) => draft.setHumanizerSchedule({ sleepStart: timestampToHhmm(next) }),
+});
+
+const sleepEnd = computed<number | null>({
+  get: () => hhmmToTimestamp(draft.draft?.humanizer.schedule.sleepEnd),
+  set: (next) => draft.setHumanizerSchedule({ sleepEnd: timestampToHhmm(next) }),
+});
 </script>
 
 <template>
@@ -129,40 +156,20 @@ const wakePrefix = computed<string>({
       <template #control>
         <div class="flex items-center gap-1">
           <n-time-picker
-            :value="
-              draft.draft?.humanizer.schedule.sleepStart === ''
-                ? null
-                : draft.draft?.humanizer.schedule.sleepStart
-            "
+            v-model:value="sleepStart"
             format="HH:mm"
             size="small"
             class="w-[6.5rem]"
-            :default-value="new Date(2000, 0, 1, 23, 30)"
             placeholder="不睡觉"
-            @update:value="
-              (v: number | null) =>
-                draft.setHumanizerSchedule({
-                  sleepStart: v === null ? '' : new Date(v).toTimeString().slice(0, 5),
-                })
-            "
+            aria-label="入睡时间"
           />
           <span class="text-ink-faint">–</span>
           <n-time-picker
-            :value="
-              draft.draft?.humanizer.schedule.sleepEnd === ''
-                ? null
-                : draft.draft?.humanizer.schedule.sleepEnd
-            "
+            v-model:value="sleepEnd"
             format="HH:mm"
             size="small"
             class="w-[6.5rem]"
-            :default-value="new Date(2000, 0, 1, 7, 30)"
-            @update:value="
-              (v: number | null) =>
-                draft.setHumanizerSchedule({
-                  sleepEnd: v === null ? '' : new Date(v).toTimeString().slice(0, 5),
-                })
-            "
+            aria-label="起床时间"
           />
         </div>
       </template>

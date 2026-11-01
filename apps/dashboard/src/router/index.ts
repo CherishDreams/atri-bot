@@ -60,6 +60,12 @@ export const router = createRouter({
           component: () => import("@/views/AdaptersView.vue"),
           meta: { noProfile: true },
         },
+        // 记忆实验室是档级页面（召回测试/图谱/浏览都针对当前档的记忆供应商）。
+        {
+          path: "memory",
+          name: "memory",
+          component: () => import("@/views/MemoryView.vue"),
+        },
         // 技能库是部署级内容资产（与人格同类）：这一页只读目录与全文，启停在配置文件页。
         {
           path: "skills",

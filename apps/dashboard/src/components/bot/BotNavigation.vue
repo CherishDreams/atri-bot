@@ -39,7 +39,7 @@ const { profile } = useProfile();
  * 在路由表上都标了 `noProfile` —— 它们是部署级或进程级的一份。给它们挂一个与页面
  * 无关的档名，等于在 URL 上谎称「这一页是按档的」。
  */
-const PROFILE_ROUTES = new Set(["console", "config", "plugins"]);
+const PROFILE_ROUTES = new Set(["console", "config", "plugins", "memory"]);
 
 function to(name: string) {
   // `profile.value` 在 `noProfile` 页面（人格配置 / 供应商 / 接入平台 / 计划任务 / 日志）
@@ -73,7 +73,8 @@ const GROUPS: { key: string; label: string; items: NavItem[] }[] = [
   {
     key: "group-run",
     label: "运行",
-    items: [{ key: "console", label: "控制台", icon: "console" }],
+    // 平台会话页：适配器上的真实对话，只读（要跟机器人对话去聊天平台）。
+    items: [{ key: "console", label: "平台会话", icon: "console" }],
   },
   {
     key: "group-personal",
@@ -83,8 +84,10 @@ const GROUPS: { key: string; label: string; items: NavItem[] }[] = [
       { key: "config", label: "配置文件", icon: "settings" },
       // 人格库是全局资源；配置档只在配置文件页的「人格」分类里选用。
       { key: "personas", label: "人格配置", icon: "persona" },
+      // 记忆实验室是档级的：召回测试/图谱/浏览都针对当前档的记忆供应商。
+      { key: "memory", label: "记忆", icon: "memory" },
       // 技能库是部署级内容资产（data/skills/），与人格同类：独立整页，档里只做引用。
-      { key: "skills", label: "技能", icon: "memory" },
+      { key: "skills", label: "技能", icon: "tool" },
       // 插件页：每份档各有一套启用清单与配置值，所以链接要带 `?profile=`。
       { key: "plugins", label: "插件", icon: "plugin" },
     ],

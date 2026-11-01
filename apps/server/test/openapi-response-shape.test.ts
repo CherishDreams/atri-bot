@@ -36,6 +36,17 @@ import { fileURLToPath } from "node:url";
 import { createApp } from "#app.ts";
 import { makeTestConfig } from "./helpers/config.ts";
 
+/** 占一个空闲端口再放掉：给 listAdapterConversations 的守卫适配器用。 */
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", () => done()));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("占端口失败");
+  const port = address.port;
+  await new Promise<void>((done) => server.close(() => done()));
+  return port;
+}
+
 /** MCP 驱动用的 stdio 桩服务器（test/fixtures/，仓库内才能解析 SDK 依赖）。 */
 const MCP_STUB = fileURLToPath(new URL("./fixtures/stub-mcp.mjs", import.meta.url));
 
@@ -110,6 +121,9 @@ const ORDER = [
   "createSession",
   "listSessions",
   "sendMessage",
+  "testMemoryRecall",
+  "listMemoryEntries",
+  "getMemoryOverview",
   "getSession",
   "streamMessage",
   "listPlugins",
@@ -125,6 +139,7 @@ const ORDER = [
   "setAdapterEnabled",
   "listAdapters",
   "deleteAdapter",
+  "listAdapterConversations",
   "listTools",
   "listCommands",
   "setToolEnabled",
@@ -134,6 +149,7 @@ const ORDER = [
   "updateMcpServer",
   "setMcpServerEnabled",
   "deleteMcpServer",
+  "deleteMemoryEntry",
   "listSkills",
   "getSkill",
   "deleteSession",
@@ -918,11 +934,98 @@ async function drive(id: string, op: Op, h: Harness, ids: Ids): Promise<Driven> 
       return at("/skills");
     case "getSkill":
       return at("/skills/echo-guide");
+    case "listAdapterConversations": {
+      // 平台会话必须**真实存在**（空 groups 会让形状检查假绿）：起一台真 NapCat
+      // 适配器，作为 bot 连上它的 WS，注入一条私聊消息（回声兜底会回复并发回平台）。
+      // 选空闲端口：先占再放，竞态窗口极小且只影响本测试进程。
+      const port = await freePort();
+      // 本驱动的 op 是 GET，at() 会沿 op.method 发请求 —— 创建适配器必须显式 POST。
+      const created = await call("POST", "/adapters", {
+        id: "guard-chat",
+        type: "napcat",
+        name: "平台会话守卫",
+        enabled: true,
+        profile: "default",
+        settings: [
+          { key: "host", value: "127.0.0.1" },
+          { key: "port", value: String(port) },
+          { key: "path", value: "/ws" },
+          { key: "token", value: "secret" },
+        ],
+      });
+      assert.ok(
+        created.status === 200 || created.status === 201,
+        `guard-chat 创建失败：${JSON.stringify(created.body)}`,
+      );
+      const { WebSocket } = await import("ws");
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+        headers: { Authorization: "Bearer secret" },
+      });
+      await new Promise((opened, failed) => {
+        ws.once("open", opened);
+        ws.once("error", failed);
+      });
+      const replied = new Promise<void>((doneReplying) => {
+        ws.on("message", (raw) => {
+          const parsed = JSON.parse(String(raw)) as { action?: string; echo?: unknown };
+          if (parsed.action === "get_login_info") {
+            ws.send(
+              JSON.stringify({
+                status: "ok",
+                retcode: 0,
+                data: { user_id: 10000, nickname: "bot" },
+                echo: parsed.echo,
+              }),
+            );
+          } else if (parsed.action === "send_private_msg") {
+            ws.send(
+              JSON.stringify({
+                status: "ok",
+                retcode: 0,
+                data: { message_id: 2 },
+                echo: parsed.echo,
+              }),
+            );
+            doneReplying();
+          }
+        });
+      });
+      ws.send(
+        JSON.stringify({
+          post_type: "message",
+          self_id: 10000,
+          message_type: "private",
+          user_id: 10001,
+          message_id: 1,
+          message: [{ type: "text", data: { text: "平台你好" } }],
+          raw_message: "平台你好",
+          sender: { user_id: 10001, nickname: "平台用户" },
+        }),
+      );
+      await replied;
+      const result = await at("/adapters/conversations");
+      ws.close();
+      return result;
+    }
     case "listTools":
       return at("/tools");
     case "listCommands":
       // 内置指令随引擎装配恒在，数组天然非空，不需要先造资源。
       return at("/commands");
+    case "testMemoryRecall":
+      // sendMessage 已发生：autoRecord 写入的交互里含「你好」，召回必然非空。
+      return at("/memory/test", { query: "你好", limit: 5 });
+    case "listMemoryEntries":
+      return at("/memory/entries");
+    case "getMemoryOverview":
+      return at("/memory/overview");
+    case "deleteMemoryEntry": {
+      // 破坏性收尾：删掉第一条（sendMessage 攒下的交互）。
+      const list = await call("GET", "/memory/entries?limit=1");
+      const first = (list.body.entries as { id: string }[])[0];
+      assert.ok(first, "删之前必须还有记忆条目（依赖 sendMessage 的 autoRecord）");
+      return call("DELETE", `/memory/entries/${first.id}`);
+    }
     case "setToolEnabled": {
       // 内置工具的 id 是代码里的常量，不需要先创建资源。
       // 三次写入：先关（证明 enabled=false 这一支的形状）、再开、最后关回原样 ——

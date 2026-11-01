@@ -231,6 +231,27 @@ export class AdapterManager {
    * 这是一次「探测 + 执行」的开发者动作，界面与插件需要拿到原因本身。
    */
   /**
+   * 全部适配器已知的内部会话 id（跨档）。`GET /sessions?scope=chat` 用它把
+   * 适配器的外部会话从聊天列表里剔掉 —— 两个读者，两份清单。
+   */
+  allAdapterSessionIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const record of this.#records.values()) {
+      const adapter = record.adapter;
+      if (
+        adapter === null ||
+        typeof (adapter as MessageAdapter).conversationEntries !== "function"
+      ) {
+        continue;
+      }
+      for (const entry of (adapter as MessageAdapter).conversationEntries()) {
+        ids.add(entry.sessionId);
+      }
+    }
+    return ids;
+  }
+
+  /**
    * 主动消息引擎的会话发现：这一档**正在运行**的 MessageAdapter 各自上报
    * 「外部会话 -> 内部会话」映射，键按 `<profileId>:<kind>:<id>` 解析回外部坐标。
    */

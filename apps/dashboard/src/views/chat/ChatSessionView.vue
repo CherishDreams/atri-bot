@@ -170,7 +170,8 @@ onMounted(async () => {
 
   // 列表为空时补一次，侧栏才好显示会话名。
   if (sessions.sessions.length === 0) {
-    await sessions.refresh().catch(() => undefined);
+    // 聊天平台的清单只放「人发起的会话」：适配器的外部会话在 bot 端的平台会话页。
+    await sessions.refresh("chat").catch(() => undefined);
   }
 
   // 从创建页带过来的首句：走 store，不走 query（聊天内容不该进地址栏和浏览历史）。

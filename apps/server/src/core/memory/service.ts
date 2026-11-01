@@ -155,6 +155,34 @@ export class MemoryService {
     }
   }
 
+  /**
+   * 记忆页的召回测试：与真实注入同一条路径（providerFor + recall），但返回
+   * 结构化条目。返回 `error` 时 items 为 null（未启用/供应商缺失/召回失败各自
+   * 有原因）—— 测试工具要让失败可读，不能把失败伪装成「没有召回」。
+   */
+  async testRecall(
+    profileId: string,
+    query: string,
+    limit: number,
+  ): Promise<{ items: MemoryItem[] | null; error: string | null }> {
+    const provider = this.providerFor(profileId);
+    if (provider === null) {
+      return { items: null, error: "记忆功能未启用，或配置指向的供应商不可用。" };
+    }
+    if (query.trim() === "") return { items: null, error: "请输入要测试的查询文本。" };
+    try {
+      const items = await provider.recall({
+        profileId,
+        sessionId: "",
+        query,
+        limit: clampTopK(limit),
+      });
+      return { items, error: null };
+    } catch (err) {
+      return { items: null, error: `召回失败：${errorMessage(err)}` };
+    }
+  }
+
   /** 模型工具 `memory_write` 的入口。返回给模型看的回执文本。 */
   async remember(turn: MemoryTurn, content: string): Promise<string> {
     const provider = this.providerFor(turn.profileId);

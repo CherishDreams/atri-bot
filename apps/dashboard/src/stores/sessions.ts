@@ -116,6 +116,8 @@ function prependOlder(log: Message[], older: Message[]): number {
  */
 export const useSessionsStore = defineStore("sessions", {
   state: () => ({
+    /** 会话清单的作用域（聊天端 = 剔除适配器会话），见 refresh。 */
+    scope: null as "chat" | null,
     sessions: [] as Session[],
     active: null as Session | null,
     log: [] as Message[],
@@ -187,10 +189,18 @@ export const useSessionsStore = defineStore("sessions", {
      * 语义是「回到最新那一页」：整份替换 `sessions` 并重置 `listCursor`，所以之前翻出来的
      * 更早条目会被丢弃。刻意的简单 —— 否则每次新建/删除都要判断「那一页还在不在范围内」。
      */
-    async refresh(): Promise<void> {
+    /**
+     * scope 存在 state 里而不是每次调用传参：refresh / loadMoreSessions 必须
+     * 用**同一个**作用域，否则翻页会把另一边的会话拼回来。聊天端设 `chat`，
+     * 平台会话页不再用这份清单（它有按适配器分组的自己的数据源）。
+     */
+    async refresh(scope?: "chat"): Promise<void> {
       // 列表即将被整份替换：任何在途的「加载更早的会话」都不该再把结果拼回来。
       this.epoch += 1;
-      const { sessions, nextCursor } = await api.listSessions();
+      if (scope !== undefined) this.scope = scope;
+      const { sessions, nextCursor } = await api.listSessions(
+        this.scope === "chat" ? { scope: "chat" } : undefined,
+      );
       this.sessions = sessions;
       this.listCursor = nextCursor;
     },
@@ -208,7 +218,10 @@ export const useSessionsStore = defineStore("sessions", {
       if (cursor === null) return 0;
       this.loadingMoreSessions = true;
       try {
-        const { sessions, nextCursor } = await api.listSessions({ before: cursor });
+        const { sessions, nextCursor } = await api.listSessions({
+          before: cursor,
+          ...(this.scope === "chat" ? { scope: "chat" as const } : {}),
+        });
         // 同 `loadEarlier()`：await 之前判过的守卫管不了在途期间发生的一次 `refresh()`
         // —— 那一页是**上一个列表**的更早，拼进来会静默跳过若干会话。
         if (this.epoch !== epoch) return 0;

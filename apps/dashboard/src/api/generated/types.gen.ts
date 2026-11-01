@@ -1044,6 +1044,97 @@ export type HumanizerConfig = {
 };
 
 /**
+ * 召回测试结果。`error` 非空时 items 为 null —— 失败要可读，不能伪装成「没有召回」。
+ */
+export type MemoryRecallTest = {
+    /**
+     * 召回命中的记忆条目（与真实注入同一条路径）。
+     */
+    items: Array<MemoryItemView> | null;
+    /**
+     * 未启用 / 供应商缺失 / 召回失败的原因。
+     */
+    error: string | null;
+};
+
+export type MemoryItemView = {
+    id?: string;
+    content: string;
+    kind?: 'interaction' | 'fact' | 'diary';
+    /**
+     * ISO 时间；provider 给不出时缺省。
+     */
+    occurredAt?: string;
+};
+
+/**
+ * 记忆总览（内置供应商专属：浏览/图谱依赖 memos 表的形状）。supported=false 表示当前供应商不支持。
+ */
+export type MemoryOverview = {
+    supported: boolean;
+    total?: number;
+    /**
+     * kind -> 条数。只可能出现 interaction / fact / diary 三种。
+     */
+    byKind?: {
+        interaction?: number;
+        fact?: number;
+        diary?: number;
+    };
+    /**
+     * 权重最高的前 30 个关键词（图谱的节点与边）。
+     */
+    keywords?: Array<{
+        keyword: string;
+        /**
+         * 包含该关键词的记忆条数（权重）。
+         */
+        count: number;
+        /**
+         * 共现关键词（同一条记忆里同时出现），按共现次数排。
+         */
+        peers: Array<{
+            keyword: string;
+            count: number;
+        }>;
+    }>;
+};
+
+export type MemoryEntry = {
+    id: string;
+    kind: 'interaction' | 'fact' | 'diary';
+    content: string;
+    createdAt: string;
+};
+
+export type MemoryEntryList = {
+    supported: boolean;
+    entries: Array<MemoryEntry>;
+};
+
+/**
+ * 一台适配器下的外部会话组（平台会话页）。适配器没在运行时没有组。
+ */
+export type AdapterConversationGroup = {
+    adapterId: string;
+    name: string;
+    /**
+     * 按最近活跃排序。
+     */
+    conversations: Array<{
+        sessionId: string;
+        kind: 'private' | 'group';
+        /**
+         * 平台侧坐标（QQ 号 / 群号）。
+         */
+        externalId: string;
+        title: string;
+        updatedAt: string;
+        messageCount: number;
+    }>;
+};
+
+/**
  * 一页条目数：默认 100、上限 500。非法值回 400 而**不静默夹取**（与配置里的 `maxToolSteps` 刻意相反：那是用户手写的配置，写歪了不该让服务起不来；这是请求参数，夹取等于少给还不说）。边界只在代码里强制 —— 本仓的规格守卫不检查数值关键字，所以这里的 minimum/maximum 是说明而非契约；取值见 `core/session/manager.ts` 的 `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE`。必须挂在**具体 operation** 上，不要「顺手归位」到 path-item 的 parameters：那里会被同一路径下的每个方法共享，`DELETE /sessions/{id}` 因此在 SDK 里 advertise 两个服务端从不读的参数（handler 压根不看 query），而三道规格守卫谁也看不见这种说谎。
  */
 export type PageLimit = number;
@@ -1595,6 +1686,10 @@ export type ListSessionsData = {
          * 不透明游标（上一次响应的 `nextCursor`），编码的是插入序行号，**不是**时间戳也不是页码。给出时只返回比它更早的条目；缺省即从最新处开始。空串与解不出正整数的值都是 400。
          */
         before?: string;
+        /**
+         * chat = 剔除适配器的外部会话（它们在平台会话页展示，两边读者不同）。缺省返回全部。
+         */
+        scope?: 'chat';
     };
     url: '/sessions';
 };
@@ -3536,3 +3631,218 @@ export type GetSkillResponses = {
 };
 
 export type GetSkillResponse = GetSkillResponses[keyof GetSkillResponses];
+
+export type TestMemoryRecallData = {
+    body: {
+        query: string;
+        /**
+         * 最多返回几条（1–10，缺省 10）。
+         */
+        limit?: number;
+    };
+    path?: never;
+    query: {
+        /**
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         */
+        profile: string;
+    };
+    url: '/memory/test';
+};
+
+export type TestMemoryRecallErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type TestMemoryRecallError = TestMemoryRecallErrors[keyof TestMemoryRecallErrors];
+
+export type TestMemoryRecallResponses = {
+    /**
+     * 召回结果或可读的失败原因。
+     */
+    200: MemoryRecallTest;
+};
+
+export type TestMemoryRecallResponse = TestMemoryRecallResponses[keyof TestMemoryRecallResponses];
+
+export type GetMemoryOverviewData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         */
+        profile: string;
+    };
+    url: '/memory/overview';
+};
+
+export type GetMemoryOverviewErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type GetMemoryOverviewError = GetMemoryOverviewErrors[keyof GetMemoryOverviewErrors];
+
+export type GetMemoryOverviewResponses = {
+    /**
+     * supported=false 表示当前供应商不支持（页面据此隐藏图谱）。
+     */
+    200: MemoryOverview;
+};
+
+export type GetMemoryOverviewResponse = GetMemoryOverviewResponses[keyof GetMemoryOverviewResponses];
+
+export type ListMemoryEntriesData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         */
+        profile: string;
+        kind?: 'interaction' | 'fact' | 'diary';
+        /**
+         * 1–500，缺省 100
+         */
+        limit?: number;
+    };
+    url: '/memory/entries';
+};
+
+export type ListMemoryEntriesErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type ListMemoryEntriesError = ListMemoryEntriesErrors[keyof ListMemoryEntriesErrors];
+
+export type ListMemoryEntriesResponses = {
+    /**
+     * 条目清单。
+     */
+    200: MemoryEntryList;
+};
+
+export type ListMemoryEntriesResponse = ListMemoryEntriesResponses[keyof ListMemoryEntriesResponses];
+
+export type DeleteMemoryEntryData = {
+    body?: never;
+    path: {
+        /**
+         * 条目 id
+         */
+        id: string;
+    };
+    query: {
+        /**
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         */
+        profile: string;
+    };
+    url: '/memory/entries/{id}';
+};
+
+export type DeleteMemoryEntryErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type DeleteMemoryEntryError = DeleteMemoryEntryErrors[keyof DeleteMemoryEntryErrors];
+
+export type DeleteMemoryEntryResponses = {
+    /**
+     * 删除结果。
+     */
+    200: {
+        removed: boolean;
+    };
+};
+
+export type DeleteMemoryEntryResponse = DeleteMemoryEntryResponses[keyof DeleteMemoryEntryResponses];
+
+export type ListAdapterConversationsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * 要操作**哪一份配置档**（profile）。必填，且**没有隐式默认**：缺了它一律 400，绝不回落到 `default` —— 「界面在 B、写进 A、还回 201」正是靠一个贴心默认才可能发生的，而那种错没有任何症状。配置档装在 `<dataDir>/profiles/<id>/config.json`，一份档 = 一套工具开关 / 插件启用清单，外加「默认用全局供应商清单里的哪一个」。
+         * **供应商（`/providers*`）不带这个参数**：连接与密钥是部署级全局的一份，按档各存一份只会让同一个 apiKey 躺在 N 个文件里。带这个参数的 operation 都另有一条 `x-profile-scoped: true`，`test/openapi-request.test.ts` 的那道守卫按这个标记取集合（而不是自己抄一份清单），并要求「标记集合 == 全部路由 − 显式全局清单」**双向**成立。
+         */
+        profile: string;
+    };
+    url: '/adapters/conversations';
+};
+
+export type ListAdapterConversationsErrors = {
+    /**
+     * 请求无效
+     */
+    400: ApiError;
+    /**
+     * 未登录或会话已失效
+     */
+    401: ApiError;
+    /**
+     * 这份配置档存在，但它的文件读不出 / 校验不过 / 对象图建不起来，因此当前不可用。原因**不在这里回**（那句原文带着配置文件的绝对路径）—— 它进日志，并由 `GET /profiles` 的 `error` 字段给操作者看。
+     */
+    503: ApiError;
+};
+
+export type ListAdapterConversationsError = ListAdapterConversationsErrors[keyof ListAdapterConversationsErrors];
+
+export type ListAdapterConversationsResponses = {
+    /**
+     * 按适配器分组的外部会话；映射里指向已删会话的条目被跳过。
+     */
+    200: {
+        groups: Array<AdapterConversationGroup>;
+    };
+};
+
+export type ListAdapterConversationsResponse = ListAdapterConversationsResponses[keyof ListAdapterConversationsResponses];
