@@ -55,7 +55,16 @@ watch(
         <bot-navigation />
       </n-layout-sider>
       <n-layout-content class="h-full">
-        <router-view />
+        <!--
+          mode="out-in" 是正确性的一部分：bot 端每页都有自己的滚动容器与 h-full，
+          新旧两页同时在布局里会互相挤压。key 不用写 —— 不同路由本来就是不同组件，
+          而 `?cat=` / `?profile=` 变化不换组件，工作台内部的切换不该整页重放动画。
+        -->
+        <router-view v-slot="{ Component }">
+          <Transition name="page" mode="out-in" appear>
+            <component :is="Component" />
+          </Transition>
+        </router-view>
       </n-layout-content>
     </n-layout>
 

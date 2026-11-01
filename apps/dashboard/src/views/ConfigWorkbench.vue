@@ -247,7 +247,11 @@ onBeforeRouteUpdate((to, from) => {
               />
               <!-- 加载中、或加载失败时都不能渲染面板：面板读的是 draft.draft，
                    拿上一份档的草稿去填新档的 panel 会让人以为它已经切换成功。 -->
-              <component :is="panel" v-else-if="draft.loaded" :keyword="keyword" />
+              <!-- key 挂在分类上：切分类时面板有方向感地过渡；?profile= 变化
+                   （同组件）不重放整段动画，加载态已经把换档表达清楚了。 -->
+              <Transition name="page" mode="out-in">
+                <component :is="panel" v-if="draft.loaded" :key="active.key" :keyword="keyword" />
+              </Transition>
             </n-spin>
           </div>
         </div>

@@ -36,7 +36,12 @@ const overrides = computed(() => themeOverrides[scheme.value]);
       <n-message-provider>
         <n-dialog-provider>
           <n-notification-provider>
-            <RouterView />
+            <!-- 整屏一层（登录 ↔ 平台壳）同样走 out-in：底下两层布局各自还有自己的页面级过渡。 -->
+            <RouterView v-slot="{ Component }">
+              <Transition name="page" mode="out-in">
+                <component :is="Component" />
+              </Transition>
+            </RouterView>
           </n-notification-provider>
         </n-dialog-provider>
       </n-message-provider>

@@ -26,7 +26,11 @@ import { layout } from "@/theme/tokens";
             「一份 ready 的档都没有」，那仍然要能说清，而不是画一片空白。
           -->
           <profile-gate>
-            <router-view />
+            <router-view v-slot="{ Component }">
+              <Transition name="page" mode="out-in" appear>
+                <component :is="Component" />
+              </Transition>
+            </router-view>
           </profile-gate>
         </n-layout-content>
       </n-layout>
